@@ -283,8 +283,8 @@ func setupRoutes() {
 	http.HandleFunc("/docs/", proxyAwareMiddleware(docsWrapperHandler))
 
 	// Add debug endpoints (only in development)
-	   if cfg != nil {
-			   clientHandler := handlers.NewClientHandler(clientStore, cfg)
+	if cfg != nil {
+		clientHandler := handlers.NewClientHandler(clientStore, cfg)
 		if clientHandler != nil {
 			http.HandleFunc("/admin/clients", clientHandler.HandleClients)
 			http.HandleFunc("/admin/client", func(w http.ResponseWriter, r *http.Request) {

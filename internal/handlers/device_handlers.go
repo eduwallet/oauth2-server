@@ -15,45 +15,45 @@ import (
 
 // DeviceHandlers handles device flow user verification
 type DeviceHandlers struct {
-    deviceFlow *flows.DeviceCodeFlow
-    config     *config.Config
+	deviceFlow *flows.DeviceCodeFlow
+	config     *config.Config
 }
 
 // NewDeviceHandlers creates a new device handlers instance
 func NewDeviceHandlers(deviceFlow *flows.DeviceCodeFlow, config *config.Config) *DeviceHandlers {
-    return &DeviceHandlers{
-        deviceFlow: deviceFlow,
-        config:     config,
-    }
+	return &DeviceHandlers{
+		deviceFlow: deviceFlow,
+		config:     config,
+	}
 }
 
 // HandleDeviceVerification handles the device verification endpoint
 func (h *DeviceHandlers) HandleDeviceVerification(w http.ResponseWriter, r *http.Request) {
-    switch r.Method {
-    case "GET":
-        h.showDeviceForm(w, r)
-    case "POST":
-        h.handleDeviceForm(w, r)
-    default:
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-    }
+	switch r.Method {
+	case "GET":
+		h.showDeviceForm(w, r)
+	case "POST":
+		h.handleDeviceForm(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // showDeviceForm displays the device verification form
 func (h *DeviceHandlers) showDeviceForm(w http.ResponseWriter, r *http.Request) {
-    userCode := r.URL.Query().Get("user_code")
-    errorMsg := r.URL.Query().Get("error")
+	userCode := r.URL.Query().Get("user_code")
+	errorMsg := r.URL.Query().Get("error")
 
-    // Auto-uppercase and format the user code if present
-    if userCode != "" {
-        userCode = strings.ToUpper(strings.ReplaceAll(userCode, " ", ""))
-        // Add hyphen formatting if not present
-        if len(userCode) == 8 && !strings.Contains(userCode, "-") {
-            userCode = fmt.Sprintf("%s-%s", userCode[:4], userCode[4:])
-        }
-    }
+	// Auto-uppercase and format the user code if present
+	if userCode != "" {
+		userCode = strings.ToUpper(strings.ReplaceAll(userCode, " ", ""))
+		// Add hyphen formatting if not present
+		if len(userCode) == 8 && !strings.Contains(userCode, "-") {
+			userCode = fmt.Sprintf("%s-%s", userCode[:4], userCode[4:])
+		}
+	}
 
-    tmpl := `
+	tmpl := `
 <!DOCTYPE html>
 <html>
 <head>
@@ -222,113 +222,113 @@ func (h *DeviceHandlers) showDeviceForm(w http.ResponseWriter, r *http.Request) 
 </body>
 </html>`
 
-    data := struct {
-        UserCode      string
-        Error         string
-        TestUsersList string
-    }{
-        UserCode:      userCode,
-        Error:         errorMsg,
-        TestUsersList: h.generateTestUsersList(),
-    }
+	data := struct {
+		UserCode      string
+		Error         string
+		TestUsersList string
+	}{
+		UserCode:      userCode,
+		Error:         errorMsg,
+		TestUsersList: h.generateTestUsersList(),
+	}
 
-    t, err := template.New("device").Parse(tmpl)
-    if err != nil {
-        log.Printf("❌ Template parsing error: %v", err)
-        http.Error(w, "Internal server error", http.StatusInternalServerError)
-        return
-    }
+	t, err := template.New("device").Parse(tmpl)
+	if err != nil {
+		log.Printf("❌ Template parsing error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 
-    w.Header().Set("Content-Type", "text/html; charset=utf-8")
-    if err := t.Execute(w, data); err != nil {
-        log.Printf("❌ Template execution error: %v", err)
-    }
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := t.Execute(w, data); err != nil {
+		log.Printf("❌ Template execution error: %v", err)
+	}
 }
 
 // generateTestUsersList creates an HTML list of available test users
 func (h *DeviceHandlers) generateTestUsersList() string {
-    var usersList strings.Builder
+	var usersList strings.Builder
 
-    for _, user := range h.config.Users {
-        usersList.WriteString(fmt.Sprintf(
-            "<li><strong>%s</strong> / %s (%s)</li>",
-            user.Username,
-            user.Password,
-            user.Name,
-        ))
-    }
+	for _, user := range h.config.Users {
+		usersList.WriteString(fmt.Sprintf(
+			"<li><strong>%s</strong> / %s (%s)</li>",
+			user.Username,
+			user.Password,
+			user.Name,
+		))
+	}
 
-    if usersList.Len() == 0 {
-        usersList.WriteString("<li>No test users configured</li>")
-    }
+	if usersList.Len() == 0 {
+		usersList.WriteString("<li>No test users configured</li>")
+	}
 
-    return usersList.String()
+	return usersList.String()
 }
 
 // handleDeviceForm processes the device verification form submission
 func (h *DeviceHandlers) handleDeviceForm(w http.ResponseWriter, r *http.Request) {
-    if err := r.ParseForm(); err != nil {
-        h.redirectWithError(w, r, "Failed to parse form")
-        return
-    }
+	if err := r.ParseForm(); err != nil {
+		h.redirectWithError(w, r, "Failed to parse form")
+		return
+	}
 
-    userCode := strings.TrimSpace(strings.ToUpper(r.FormValue("user_code")))
-    username := strings.TrimSpace(r.FormValue("username"))
-    password := r.FormValue("password")
+	userCode := strings.TrimSpace(strings.ToUpper(r.FormValue("user_code")))
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
 
-    if userCode == "" {
-        h.redirectWithError(w, r, "Device code is required")
-        return
-    }
+	if userCode == "" {
+		h.redirectWithError(w, r, "Device code is required")
+		return
+	}
 
-    if username == "" || password == "" {
-        h.redirectWithError(w, r, "Username and password are required")
-        return
-    }
+	if username == "" || password == "" {
+		h.redirectWithError(w, r, "Username and password are required")
+		return
+	}
 
-    // Authenticate user against configured users
-    user := h.authenticateUser(username, password)
-    if user == nil {
-        h.redirectWithError(w, r, "Invalid username or password")
-        return
-    }
+	// Authenticate user against configured users
+	user := h.authenticateUser(username, password)
+	if user == nil {
+		h.redirectWithError(w, r, "Invalid username or password")
+		return
+	}
 
-    // Authorize the device
-    if !h.deviceFlow.AuthorizeDevice(userCode, user.ID) {
-        h.redirectWithError(w, r, "Invalid or expired device code")
-        return
-    }
+	// Authorize the device
+	if !h.deviceFlow.AuthorizeDevice(userCode, user.ID) {
+		h.redirectWithError(w, r, "Invalid or expired device code")
+		return
+	}
 
-    // Show success page
-    h.showSuccessPage(w, user.Name)
-    log.Printf("✅ Device authorized for user: %s (%s)", user.Username, user.Name)
+	// Show success page
+	h.showSuccessPage(w, user.Name)
+	log.Printf("✅ Device authorized for user: %s (%s)", user.Username, user.Name)
 }
 
 // authenticateUser validates user credentials against the configured users
 func (h *DeviceHandlers) authenticateUser(username, password string) *config.User {
-    // Look up user in the configuration
-    if user, found := h.config.GetUserByUsername(username); found {
-        // In a real implementation, you'd hash and compare passwords properly
-        if user.Password == password {
-            return user
-        }
-    }
-    return nil
+	// Look up user in the configuration
+	if user, found := h.config.GetUserByUsername(username); found {
+		// In a real implementation, you'd hash and compare passwords properly
+		if user.Password == password {
+			return user
+		}
+	}
+	return nil
 }
 
 // redirectWithError redirects back to the form with an error message
 func (h *DeviceHandlers) redirectWithError(w http.ResponseWriter, r *http.Request, errorMsg string) {
-    userCode := r.FormValue("user_code")
-    redirectURL := fmt.Sprintf("/device?error=%s", errorMsg)
-    if userCode != "" {
-        redirectURL += fmt.Sprintf("&user_code=%s", userCode)
-    }
-    http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	userCode := r.FormValue("user_code")
+	redirectURL := fmt.Sprintf("/device?error=%s", errorMsg)
+	if userCode != "" {
+		redirectURL += fmt.Sprintf("&user_code=%s", userCode)
+	}
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 // showSuccessPage displays the success page after device authorization
 func (h *DeviceHandlers) showSuccessPage(w http.ResponseWriter, userName string) {
-    successHTML := fmt.Sprintf(`
+	successHTML := fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
 <head>
@@ -396,31 +396,31 @@ func (h *DeviceHandlers) showSuccessPage(w http.ResponseWriter, userName string)
 </body>
 </html>`, userName)
 
-    w.Header().Set("Content-Type", "text/html; charset=utf-8")
-    w.WriteHeader(http.StatusOK)
-    w.Write([]byte(successHTML))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(successHTML))
 }
 
 // HandleDeviceStatus returns the status of a device authorization (for AJAX polling)
 func (h *DeviceHandlers) HandleDeviceStatus(w http.ResponseWriter, r *http.Request) {
-    if r.Method != "GET" {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-    userCode := r.URL.Query().Get("user_code")
-    if userCode == "" {
-        utils.WriteJSONResponse(w, http.StatusBadRequest, map[string]string{
-            "error": "user_code parameter is required",
-        })
-        return
-    }
+	userCode := r.URL.Query().Get("user_code")
+	if userCode == "" {
+		utils.WriteJSONResponse(w, http.StatusBadRequest, map[string]string{
+			"error": "user_code parameter is required",
+		})
+		return
+	}
 
-    // You would implement device status checking here
-    // For now, return a simple response
-    utils.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
-        "status":    "pending",
-        "user_code": userCode,
-        "timestamp": time.Now().Unix(),
-    })
+	// You would implement device status checking here
+	// For now, return a simple response
+	utils.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+		"status":    "pending",
+		"user_code": userCode,
+		"timestamp": time.Now().Unix(),
+	})
 }

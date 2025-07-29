@@ -18,34 +18,35 @@ type ClientHandler struct {
 
 // jsString safely escapes a Go string for JS argument passing
 func jsString(s string) string {
-	   b, _ := json.Marshal(s)
-	   return string(b)
+	b, _ := json.Marshal(s)
+	return string(b)
 }
+
 // escapeAndJoin safely joins a slice of strings for HTML output
 func escapeAndJoin(arr []string) string {
-	   if len(arr) == 0 {
-			   return "<em>None</em>"
-	   }
-	   s := ""
-	   for i, v := range arr {
-			   if i > 0 {
-					   s += ", "
-			   }
-			   s += htmlEscape(v)
-	   }
-	   return s
+	if len(arr) == 0 {
+		return "<em>None</em>"
+	}
+	s := ""
+	for i, v := range arr {
+		if i > 0 {
+			s += ", "
+		}
+		s += htmlEscape(v)
+	}
+	return s
 }
 
 // htmlEscape escapes special HTML characters
 func htmlEscape(s string) string {
-	   replacer := strings.NewReplacer(
-			   "&", "&amp;",
-			   "<", "&lt;",
-			   ">", "&gt;",
-			   `"`, "&quot;",
-			   "'", "&#39;",
-	   )
-	   return replacer.Replace(s)
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(s)
 }
 
 // NewClientHandler creates a new ClientHandler
@@ -73,8 +74,8 @@ func (h *ClientHandler) HandleClients(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("🔍 Debug: Listing all configured clients")
 
-	   // Render HTML client list with Edit button
-	   html := `<html><head><title>Clients</title>
+	// Render HTML client list with Edit button
+	html := `<html><head><title>Clients</title>
 	   <style>
 	   body { font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; }
 	   h2 { color: #333; }
@@ -87,26 +88,26 @@ func (h *ClientHandler) HandleClients(w http.ResponseWriter, r *http.Request) {
 	   .edit-btn:hover { text-decoration: underline; }
 	   .delete-btn { color: #dc3545; background: none; border: none; cursor: not-allowed; opacity: 0.5; }
 	   </style></head><body>`
-	   html += `<h2>🔑 Configured Clients</h2><table>`
-	   html += `<tr><th>ID</th><th>Name</th><th>Description</th><th>Redirect URIs</th><th>Grant Types</th><th>Scopes</th><th>Actions</th></tr>`
-	   for _, clientConfig := range h.config.Clients {
-	   html += `<tr class="client-row" data-client-id="` + htmlEscape(clientConfig.ID) + `">`
-	   html += `<td>` + clientConfig.ID + `</td>`
-	   html += `<td>` + clientConfig.Name + `</td>`
-	   html += `<td>` + clientConfig.Description + `</td>`
-	   html += `<td>` + escapeAndJoin(clientConfig.RedirectURIs) + `</td>`
-	   html += `<td>` + escapeAndJoin(clientConfig.GrantTypes) + `</td>`
-	   html += `<td>` + escapeAndJoin(clientConfig.Scopes) + `</td>`
-	   html += `<td class="actions">
+	html += `<h2>🔑 Configured Clients</h2><table>`
+	html += `<tr><th>ID</th><th>Name</th><th>Description</th><th>Redirect URIs</th><th>Grant Types</th><th>Scopes</th><th>Actions</th></tr>`
+	for _, clientConfig := range h.config.Clients {
+		html += `<tr class="client-row" data-client-id="` + htmlEscape(clientConfig.ID) + `">`
+		html += `<td>` + clientConfig.ID + `</td>`
+		html += `<td>` + clientConfig.Name + `</td>`
+		html += `<td>` + clientConfig.Description + `</td>`
+		html += `<td>` + escapeAndJoin(clientConfig.RedirectURIs) + `</td>`
+		html += `<td>` + escapeAndJoin(clientConfig.GrantTypes) + `</td>`
+		html += `<td>` + escapeAndJoin(clientConfig.Scopes) + `</td>`
+		html += `<td class="actions">
 		 <button class="edit-btn" data-client-id="` + htmlEscape(clientConfig.ID) + `">Edit</button>
 		 <button class="delete-btn" disabled title="Delete not implemented">Delete</button>
 	   </td>`
-	   html += `</tr>`
-	   }
-	   html += `</table>`
-	   html += `<p><a href="/">← Back to Home</a></p>`
-	   // Modal dialog for editing
-	   html += `<div id="editModal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.3);z-index:1000;align-items:center;justify-content:center;">
+		html += `</tr>`
+	}
+	html += `</table>`
+	html += `<p><a href="/">← Back to Home</a></p>`
+	// Modal dialog for editing
+	html += `<div id="editModal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.3);z-index:1000;align-items:center;justify-content:center;">
 		 <div style="background:#fff;padding:32px 24px;border-radius:8px;max-width:400px;margin:80px auto;box-shadow:0 2px 16px #0002;position:relative;">
 		   <h3>Edit Client</h3>
 		   <form id="editForm">
@@ -128,7 +129,7 @@ func (h *ClientHandler) HandleClients(w http.ResponseWriter, r *http.Request) {
 		   <span style="position:absolute;top:8px;right:12px;cursor:pointer;font-size:20px;" onclick="closeEditModal()" aria-label="Close">&times;</span>
 		 </div>
 	   </div>`
-	   html += `<script>
+	html += `<script>
 	   // Master-detail: click row to open modal and fetch details
 	   document.addEventListener('DOMContentLoaded', function() {
 		 // Row click still opens modal
@@ -222,10 +223,10 @@ func (h *ClientHandler) HandleClients(w http.ResponseWriter, r *http.Request) {
 		 }
 	   };
 	   </script>`
-	   html += `</body></html>`
-	   w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	   w.Write([]byte(html))
-	   log.Printf("✅ Debug: Listed %d clients", len(h.config.Clients))
+	html += `</body></html>`
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(html))
+	log.Printf("✅ Debug: Listed %d clients", len(h.config.Clients))
 
 }
 
@@ -464,4 +465,3 @@ func (h *ClientHandler) HandleClientUpdate(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"updated"}`))
 }
-
