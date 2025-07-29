@@ -907,10 +907,13 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		  fetch('/stats')
 		    .then(r => r.json())
 		    .then(stats => {
-		      // Show only the main numbers, but you can expand as needed
-		      document.getElementById('stats-tokens-value').innerText = stats.tokens?.total ?? (typeof stats.tokens === "number" ? stats.tokens : "—");
-		      document.getElementById('stats-clients-value').innerText = stats.clients?.total ?? (typeof stats.clients === "number" ? stats.clients : "—");
-		      document.getElementById('stats-users-value').innerText = stats.users?.total ?? (typeof stats.users === "number" ? stats.users : stats.users ?? "—");
+		      // Use the correct attribute for tokens
+		      document.getElementById('stats-tokens-value').innerText =
+		        stats.tokens?.tokens?.total ?? (typeof stats.tokens.tokens.total === "number" ? stats.tokens.tokens.total : "—");
+		      document.getElementById('stats-clients-value').innerText =
+		        stats.clients?.total ?? (typeof stats.clients === "number" ? stats.clients : "—");
+		      document.getElementById('stats-users-value').innerText =
+		        stats.users?.total ?? (typeof stats.users === "number" ? stats.users : stats.users ?? "—");
 		    })
 		    .catch(() => {
 		      document.getElementById('stats-tokens-value').innerText = '—';
