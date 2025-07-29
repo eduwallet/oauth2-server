@@ -253,3 +253,11 @@ func (cs *ClientStore) LoadClientsFromConfig(clients []config.ClientConfig) erro
 	log.Printf("📦 Loaded %d clients from configuration", len(clients))
 	return nil
 }
+
+// GetStats returns statistics about the client store
+func (s *ClientStore) GetStats() map[string]interface{} {
+	return map[string]interface{}{
+		"total": len(s.clients),
+		// Add more stats as needed
+	}
+}

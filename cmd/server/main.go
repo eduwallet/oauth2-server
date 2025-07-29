@@ -282,7 +282,7 @@ func setupRoutes() {
 	http.HandleFunc("/docs", proxyAwareMiddleware(docsWrapperHandler))
 	http.HandleFunc("/docs/", proxyAwareMiddleware(docsWrapperHandler))
 
-	// Add debug endpoints (only in development)
+	// Add admin endpoints
 	if cfg != nil {
 		clientHandler := handlers.NewClientHandler(clientStore, cfg)
 		if clientHandler != nil {
@@ -304,6 +304,16 @@ func setupRoutes() {
 
 	// Use the existing tokenHandlers instance initialized in initializeFlows()
 	http.HandleFunc("/token/stats", proxyAwareMiddleware(tokenHandlers.HandleTokenStats))
+
+	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		statsHandler := handlers.StatsHandler{
+			TokenStore:  tokenStore,
+			ClientStore: clientStore,
+			Config:      cfg,
+		}
+		statsHandler.ServeHTTP(w, r)
+	}))
+
 }
 
 // Helper wrapper functions for your existing handlers
@@ -841,6 +851,75 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 				<li><span class="endpoint">GET /.well-known/jwks.json</span> - JWKS</li>
 			</ul>
 		</div>
+
+		<!-- Fancy Server Stats Section -->
+		<div class="stats-section" style="margin-top:30px;">
+		  <h2 style="text-align:center;">🚦 Server Stats</h2>
+		  <div id="stats-cards" style="display:flex; gap:24px; justify-content:center; flex-wrap:wrap; margin-top:20px;">
+		    <div class="stat-card" id="stat-tokens">
+		      <div class="stat-icon">🔑</div>
+		      <div class="stat-label">Tokens</div>
+		      <div class="stat-value" id="stats-tokens-value">...</div>
+		    </div>
+		    <div class="stat-card" id="stat-clients">
+		      <div class="stat-icon">🧩</div>
+		      <div class="stat-label">Clients</div>
+		      <div class="stat-value" id="stats-clients-value">...</div>
+		    </div>
+		    <div class="stat-card" id="stat-users">
+		      <div class="stat-icon">👤</div>
+		      <div class="stat-label">Users</div>
+		      <div class="stat-value" id="stats-users-value">...</div>
+		    </div>
+		  </div>
+		</div>
+		<style>
+		  .stat-card {
+		    background: #fff;
+		    border-radius: 12px;
+		    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+		    padding: 24px 32px;
+		    min-width: 140px;
+		    text-align: center;
+		    transition: box-shadow 0.2s;
+		  }
+		  .stat-card:hover {
+		    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+		  }
+		  .stat-icon {
+		    font-size: 2.2em;
+		    margin-bottom: 8px;
+		  }
+		  .stat-label {
+		    font-size: 1.1em;
+		    color: #555;
+		    margin-bottom: 6px;
+		    font-weight: 500;
+		  }
+		  .stat-value {
+		    font-size: 2em;
+		    font-weight: bold;
+		    color: #007bff;
+		  }
+		</style>
+		<script>
+		function loadStats() {
+		  fetch('/stats')
+		    .then(r => r.json())
+		    .then(stats => {
+		      // Show only the main numbers, but you can expand as needed
+		      document.getElementById('stats-tokens-value').innerText = stats.tokens?.total ?? (typeof stats.tokens === "number" ? stats.tokens : "—");
+		      document.getElementById('stats-clients-value').innerText = stats.clients?.total ?? (typeof stats.clients === "number" ? stats.clients : "—");
+		      document.getElementById('stats-users-value').innerText = stats.users?.total ?? (typeof stats.users === "number" ? stats.users : stats.users ?? "—");
+		    })
+		    .catch(() => {
+		      document.getElementById('stats-tokens-value').innerText = '—';
+		      document.getElementById('stats-clients-value').innerText = '—';
+		      document.getElementById('stats-users-value').innerText = '—';
+		    });
+		}
+		document.addEventListener('DOMContentLoaded', loadStats);
+		</script>
 	</div>
 </body>
 </html>`, cfg.Server.BaseURL, userListHTML.String(), clientListHTML.String())
