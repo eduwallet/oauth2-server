@@ -25,12 +25,14 @@ type DeviceCodeFlow struct {
 	deviceAuths      map[string]*models.DeviceAuthorization
 	userCodeToDevice map[string]string
 	mutex            sync.RWMutex
+	tokenStore       *store.TokenStore
 }
 
 // NewDeviceCodeFlow creates a new device code flow handler
-func NewDeviceCodeFlow(clientStore *store.ClientStore, config *config.Config) *DeviceCodeFlow {
+func NewDeviceCodeFlow(clientStore *store.ClientStore, tokenStore *store.TokenStore, config *config.Config) *DeviceCodeFlow {
 	return &DeviceCodeFlow{
 		clientStore:      clientStore,
+		tokenStore:       tokenStore,
 		config:           config,
 		deviceAuths:      make(map[string]*models.DeviceAuthorization),
 		userCodeToDevice: make(map[string]string),
@@ -213,16 +215,16 @@ func (f *DeviceCodeFlow) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate access token
-	accessToken, err := auth.GenerateAccessToken(deviceAuth.UserID, deviceAuth.ClientID, deviceAuth.Scopes)
+	// Generate access token using high-level function (and store it)
+	expiresIn := time.Duration(f.config.Security.TokenExpirySeconds) * time.Second
+	accessToken, err := auth.GenerateAccessToken(f.tokenStore, deviceAuth.UserID, deviceAuth.ClientID, deviceAuth.Scopes, expiresIn)
 	if err != nil {
 		log.Printf("❌ Error generating access token: %v", err)
 		utils.WriteServerError(w, "Failed to generate access token")
 		return
 	}
 
-	// Generate refresh token
-	refreshToken, err := auth.GenerateRefreshToken(deviceAuth.UserID, deviceAuth.ClientID)
+	refreshToken, err := auth.GenerateRefreshToken(f.tokenStore, deviceAuth.UserID, deviceAuth.ClientID, deviceAuth.Scopes, expiresIn)
 	if err != nil {
 		log.Printf("❌ Error generating refresh token: %v", err)
 		utils.WriteServerError(w, "Failed to generate refresh token")
@@ -230,11 +232,10 @@ func (f *DeviceCodeFlow) HandleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create token response
-	expiresAt := time.Now().Add(time.Duration(f.config.Security.TokenExpirySeconds) * time.Second)
 	tokenResponse := map[string]interface{}{
 		"access_token":  accessToken,
 		"token_type":    "Bearer",
-		"expires_in":    expiresAt,
+		"expires_in":    expiresIn,
 		"refresh_token": refreshToken,
 		"scope":         utils.JoinScopes(deviceAuth.Scopes),
 	}

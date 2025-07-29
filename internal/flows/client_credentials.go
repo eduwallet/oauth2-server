@@ -107,20 +107,12 @@ func (f *ClientCredentialsFlow) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate access token
-	accessToken, err := auth.GenerateAccessToken("", clientID, requestedScopes)
+	// Generate access token using high-level function (and store it)
+	expiresIn := time.Hour
+	accessToken, err := auth.GenerateAccessToken(f.tokenStore, "", clientID, requestedScopes, expiresIn)
 	if err != nil {
 		log.Printf("❌ Error generating access token: %v", err)
 		utils.WriteServerError(w, "Failed to generate access token")
-		return
-	}
-
-	// Store access token with proper parameters
-	expiresAt := time.Now().Add(time.Hour)
-	err = f.tokenStore.StoreAccessToken(accessToken, clientID, "", requestedScopes, expiresAt)
-	if err != nil {
-		log.Printf("❌ Error storing access token: %v", err)
-		utils.WriteServerError(w, "Failed to store access token")
 		return
 	}
 

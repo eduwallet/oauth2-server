@@ -207,10 +207,11 @@ func initializeFlows() {
 	tokenHandlers = handlers.NewTokenHandlers(clientStore, tokenStore, cfg)
 
 	authCodeFlow = flows.NewAuthorizationCodeFlow(oauth2Provider, cfg)
+
 	clientCredsFlow = flows.NewClientCredentialsFlow(clientStore, tokenStore, cfg)
 	refreshTokenFlow = flows.NewRefreshTokenFlow(clientStore, tokenStore, cfg)
 	tokenExchangeFlow = flows.NewTokenExchangeFlow(clientStore, tokenStore, cfg)
-	deviceCodeFlow = flows.NewDeviceCodeFlow(clientStore, cfg)
+	deviceCodeFlow = flows.NewDeviceCodeFlow(clientStore, tokenStore, cfg)
 
 	// Start cleanup timer for expired device codes
 	deviceCodeFlow.StartCleanupTimer()
@@ -277,19 +278,27 @@ func setupRoutes() {
 	http.HandleFunc("/api/", proxyAwareMiddleware(apiHandler))
 
 	// Documentation endpoints
+	log.Printf("📚 Registering /docs and /docs/ endpoints")
 	http.HandleFunc("/docs", proxyAwareMiddleware(docsWrapperHandler))
 	http.HandleFunc("/docs/", proxyAwareMiddleware(docsWrapperHandler))
 
 	// Add debug endpoints (only in development)
-	if cfg != nil && cfg.Logging.Level == "debug" {
-		debugHandlers := handlers.NewDebugHandlers(clientStore, cfg)
-		if debugHandlers != nil {
-			http.HandleFunc("/debug/clients", debugHandlers.HandleDebugClients)
-			http.HandleFunc("/debug/client", debugHandlers.HandleDebugClient)
-			http.HandleFunc("/debug/config", debugHandlers.HandleDebugConfig)
-			log.Printf("🔧 Debug endpoints enabled at /debug/*")
+	   if cfg != nil {
+			   clientHandler := handlers.NewClientHandler(clientStore, cfg)
+		if clientHandler != nil {
+			http.HandleFunc("/admin/clients", clientHandler.HandleClients)
+			http.HandleFunc("/admin/client", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "POST" {
+					clientHandler.HandleClientUpdate(w, r)
+				} else {
+					clientHandler.HandleClient(w, r)
+				}
+			})
+			http.HandleFunc("/admin/client/edit", clientHandler.HandleEditClient)
+			http.HandleFunc("/admin/config", clientHandler.HandleClientConfig)
+			log.Printf("🔧 Client endpoints enabled at /admin/*")
 		} else {
-			log.Printf("⚠️ Failed to create debug handlers")
+			log.Printf("⚠️ Failed to create client handler")
 		}
 	}
 }
@@ -316,6 +325,7 @@ func registrationConfigHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func docsWrapperHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("📚 /docs endpoint hit: %s", r.URL.Path)
 	docsHandler.ServeHTTP(w, r)
 }
 
@@ -396,46 +406,46 @@ func showDeviceVerificationForm(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Verification</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-        button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background-color: #0056b3; }
-        .error { color: red; margin-bottom: 15px; }
-        .info { color: #666; margin-bottom: 15px; }
-    </style>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Device Verification</title>
+	<style>
+		body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
+		.form-group { margin-bottom: 15px; }
+		label { display: block; margin-bottom: 5px; font-weight: bold; }
+		input[type="text"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+		button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+		button:hover { background-color: #0056b3; }
+		.error { color: red; margin-bottom: 15px; }
+		.info { color: #666; margin-bottom: 15px; }
+	</style>
 </head>
 <body>
-    <h2>📱 Device Verification</h2>
-    <div class="info">Please enter the user code displayed on your device and authenticate:</div>`
+	<h2>📱 Device Verification</h2>
+	<div class="info">Please enter the user code displayed on your device and authenticate:</div>`
 
 	if errorMsg != "" {
 		html += fmt.Sprintf(`<div class="error">%s</div>`, errorMsg)
 	}
 
 	html += `
-    <form method="post">
-        <div class="form-group">
-            <label for="user_code">User Code:</label>
-            <input type="text" id="user_code" name="user_code" value="` + userCode + `" placeholder="Enter user code" required>
-        </div>
-        <div class="form-group">
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" placeholder="john.doe" required>
-        </div>
-        <div class="form-group">
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" placeholder="password123" required>
-        </div>
-        <button type="submit">Authorize Device</button>
-    </form>
-    
-    <p><a href="/">← Back to Home</a></p>
+	<form method="post">
+		<div class="form-group">
+			<label for="user_code">User Code:</label>
+			<input type="text" id="user_code" name="user_code" value="` + userCode + `" placeholder="Enter user code" required>
+		</div>
+		<div class="form-group">
+			<label for="username">Username:</label>
+			<input type="text" id="username" name="username" placeholder="john.doe" required>
+		</div>
+		<div class="form-group">
+			<label for="password">Password:</label>
+			<input type="password" id="password" name="password" placeholder="password123" required>
+		</div>
+		<button type="submit">Authorize Device</button>
+	</form>
+	
+	<p><a href="/">← Back to Home</a></p>
 </body>
 </html>`
 
@@ -498,19 +508,19 @@ func showDeviceVerificationSuccess(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Authorized</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
-        .success { color: green; font-size: 24px; margin-bottom: 20px; }
-        .info { color: #666; margin-bottom: 15px; }
-    </style>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Device Authorized</title>
+	<style>
+		body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
+		.success { color: green; font-size: 24px; margin-bottom: 20px; }
+		.info { color: #666; margin-bottom: 15px; }
+	</style>
 </head>
 <body>
-    <div class="success">✅ Device Successfully Authorized!</div>
-    <div class="info">You can now return to your device. The application should receive the access token shortly.</div>
-    <p><a href="/">← Back to Home</a></p>
+	<div class="success">✅ Device Successfully Authorized!</div>
+	<div class="info">You can now return to your device. The application should receive the access token shortly.</div>
+	<p><a href="/">← Back to Home</a></p>
 </body>
 </html>`
 
@@ -778,62 +788,62 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OAuth2 Server</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; margin-bottom: 30px; }
-        .section { margin-bottom: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 6px; }
-        .btn { display: inline-block; padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; }
-        .btn:hover { background-color: #0056b3; }
-        .endpoint { font-family: monospace; background-color: #e9ecef; padding: 8px; border-radius: 3px; }
-        ul { margin: 10px 0; }
-        li { margin: 8px 0; }
-        code { background-color: #f1f3f4; padding: 2px 4px; border-radius: 2px; }
-    </style>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>OAuth2 Server</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
+		.container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+		h1 { color: #333; text-align: center; margin-bottom: 30px; }
+		.section { margin-bottom: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 6px; }
+		.btn { display: inline-block; padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; }
+		.btn:hover { background-color: #0056b3; }
+		.endpoint { font-family: monospace; background-color: #e9ecef; padding: 8px; border-radius: 3px; }
+		ul { margin: 10px 0; }
+		li { margin: 8px 0; }
+		code { background-color: #f1f3f4; padding: 2px 4px; border-radius: 2px; }
+	</style>
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 OAuth2 Authorization Server</h1>
-        
-        <div class="section">
-            <h2>📋 Server Information</h2>
-            <p><strong>Base URL:</strong> %s</p>
-            <p><strong>Version:</strong> Development</p>
-            <p><strong>Status:</strong> ✅ Running</p>
-        </div>
+	<div class="container">
+		<h1>🚀 OAuth2 Authorization Server</h1>
+		
+		<div class="section">
+			<h2>📋 Server Information</h2>
+			<p><strong>Base URL:</strong> %s</p>
+			<p><strong>Version:</strong> Development</p>
+			<p><strong>Status:</strong> ✅ Running</p>
+		</div>
 
-        <div class="section">
-            %s
-        </div>
+		<div class="section">
+			%s
+		</div>
 
-        <div class="section">
-            %s
-        </div>
-        
-        <div class="section">
-            <h3>🔗 Quick Test Links</h3>
-            <a href="/client1/auth" class="btn">Test Authorization Flow</a>
-            <a href="/device" class="btn">Test Device Flow</a>
-            <a href="/.well-known/oauth-authorization-server" class="btn">Discovery Document</a>
-            <a href="/health" class="btn">Health Check</a>
-        </div>
-        
-        <div class="section">
-            <h3>📚 API Endpoints</h3>
-            <ul>
-                <li><span class="endpoint">GET /.well-known/oauth-authorization-server</span> - OAuth2 Discovery</li>
-                <li><span class="endpoint">GET /.well-known/jwks.json</span> - JWKS</li>
-                <li><span class="endpoint">GET /auth</span> - Authorization Endpoint</li>
-                <li><span class="endpoint">POST /token</span> - Token Endpoint</li>
-                <li><span class="endpoint">GET /userinfo</span> - UserInfo Endpoint</li>
-                <li><span class="endpoint">POST /device_authorization</span> - Device Authorization</li>
-                <li><span class="endpoint">GET /device</span> - Device Verification</li>
-            </ul>
-        </div>
-    </div>
+		<div class="section">
+			%s
+		</div>
+		
+		<div class="section">
+			<h3>🔗 Quick Test Links</h3>
+			<a href="/client1/auth" class="btn">Test Authorization Flow</a>
+			<a href="/device" class="btn">Test Device Flow</a>
+			<a href="/.well-known/oauth-authorization-server" class="btn">Discovery Document</a>
+			<a href="/health" class="btn">Health Check</a>
+		</div>
+		
+		<div class="section">
+			<h3>📚 API Endpoints</h3>
+			<ul>
+				<li><span class="endpoint">GET /.well-known/oauth-authorization-server</span> - OAuth2 Discovery</li>
+				<li><span class="endpoint">GET /.well-known/jwks.json</span> - JWKS</li>
+				<li><span class="endpoint">GET /auth</span> - Authorization Endpoint</li>
+				<li><span class="endpoint">POST /token</span> - Token Endpoint</li>
+				<li><span class="endpoint">GET /userinfo</span> - UserInfo Endpoint</li>
+				<li><span class="endpoint">POST /device_authorization</span> - Device Authorization</li>
+				<li><span class="endpoint">GET /device</span> - Device Verification</li>
+			</ul>
+		</div>
+	</div>
 </body>
 </html>`, cfg.Server.BaseURL, userListHTML.String(), clientListHTML.String())
 

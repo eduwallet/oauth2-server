@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -48,8 +46,7 @@ func (h *TokenHandlers) HandleTokenRevocation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	token := r.FormValue("token")
-	tokenTypeHint := r.FormValue("token_type_hint")
+	   token := r.FormValue("token")
 
 	if token == "" {
 		utils.WriteErrorResponse(w, "invalid_request", "token is required")
@@ -72,13 +69,7 @@ func (h *TokenHandlers) HandleTokenRevocation(w http.ResponseWriter, r *http.Req
 	}
 
 	// Validate that the token belongs to the client
-	tokenInfo, err := h.tokenStore.ValidateAccessToken(token)
-	if err != nil {
-		// Try refresh token if access token validation fails
-		tokenInfo, err = h.tokenStore.ValidateRefreshToken(token)
-	}
-
-	// Fix: Check for error instead of using ! operator on interface
+	tokenInfo, err := auth.ValidateToken(h.tokenStore, token)
 	if err != nil {
 		// Token not found or invalid - per RFC 7009, we should return success anyway
 		log.Printf("⚠️ Token not found or invalid: %v", err)
@@ -101,11 +92,6 @@ func (h *TokenHandlers) HandleTokenRevocation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Handle hint for token type (optional optimization)
-	if tokenTypeHint == "refresh_token" {
-		// Also revoke associated access tokens if this is a refresh token
-		// In a production system, you'd track these relationships
-	}
 
 	log.Printf("✅ Token revoked for client: %s", clientID)
 	w.WriteHeader(http.StatusOK)
@@ -126,8 +112,7 @@ func (h *TokenHandlers) HandleTokenIntrospection(w http.ResponseWriter, r *http.
 		return
 	}
 
-	token := r.FormValue("token")
-	tokenTypeHint := r.FormValue("token_type_hint")
+	   token := r.FormValue("token")
 
 	if token == "" {
 		utils.WriteErrorResponse(w, "invalid_request", "token is required")
@@ -149,26 +134,16 @@ func (h *TokenHandlers) HandleTokenIntrospection(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Validate token and get info
-	var tokenInfo *store.TokenInfo
-	if tokenTypeHint == "refresh_token" {
-		tokenInfo, err = h.tokenStore.ValidateRefreshToken(token)
-	} else {
-		// Default to access token or try both
-		tokenInfo, err = h.tokenStore.ValidateAccessToken(token)
-		if err != nil {
-			tokenInfo, err = h.tokenStore.ValidateRefreshToken(token)
-		}
-	}
 
+	// Validate token and get info using high-level API
+	tokenInfo, err := auth.ValidateToken(h.tokenStore, token)
 	if err != nil {
-		// Token is invalid or expired
-		response := map[string]interface{}{
-			"active": false,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-		return
+			response := map[string]interface{}{
+					"active": false,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
 	}
 
 	// Create introspection response
@@ -242,10 +217,10 @@ func (h *TokenHandlers) HandleTokenExchange(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Validate the subject token
-	tokenInfo, err := h.tokenStore.ValidateAccessToken(subjectToken)
+	tokenInfo, err := auth.ValidateToken(h.tokenStore, subjectToken)
 	if err != nil {
-		utils.WriteInvalidGrantError(w, "Invalid or expired subject_token")
-		return
+			utils.WriteInvalidGrantError(w, "Invalid or expired subject_token")
+			return
 	}
 
 	// Optional: Validate audience if provided
@@ -254,23 +229,18 @@ func (h *TokenHandlers) HandleTokenExchange(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Generate new access token
-	newAccessToken, err := h.generateAccessToken()
-	if err != nil {
-		utils.WriteServerError(w, "Failed to generate access token")
-		return
-	}
-
 	// Determine the scope for the new token
 	requestedScope := r.FormValue("scope")
-	// Fix: Use tokenInfo.Scopes (slice) and join them
 	originalScope := strings.Join(tokenInfo.Scopes, " ")
 	scope := h.determineTokenExchangeScope(originalScope, requestedScope)
-
-	// Store the new token - Fix: Pass []string for scopes and time.Time for expiry
 	scopeSlice := strings.Fields(scope)
-	expiresAt := time.Now().Add(time.Hour)
-	h.tokenStore.StoreAccessToken(newAccessToken, clientID, tokenInfo.UserID, scopeSlice, expiresAt)
+
+	// Generate and store new access token
+	newAccessToken, err := auth.GenerateAccessToken(h.tokenStore, tokenInfo.UserID, clientID, scopeSlice, time.Hour)
+	if err != nil {
+			utils.WriteServerError(w, "Failed to generate access token")
+			return
+	}
 
 	// Prepare response
 	response := map[string]interface{}{
@@ -283,13 +253,10 @@ func (h *TokenHandlers) HandleTokenExchange(w http.ResponseWriter, r *http.Reque
 
 	// Optional: Include refresh token if appropriate
 	if strings.Contains(scope, "offline_access") {
-		refreshToken, err := h.generateRefreshToken()
-		if err == nil {
-			refreshExpiresAt := time.Now().Add(24 * time.Hour * 30)
-			scopeSlice := strings.Fields(scope)
-			h.tokenStore.StoreRefreshToken(refreshToken, clientID, tokenInfo.UserID, scopeSlice, refreshExpiresAt)
-			response["refresh_token"] = refreshToken
-		}
+			refreshToken, err := auth.GenerateRefreshToken(h.tokenStore, tokenInfo.UserID, clientID, scopeSlice, 24*time.Hour)
+			if err == nil {
+					response["refresh_token"] = refreshToken
+			}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -349,18 +316,13 @@ func (h *TokenHandlers) HandleClientCredentials(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Generate access token
-	accessToken, err := h.generateAccessToken()
-	if err != nil {
-		utils.WriteServerError(w, "Failed to generate access token")
-		return
-	}
-
-	// Store the token (no user ID for client credentials)
-	// Fix: Pass []string for scopes and time.Time for expiry
+	// Generate access token (and store it)
 	scopeSlice := strings.Fields(requestedScope)
-	expiresAt := time.Now().Add(time.Hour)
-	h.tokenStore.StoreAccessToken(accessToken, clientID, "", scopeSlice, expiresAt)
+	accessToken, err := auth.GenerateAccessToken(h.tokenStore, "", clientID, scopeSlice, time.Hour)
+	if err != nil {
+			utils.WriteServerError(w, "Failed to generate access token")
+			return
+	}
 
 	// Prepare response
 	response := map[string]interface{}{
@@ -373,16 +335,11 @@ func (h *TokenHandlers) HandleClientCredentials(w http.ResponseWriter, r *http.R
 	// Generate refresh token if offline_access scope is requested
 	// This is useful for long-running services that need refresh capabilities
 	if strings.Contains(requestedScope, "offline_access") || strings.Contains(requestedScope, "refresh_token") {
-		refreshToken, err := h.generateRefreshToken()
-		if err != nil {
-			log.Printf("Failed to generate refresh token: %v", err)
-		} else {
-			// Store refresh token with expiry (30 days for refresh tokens)
-			refreshExpiresAt := time.Now().Add(30 * 24 * time.Hour)
-			h.tokenStore.StoreRefreshToken(refreshToken, clientID, "", scopeSlice, refreshExpiresAt)
-			response["refresh_token"] = refreshToken
-			log.Printf("✅ Refresh token issued for client credentials flow: %s", clientID)
-		}
+			refreshToken, err := auth.GenerateRefreshToken(h.tokenStore, "", clientID, scopeSlice, 30*24*time.Hour)
+			if err == nil {
+					response["refresh_token"] = refreshToken
+					log.Printf("✅ Refresh token issued for client credentials flow: %s", clientID)
+			}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -432,85 +389,62 @@ func (h *TokenHandlers) HandleRefreshToken(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Validate refresh token
-	tokenInfo, err := h.tokenStore.ValidateRefreshToken(refreshToken)
-	// Fix: Check for error instead of using ! operator on interface
+	tokenInfo, err := auth.ValidateToken(h.tokenStore, refreshToken)
 	if err != nil {
-		utils.WriteErrorResponse(w, "invalid_grant", "Invalid or expired refresh token")
-		return
+			utils.WriteErrorResponse(w, "invalid_grant", "Invalid or expired refresh token")
+			return
 	}
 
 	// Verify token belongs to the client
 	if tokenInfo.ClientID != clientID {
-		utils.WriteErrorResponse(w, "invalid_grant", "Refresh token does not belong to client")
-		return
+			utils.WriteErrorResponse(w, "invalid_grant", "Refresh token does not belong to client")
+			return
 	}
 
 	// Handle scope parameter
-	var requestedScope string
+	var requestedScopeSlice []string
 	if scope != "" {
-		// If scope is provided, it must be a subset of the original scope
-		originalScope := strings.Join(tokenInfo.Scopes, " ")
-		if !h.isScopeSubset(scope, originalScope) {
-			utils.WriteErrorResponse(w, "invalid_scope", "Requested scope exceeds original scope")
-			return
-		}
-		requestedScope = scope
+			// If scope is provided, it must be a subset of the original scope
+			originalScope := strings.Join(tokenInfo.Scopes, " ")
+			if !h.isScopeSubset(scope, originalScope) {
+					utils.WriteErrorResponse(w, "invalid_scope", "Requested scope exceeds original scope")
+					return
+			}
+			requestedScopeSlice = strings.Fields(scope)
 	} else {
-		// Use tokenInfo.Scopes (slice) and join them
-		requestedScope = strings.Join(tokenInfo.Scopes, " ")
+			requestedScopeSlice = tokenInfo.Scopes
 	}
 
 	// Generate new access token
-	requestedScopes := strings.Fields(requestedScope)
-	newAccessToken, err := auth.GenerateAccessToken(tokenInfo.UserID, clientID, requestedScopes)
+	newAccessToken, err := auth.GenerateAccessToken(h.tokenStore, tokenInfo.UserID, clientID, requestedScopeSlice, time.Hour)
 	if err != nil {
-		log.Printf("❌ Error generating access token: %v", err)
-		utils.WriteServerError(w, "Failed to generate access token")
-		return
+			log.Printf("❌ Error generating access token: %v", err)
+			utils.WriteServerError(w, "Failed to generate access token")
+			return
 	}
 
 	// Generate new refresh token
-	newRefreshToken, err := auth.GenerateRefreshToken(tokenInfo.UserID, clientID)
+	newRefreshToken, err := auth.GenerateRefreshToken(h.tokenStore, tokenInfo.UserID, clientID, requestedScopeSlice, 24*time.Hour)
 	if err != nil {
-		log.Printf("❌ Error generating refresh token: %v", err)
-		utils.WriteServerError(w, "Failed to generate refresh token")
-		return
-	}
-
-	// Store new tokens with correct parameters
-	accessTokenExpiry := time.Now().Add(time.Hour)
-	refreshTokenExpiry := time.Now().Add(24 * time.Hour)
-
-	// Pass []string for scopes and time.Time for expiry
-	err = h.tokenStore.StoreAccessToken(newAccessToken, clientID, tokenInfo.UserID, requestedScopes, accessTokenExpiry)
-	if err != nil {
-		log.Printf("❌ Error storing access token: %v", err)
-		utils.WriteServerError(w, "Failed to store access token")
-		return
-	}
-
-	// Store new refresh token with scopes
-	err = h.tokenStore.StoreRefreshToken(newRefreshToken, clientID, tokenInfo.UserID, requestedScopes, refreshTokenExpiry)
-	if err != nil {
-		log.Printf("❌ Error storing refresh token: %v", err)
-		utils.WriteServerError(w, "Failed to store refresh token")
-		return
+			log.Printf("❌ Error generating refresh token: %v", err)
+			utils.WriteServerError(w, "Failed to generate refresh token")
+			return
 	}
 
 	// Revoke old refresh token
 	err = h.tokenStore.RevokeToken(refreshToken)
 	if err != nil {
-		log.Printf("⚠️ Warning: Failed to revoke old refresh token: %v", err)
-		// Continue anyway as new tokens are already issued
+			log.Printf("⚠️ Warning: Failed to revoke old refresh token: %v", err)
+			// Continue anyway as new tokens are already issued
 	}
 
 	// Create response
 	response := map[string]interface{}{
-		"access_token":  newAccessToken,
-		"token_type":    "Bearer",
-		"expires_in":    3600, // 1 hour
-		"refresh_token": newRefreshToken,
-		"scope":         requestedScope,
+			"access_token":  newAccessToken,
+			"token_type":    "Bearer",
+			"expires_in":    3600, // 1 hour
+			"refresh_token": newRefreshToken,
+			"scope":         strings.Join(requestedScopeSlice, " "),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -521,24 +455,6 @@ func (h *TokenHandlers) HandleRefreshToken(w http.ResponseWriter, r *http.Reques
 }
 
 // Helper functions
-
-// generateAccessToken generates a random access token
-func (h *TokenHandlers) generateAccessToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("access_%x", bytes), nil
-}
-
-// generateRefreshToken generates a random refresh token
-func (h *TokenHandlers) generateRefreshToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("refresh_%x", bytes), nil
-}
 
 // clientSupportsGrantType checks if a client supports a specific grant type
 func (h *TokenHandlers) clientSupportsGrantType(client interface{}, grantType string) bool {
@@ -607,10 +523,10 @@ func (h *TokenHandlers) validateAudience(clientID, audience string) bool {
 				return true
 			}
 		}
-	default:
-		// If client doesn't implement GetAudience, allow any audience for now
-		// In production, you might want to be more restrictive
-		return true
+		default:
+			// If client doesn't implement GetAudience, allow any audience for now
+			// In production, you might want to be more restrictive
+			return true
 	}
 	return false
 }

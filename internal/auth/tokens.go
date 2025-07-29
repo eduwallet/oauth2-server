@@ -8,10 +8,12 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"oauth2-server/internal/store"
 )
 
-// GenerateAccessToken generates an access token for the given user and client
-func GenerateAccessToken(userID, clientID string, scopes []string) (string, error) {
+// GenerateAccessToken generates and stores an access token for the given user and client
+func GenerateAccessToken(tokenStore *store.TokenStore, userID, clientID string, scopes []string, expiresIn time.Duration) (string, error) {
 	// Generate a random token (in a real implementation, you'd use JWT)
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -21,70 +23,70 @@ func GenerateAccessToken(userID, clientID string, scopes []string) (string, erro
 	// Create a base64 encoded token with metadata
 	token := base64.URLEncoding.EncodeToString(tokenBytes)
 
-	// In a real implementation, you would:
-	// 1. Create a JWT with proper claims
-	// 2. Sign it with your private key
-	// 3. Include expiration, issuer, audience, etc.
-
-	// For demo purposes, we'll create a simple token
 	// Format: at_<base64token>_<timestamp>
 	timestamp := time.Now().Unix()
-	accessToken := fmt.Sprintf("at_%s_%d", token, timestamp)
+	tokenValue := fmt.Sprintf("at_%s_%d", token, timestamp)
 
-	return accessToken, nil
+	expiresAt := time.Now().Add(expiresIn)
+	if err := tokenStore.StoreToken(tokenValue, "access_token", clientID, userID, scopes, expiresAt); err != nil {
+		return "", err
+	}
+
+	return tokenValue, nil
 }
 
-// GenerateRefreshToken generates a refresh token for the given user and client
-func GenerateRefreshToken(userID, clientID string) (string, error) {
+// GenerateRefreshToken generates and stores a refresh token for the given user and client
+func GenerateRefreshToken(tokenStore *store.TokenStore, userID, clientID string, scopes []string, expiresIn time.Duration) (string, error) {
 	// Generate a random refresh token
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return "", fmt.Errorf("failed to generate random refresh token: %w", err)
 	}
 
-	// Create a base64 encoded refresh token
 	token := base64.URLEncoding.EncodeToString(tokenBytes)
-
-	// For demo purposes, we'll create a simple refresh token
-	// Format: rt_<base64token>_<timestamp>
 	timestamp := time.Now().Unix()
-	refreshToken := fmt.Sprintf("rt_%s_%d", token, timestamp)
+	tokenValue := fmt.Sprintf("rt_%s_%d", token, timestamp)
 
-	return refreshToken, nil
+	expiresAt := time.Now().Add(expiresIn)
+	if err := tokenStore.StoreToken(tokenValue, "refresh_token", clientID, userID, scopes, expiresAt); err != nil {
+		return "", err
+	}
+
+	return tokenValue, nil
 }
 
-// GenerateAuthorizationCode generates an authorization code
-func GenerateAuthorizationCode() (string, error) {
-	// Generate a random authorization code
+// GenerateAuthorizationCode generates and stores an authorization code
+func GenerateAuthorizationCode(tokenStore *store.TokenStore, userID, clientID string, expiresIn time.Duration) (string, error) {
 	codeBytes := make([]byte, 32)
 	if _, err := rand.Read(codeBytes); err != nil {
 		return "", fmt.Errorf("failed to generate random authorization code: %w", err)
 	}
 
-	// Create a base64 encoded authorization code
 	code := base64.URLEncoding.EncodeToString(codeBytes)
+	codeValue := fmt.Sprintf("ac_%s", code)
+	expiresAt := time.Now().Add(expiresIn)
+	if err := tokenStore.StoreToken(codeValue, "authorization_code", clientID, userID, nil, expiresAt); err != nil {
+		return "", err
+	}
 
-	// Format: ac_<base64code>
-	authCode := fmt.Sprintf("ac_%s", code)
-
-	return authCode, nil
+	return codeValue, nil
 }
 
-// GenerateDeviceCode generates a device code
-func GenerateDeviceCode() (string, error) {
-	// Generate a random device code
+// GenerateDeviceCode generates and stores a device code
+func GenerateDeviceCode(tokenStore *store.TokenStore, userID, clientID string, expiresIn time.Duration) (string, error) {
 	codeBytes := make([]byte, 32)
 	if _, err := rand.Read(codeBytes); err != nil {
 		return "", fmt.Errorf("failed to generate random device code: %w", err)
 	}
 
-	// Create a base64 encoded device code
 	code := base64.URLEncoding.EncodeToString(codeBytes)
+	codeValue := fmt.Sprintf("dc_%s", code)
+	expiresAt := time.Now().Add(expiresIn)
+	if err := tokenStore.StoreToken(codeValue, "device_code", clientID, userID, nil, expiresAt); err != nil {
+		return "", err
+	}
 
-	// Format: dc_<base64code>
-	deviceCode := fmt.Sprintf("dc_%s", code)
-
-	return deviceCode, nil
+	return codeValue, nil
 }
 
 // GenerateUserCode generates a user-friendly code for device flow
@@ -120,46 +122,19 @@ type TokenInfo struct {
 	Audience  []string  `json:"aud"`
 }
 
-// ValidateToken validates a token and returns token information
-func ValidateToken(token string) (*TokenInfo, error) {
-	// Basic validation
-	if token == "" {
-		return nil, fmt.Errorf("empty token")
-	}
+// StoreToken stores a token using the TokenStore (for custom tokens)
+func StoreToken(tokenStore *store.TokenStore, tokenValue, tokenType, clientID, userID string, scopes []string, expiresAt time.Time) error {
+	return tokenStore.StoreToken(tokenValue, tokenType, clientID, userID, scopes, expiresAt)
+}
 
-	// In a real implementation, you would:
-	// 1. Parse and validate JWT
-	// 2. Check signature
-	// 3. Verify expiration
-	// 4. Check against revocation list
+// ValidateToken validates a token and returns token information using the TokenStore
+func ValidateToken(tokenStore *store.TokenStore, token string) (*store.TokenInfo, error) {
+	return tokenStore.ValidateToken(token)
+}
 
-	// For demo purposes, accept any non-empty token
-	if len(token) < 10 {
-		return nil, fmt.Errorf("invalid token format")
-	}
-
-	// Extract token type from prefix
-	var tokenType string
-	if strings.HasPrefix(token, "at_") {
-		tokenType = "access_token"
-	} else if strings.HasPrefix(token, "rt_") {
-		tokenType = "refresh_token"
-	} else {
-		return nil, fmt.Errorf("unknown token type")
-	}
-
-	// Return basic token info (in real implementation, extract from JWT claims)
-	return &TokenInfo{
-		TokenType: tokenType,
-		ExpiresAt: time.Now().Add(time.Hour), // Default 1 hour expiration
-		Scope:     "openid profile",
-		ClientID:  "unknown",
-		UserID:    "unknown",
-		Active:    true,
-		IssuedAt:  time.Now().Add(-time.Minute), // Issued 1 minute ago
-		Issuer:    "oauth2-server",
-		Audience:  []string{"api"},
-	}, nil
+// RevokeToken revokes a token using the TokenStore
+func RevokeToken(tokenStore *store.TokenStore, token string) error {
+	return tokenStore.RevokeToken(token)
 }
 
 // ValidateAccessToken validates an access token (simplified implementation)
@@ -228,8 +203,8 @@ func ExtractBearerToken(authHeader string) (string, error) {
 }
 
 // IntrospectToken performs token introspection (RFC 7662)
-func IntrospectToken(token string) (map[string]interface{}, error) {
-	tokenInfo, err := ValidateToken(token)
+func IntrospectToken(tokenStore *store.TokenStore, token string) (map[string]interface{}, error) {
+	tokenInfo, err := ValidateToken(tokenStore, token)
 	if err != nil {
 		return map[string]interface{}{
 			"active": false,
@@ -240,7 +215,7 @@ func IntrospectToken(token string) (map[string]interface{}, error) {
 	response := map[string]interface{}{
 		"active":     tokenInfo.Active,
 		"token_type": tokenInfo.TokenType,
-		"scope":      tokenInfo.Scope,
+		"scope":      tokenInfo.Scopes,
 		"client_id":  tokenInfo.ClientID,
 		"username":   tokenInfo.UserID,
 		"exp":        tokenInfo.ExpiresAt.Unix(),
@@ -250,21 +225,6 @@ func IntrospectToken(token string) (map[string]interface{}, error) {
 	}
 
 	return response, nil
-}
-
-// RevokeToken revokes a token
-func RevokeToken(token string) error {
-	// In a real implementation, you would:
-	// 1. Add token to revocation list
-	// 2. Update database
-	// 3. Notify other services
-
-	// For demo purposes, just validate the token exists
-	if token == "" {
-		return fmt.Errorf("empty token")
-	}
-
-	return nil
 }
 
 // IsTokenExpired checks if a token is expired based on its timestamp
@@ -281,20 +241,29 @@ func IsTokenExpired(token string) bool {
 }
 
 // RefreshAccessToken generates a new access token using a refresh token
-func RefreshAccessToken(refreshToken, clientID string) (string, string, error) {
+func RefreshAccessToken(tokenStore *store.TokenStore, refreshToken, clientID, userID string, accessTokenExpiresIn, refreshTokenExpiresIn time.Duration) (string, string, error) {
+	// Retrieve the refresh token from the store to get its scopes
+	tokenData, err := tokenStore.GetToken(refreshToken)
+	if err != nil {
+		return "", "", fmt.Errorf("refresh token not found: %w", err)
+	}
+
 	// Validate refresh token
 	if err := ValidateRefreshToken(refreshToken); err != nil {
 		return "", "", fmt.Errorf("invalid refresh token: %w", err)
 	}
 
-	// Generate new access token
-	newAccessToken, err := GenerateAccessToken("user", clientID, []string{"openid", "profile"})
+	// Use the scopes from the refresh token
+	scopes := tokenData.Scopes
+
+	// Generate new access token with the same scopes as the refresh token
+	newAccessToken, err := GenerateAccessToken(tokenStore, userID, clientID, scopes, accessTokenExpiresIn)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate new access token: %w", err)
 	}
 
 	// Generate new refresh token (optional, some implementations keep the same one)
-	newRefreshToken, err := GenerateRefreshToken("user", clientID)
+	newRefreshToken, err := GenerateRefreshToken(tokenStore, userID, clientID, scopes, refreshTokenExpiresIn)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate new refresh token: %w", err)
 	}

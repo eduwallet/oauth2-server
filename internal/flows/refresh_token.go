@@ -111,36 +111,21 @@ func (f *RefreshTokenFlow) Handle(w http.ResponseWriter, r *http.Request) {
 		newScopeSlice = tokenInfo.Scopes
 	}
 
-	// Generate new tokens
-	newAccessToken, err := auth.GenerateAccessToken(tokenInfo.UserID, clientID, newScopeSlice)
+	// Generate new tokens using high-level functions (and store them)
+	accessTokenExpiry := time.Hour
+	refreshTokenExpiry := 24 * time.Hour
+
+	newAccessToken, err := auth.GenerateAccessToken(f.tokenStore, tokenInfo.UserID, clientID, newScopeSlice, accessTokenExpiry)
 	if err != nil {
 		log.Printf("❌ Error generating access token: %v", err)
 		utils.WriteServerError(w, "Failed to generate access token")
 		return
 	}
 
-	newRefreshToken, err := auth.GenerateRefreshToken(tokenInfo.UserID, clientID)
+	newRefreshToken, err := auth.GenerateRefreshToken(f.tokenStore, tokenInfo.UserID, clientID, newScopeSlice, refreshTokenExpiry)
 	if err != nil {
 		log.Printf("❌ Error generating refresh token: %v", err)
 		utils.WriteServerError(w, "Failed to generate refresh token")
-		return
-	}
-
-	// Store new tokens with proper time.Time values
-	accessTokenExpiry := time.Now().Add(time.Hour)
-	refreshTokenExpiry := time.Now().Add(24 * time.Hour)
-
-	err = f.tokenStore.StoreAccessToken(newAccessToken, clientID, tokenInfo.UserID, newScopeSlice, accessTokenExpiry)
-	if err != nil {
-		log.Printf("❌ Error storing access token: %v", err)
-		utils.WriteServerError(w, "Failed to store access token")
-		return
-	}
-
-	err = f.tokenStore.StoreRefreshToken(newRefreshToken, clientID, tokenInfo.UserID, newScopeSlice, refreshTokenExpiry)
-	if err != nil {
-		log.Printf("❌ Error storing refresh token: %v", err)
-		utils.WriteServerError(w, "Failed to store refresh token")
 		return
 	}
 
@@ -173,9 +158,11 @@ func (f *RefreshTokenFlow) validateRefreshToken(token string) (*store.TokenInfo,
 		return nil, false
 	}
 
-	// Use ValidateRefreshToken method
-	tokenInfo, err := f.tokenStore.ValidateRefreshToken(token)
+	tokenInfo, err := auth.ValidateToken(f.tokenStore, token)
 	if err != nil {
+		return nil, false
+	}
+	if tokenInfo.TokenType != "refresh_token" {
 		return nil, false
 	}
 
