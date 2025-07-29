@@ -6,6 +6,7 @@ import (
 	"oauth2-server/internal/models"
 	"oauth2-server/internal/utils"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -173,12 +174,21 @@ func (c *Config) Validate() error {
 		if contains(client.GrantTypes, "authorization_code") && len(client.RedirectURIs) == 0 {
 			return fmt.Errorf("client %s: redirect URIs required for authorization_code grant", client.ID)
 		}
+
+		// Validate that all Redirect URIs are absolute or normalized
+		for _, uri := range client.RedirectURIs {
+			if uri == "" {
+				return fmt.Errorf("client %s: redirect URI cannot be empty", client.ID)
+			}
+			if !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") && !strings.HasPrefix(uri, "/") {
+				return fmt.Errorf("client %s: redirect URI must be absolute or normalized: %s", client.ID, uri)
+			}
+		}
 	}
 
 	return nil
 }
 
-// Add this to config.go to fix the type mismatch
 type User = UserConfig
 
 // GetEffectiveBaseURL returns the effective base URL considering proxy headers

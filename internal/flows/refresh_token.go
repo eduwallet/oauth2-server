@@ -140,7 +140,7 @@ func (f *RefreshTokenFlow) Handle(w http.ResponseWriter, r *http.Request) {
 	response := models.TokenResponse{
 		AccessToken:  newAccessToken,
 		TokenType:    "Bearer",
-		ExpiresIn:    3600, // 1 hour
+		ExpiresIn:    int(f.config.Security.TokenExpirySeconds),
 		RefreshToken: newRefreshToken,
 		Scope:        newScope,
 	}

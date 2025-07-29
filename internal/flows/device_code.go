@@ -21,11 +21,11 @@ import (
 // DeviceCodeFlow handles the device authorization flow (RFC 8628)
 type DeviceCodeFlow struct {
 	clientStore      *store.ClientStore
+	tokenStore       *store.TokenStore
 	config           *config.Config
 	deviceAuths      map[string]*models.DeviceAuthorization
 	userCodeToDevice map[string]string
 	mutex            sync.RWMutex
-	tokenStore       *store.TokenStore
 }
 
 // NewDeviceCodeFlow creates a new device code flow handler
@@ -70,9 +70,9 @@ func (f *DeviceCodeFlow) HandleAuthorization(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Check if client supports device flow
-	if !f.clientSupportsDeviceFlow(client) {
-		utils.WriteErrorResponse(w, "unauthorized_client", "Client not authorized for device flow")
+	// Check if client is authorized for device_code grant
+	if !auth.ClientHasGrantType(client, "urn:ietf:params:oauth:grant-type:device_code") {
+		utils.WriteErrorResponse(w, "unauthorized_client", "Client not authorized for device code flow")
 		return
 	}
 
@@ -284,13 +284,6 @@ func (f *DeviceCodeFlow) AuthorizeDevice(userCode, userID string) bool {
 
 	log.Printf("✅ Device authorized: code=%s, user=%s", userCode, userID)
 	return true
-}
-
-// clientSupportsDeviceFlow checks if a client supports device flow
-func (f *DeviceCodeFlow) clientSupportsDeviceFlow(client interface{}) bool {
-	// You would implement this based on your client model
-	// For now, return true if client exists
-	return client != nil
 }
 
 // generateDeviceCode generates a unique device code

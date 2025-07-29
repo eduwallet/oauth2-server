@@ -36,6 +36,7 @@ type ClientRegistrationRequest struct {
 	ResponseTypes           []string `json:"response_types,omitempty"`
 	ClientName              string   `json:"client_name,omitempty"`
 	ClientURI               string   `json:"client_uri,omitempty"`
+	Audience                []string `json:"audience,omitempty"`
 	LogoURI                 string   `json:"logo_uri,omitempty"`
 	Scope                   string   `json:"scope,omitempty"`
 	Contacts                []string `json:"contacts,omitempty"`
@@ -56,6 +57,7 @@ type ClientRegistrationResponse struct {
 	ClientID                string    `json:"client_id"`
 	ClientSecret            string    `json:"client_secret,omitempty"`
 	ClientSecretExpiresAt   int64     `json:"client_secret_expires_at"`
+	Audience                []string  `json:"audience,omitempty"`
 	RegistrationAccessToken string    `json:"registration_access_token,omitempty"`
 	RegistrationClientURI   string    `json:"registration_client_uri,omitempty"`
 	RedirectURIs            []string  `json:"redirect_uris,omitempty"`

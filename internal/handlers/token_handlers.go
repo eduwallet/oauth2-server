@@ -452,6 +452,59 @@ func (h *TokenHandlers) HandleRefreshToken(w http.ResponseWriter, r *http.Reques
 	log.Printf("✅ Tokens refreshed for client: %s", clientID)
 }
 
+// HandleTokenStats handles token statistics requests
+func (h *TokenHandlers) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
+	log.Printf("📊 Processing token statistics request")
+
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract client credentials (if needed for auth)
+	clientID, clientSecret, err := auth.ExtractClientCredentials(r)
+	if err != nil {
+		utils.WriteErrorResponse(w, "invalid_client", "Client authentication required")
+		return
+	}
+
+	// Authenticate client (if needed)
+	_, err = auth.AuthenticateClient(clientID, clientSecret, h.clientStore)
+	if err != nil {
+		log.Printf("❌ Client authentication failed for %s: %v", clientID, err)
+		utils.WriteErrorResponse(w, "invalid_client", "Client authentication failed")
+		return
+	}
+
+	// Get token statistics (as a map)
+	stats := h.tokenStore.GetStats()
+
+	// Overall stats
+	tokens := stats["tokens"].(map[string]int)
+	active := tokens["active"]
+	expired := tokens["expired"]
+	revoked := tokens["revoked"]
+	total := tokens["total"]
+
+	// Per-type stats (optional)
+	byType := stats["by_type"].(map[string]map[string]int)
+
+	// Prepare response
+	response := map[string]interface{}{
+		"active_tokens":  active,
+		"expired_tokens": expired,
+		"revoked_tokens": revoked,
+		"total_tokens":   total,
+		"by_type":        byType,
+		"request_time":   time.Now().Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+
+	log.Printf("📊 Token statistics sent for client: %s", clientID)
+}
+
 // Helper functions
 
 // clientSupportsGrantType checks if a client supports a specific grant type

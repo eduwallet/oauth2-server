@@ -44,12 +44,6 @@ func (h *RegistrationHandlers) HandleRegistration(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Validate required fields
-	if len(req.RedirectURIs) == 0 {
-		utils.WriteInvalidRequestError(w, "At least one redirect URI is required")
-		return
-	}
-
 	// Generate client credentials
 	clientID, err := h.generateClientID()
 	if err != nil {
@@ -63,6 +57,20 @@ func (h *RegistrationHandlers) HandleRegistration(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Set default grant types if not provided
+	grantTypes := req.GrantTypes
+	if len(grantTypes) == 0 {
+		grantTypes = []string{"authorization_code"}
+	}
+
+	// Validate required fields
+	if len(req.RedirectURIs) == 0 {
+		if utils.Contains(grantTypes, "authorization_code") || utils.Contains(grantTypes, "implicit") {
+			utils.WriteInvalidRequestError(w, "At least one redirect URI is required")
+			return
+		}
+	}
+
 	// Convert scope string to slice
 	var scopes []string
 	if req.Scope != "" {
@@ -71,16 +79,15 @@ func (h *RegistrationHandlers) HandleRegistration(w http.ResponseWriter, r *http
 		scopes = []string{"openid", "profile", "email"}
 	}
 
-	// Set default grant types if not provided
-	grantTypes := req.GrantTypes
-	if len(grantTypes) == 0 {
-		grantTypes = []string{"authorization_code"}
-	}
-
 	// Set default response types if not provided
 	responseTypes := req.ResponseTypes
 	if len(responseTypes) == 0 {
-		responseTypes = []string{"code"}
+		if utils.Contains(grantTypes, "authorization_code") {
+			responseTypes = []string{"code"}
+		}
+		if utils.Contains(grantTypes, "implicit") {
+			responseTypes = append(responseTypes, "token")
+		}
 	}
 
 	// Set default token endpoint auth method
@@ -108,6 +115,7 @@ func (h *RegistrationHandlers) HandleRegistration(w http.ResponseWriter, r *http
 		ClientURI:     req.ClientURI,
 		LogoURI:       req.LogoURI,
 		ContactEmails: req.Contacts,
+		Audience:      req.Audience, // <-- Add this line
 	}
 
 	// Store the client
@@ -131,6 +139,7 @@ func (h *RegistrationHandlers) HandleRegistration(w http.ResponseWriter, r *http
 		ResponseTypes:           responseTypes,
 		Scope:                   strings.Join(scopes, " "),
 		Contacts:                req.Contacts,
+		Audience:                req.Audience, // <-- Add this line
 		TosURI:                  req.TosURI,
 		PolicyURI:               req.PolicyURI,
 		TokenEndpointAuthMethod: authMethod,

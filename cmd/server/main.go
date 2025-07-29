@@ -301,6 +301,9 @@ func setupRoutes() {
 			log.Printf("⚠️ Failed to create client handler")
 		}
 	}
+
+	// Use the existing tokenHandlers instance initialized in initializeFlows()
+	http.HandleFunc("/token/stats", proxyAwareMiddleware(tokenHandlers.HandleTokenStats))
 }
 
 // Helper wrapper functions for your existing handlers

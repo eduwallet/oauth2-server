@@ -109,7 +109,7 @@ clients:
   name: "Mobile Application"
   description: "Mobile application client"
   redirect_uris:
-  - "com.example.app://oauth/callback"
+  - "/oauth/callback"
   grant_types:
   - "authorization_code"
   - "refresh_token"

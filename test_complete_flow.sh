@@ -34,9 +34,11 @@ echo ""
 echo "4. Testing token endpoint with client credentials (Client2)..."
 
 # Test Client2 - Client Credentials Flow
+BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
 TOKEN_RESPONSE=$(curl -s -X POST http://localhost:8080/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=backend-client&client_secret=backend-client-secret&scope=api:read api:write offline_access")
+  -H "Authorization: Basic $BASIC_AUTH" \
+  -d "grant_type=client_credentials&scope=api:read api:write offline_access")
 
 echo "Token Response for Client2:"
 echo "$TOKEN_RESPONSE" | jq . 2>/dev/null || echo "$TOKEN_RESPONSE"
@@ -49,10 +51,12 @@ echo ""
 echo "5. Testing Token Refresh (Long-running Process Support)..."
 
 # Test Refresh Token Flow
+BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
 if [ "$REFRESH_TOKEN" != "null" ] && [ "$REFRESH_TOKEN" != "" ]; then
     REFRESH_RESPONSE=$(curl -s -X POST http://localhost:8080/token \
       -H "Content-Type: application/x-www-form-urlencoded" \
-      -d "grant_type=refresh_token&client_id=backend-client&client_secret=backend-client-secret&refresh_token=$REFRESH_TOKEN&scope=api:read")
+      -H "Authorization: Basic $BASIC_AUTH" \
+      -d "grant_type=refresh_token&refresh_token=$REFRESH_TOKEN&scope=api:read")
     
     echo "Token Refresh Response:"
     echo "$REFRESH_RESPONSE" | jq . 2>/dev/null || echo "$REFRESH_RESPONSE"
@@ -146,9 +150,11 @@ echo ""
 echo "7. Testing Token Exchange (RFC 8693)..."
 
 # Test Token Exchange with a sample token
+BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
 EXCHANGE_RESPONSE=$(curl -s -X POST http://localhost:8080/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&client_id=backend-client&client_secret=backend-client-secret&subject_token=$ACCESS_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:access_token&audience=api-service&scope=api:read")
+  -H "Authorization: Basic $BASIC_AUTH" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$ACCESS_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:access_token&audience=api-service&scope=api:read")
 
 echo "Token Exchange Response:"
 echo "$EXCHANGE_RESPONSE" | jq . 2>/dev/null || echo "$EXCHANGE_RESPONSE"
@@ -167,6 +173,56 @@ fi
 echo ""
 echo "9. Testing OpenID Configuration..."
 curl -s http://localhost:8080/.well-known/openid_configuration | jq . 2>/dev/null || curl -s http://localhost:8080/.well-known/openid_configuration
+
+echo ""
+echo "10. Testing Dynamic Client Registration..."
+
+# Register a new client with a relative redirect URI (should be normalized by the server)
+NEW_CLIENT_PAYLOAD='{  "client_id": "dynamic-client",
+  "client_secret": "dynamic-secret",
+  "redirect_uris": ["/dynamic/callback"],
+  "grant_types": ["authorization_code"],
+  "response_types": ["code"],
+  "scope": "openid profile email"
+}'
+
+REGISTER_RESPONSE=$(curl -s -X POST http://localhost:8080/register \
+  -H "Content-Type: application/json" \
+  -d "$NEW_CLIENT_PAYLOAD")
+
+echo "$REGISTER_RESPONSE"
+
+echo "Dynamic Client Registration Response:"
+echo "$REGISTER_RESPONSE" | jq . 2>/dev/null || echo "$REGISTER_RESPONSE"
+
+# Check if dynamic client registration succeeded
+if echo "$REGISTER_RESPONSE" | grep -q '"client_id":'; then
+    CLIENT_REGISTRATION_STATUS="✅ Dynamic client registration working"
+else
+    CLIENT_REGISTRATION_STATUS="❌ Dynamic client registration failed"
+fi
+
+# Optionally, test authorization flow for the new client
+DYNAMIC_AUTH_URL="http://localhost:8080/auth?client_id=dynamic-client&redirect_uri=http%3A//localhost%3A8080/dynamic/callback&response_type=code&scope=openid%20profile%20email&state=dynamic123"
+
+echo ""
+echo "Authorization URL for Dynamic Client: $DYNAMIC_AUTH_URL"
+echo "Manual Test Steps for Dynamic Client:"
+echo "1. Open: $DYNAMIC_AUTH_URL"
+echo "2. Login with: username=john.doe, password=password123"
+echo "3. You should get redirected with an authorization code"
+echo ""
+
+echo ""
+echo "11. Testing Token Statistics API..."
+
+# Use the backend-client credentials for the stats endpoint
+BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
+STATS_RESPONSE=$(curl -s -X GET http://localhost:8080/token/stats \
+  -H "Authorization: Basic $BASIC_AUTH")
+
+echo "Token Statistics Response:"
+echo "$STATS_RESPONSE" | jq . 2>/dev/null || echo "$STATS_RESPONSE"
 
 echo ""
 echo "=== Test Summary ==="
@@ -210,6 +266,7 @@ echo "2. Client Credentials Flow - $(if echo "$TOKEN_RESPONSE" | grep -q "access
 echo "3. Refresh Token Flow - $(if echo "$REFRESH_RESPONSE" | grep -q "access_token"; then echo "✅ WORKING"; else echo "❌ FAILED"; fi)"
 echo "4. Device Code Flow (RFC 8628) - $(if echo "$DEVICE_TOKEN_RESPONSE" | grep -q "access_token"; then echo "✅ WORKING"; else echo "❌ FAILED"; fi)"
 echo "5. Token Exchange (RFC 8693) - $(if echo "$EXCHANGE_RESPONSE" | grep -q "access_token"; then echo "✅ WORKING"; else echo "❌ FAILED"; fi)"
+echo "6. Dynamic Client Registration - $CLIENT_REGISTRATION_STATUS"
 echo ""
 echo "🚀 LONG-RUNNING PROCESS SUPPORT:"
 echo "✅ Initial token acquisition via client credentials"
