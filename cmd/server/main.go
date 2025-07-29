@@ -245,7 +245,7 @@ func setupDefaultClients() {
 func setupRoutes() {
 	// OAuth2 endpoints with proxy awareness
 	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(wellKnownHandler))
-	http.HandleFunc("/.well-known/openid_configuration", proxyAwareMiddleware(wellKnownHandler))
+	http.HandleFunc("/.well-known/openid-configuration", proxyAwareMiddleware(wellKnownHandler))
 	http.HandleFunc("/.well-known/jwks.json", proxyAwareMiddleware(jwksHandler))
 	http.HandleFunc("/auth", proxyAwareMiddleware(authHandler))
 	http.HandleFunc("/token", proxyAwareMiddleware(tokenHandler))
@@ -825,8 +825,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		
 		<div class="section">
 			<h3>🔗 Quick Test Links</h3>
-			<a href="/client1/auth" class="btn">Test Authorization Flow</a>
-			<a href="/device" class="btn">Test Device Flow</a>
+			<a href="/docs" class="btn">Operations...</a>
 			<a href="/.well-known/oauth-authorization-server" class="btn">Discovery Document</a>
 			<a href="/health" class="btn">Health Check</a>
 		</div>
@@ -835,12 +834,8 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 			<h3>📚 API Endpoints</h3>
 			<ul>
 				<li><span class="endpoint">GET /.well-known/oauth-authorization-server</span> - OAuth2 Discovery</li>
+				<li><span class="endpoint">GET /.well-known/openid-configuration</span> - OIDC Discovery</li>
 				<li><span class="endpoint">GET /.well-known/jwks.json</span> - JWKS</li>
-				<li><span class="endpoint">GET /auth</span> - Authorization Endpoint</li>
-				<li><span class="endpoint">POST /token</span> - Token Endpoint</li>
-				<li><span class="endpoint">GET /userinfo</span> - UserInfo Endpoint</li>
-				<li><span class="endpoint">POST /device_authorization</span> - Device Authorization</li>
-				<li><span class="endpoint">GET /device</span> - Device Verification</li>
 			</ul>
 		</div>
 	</div>

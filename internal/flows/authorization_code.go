@@ -1,6 +1,9 @@
 package flows
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+
 	"context"
 	"fmt"
 	"log"
@@ -28,12 +31,30 @@ func NewAuthorizationCodeFlow(oauth2Provider fosite.OAuth2Provider, config *conf
 	}
 }
 
+// generateRandomState returns a secure random string for use as state
+func generateRandomState() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "state1234" // fallback for testing only
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
 // HandleAuthorization handles the authorization endpoint
 func (f *AuthorizationCodeFlow) HandleAuthorization(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
 	log.Printf("🔄 Authorization request: %s %s", r.Method, r.URL.String())
 	log.Printf("🔍 Query parameters: %+v", r.URL.Query())
+
+	// If state is missing, generate one and redirect to the same URL with state set
+	if r.URL.Query().Get("state") == "" {
+		q := r.URL.Query()
+		q.Set("state", generateRandomState())
+		r.URL.RawQuery = q.Encode()
+		http.Redirect(w, r, r.URL.String(), http.StatusFound)
+		return
+	}
 
 	// Create a new authorization request object and catch any errors
 	ar, err := f.oauth2Provider.NewAuthorizeRequest(ctx, r)
@@ -110,53 +131,53 @@ func (f *AuthorizationCodeFlow) showLoginFormWithError(w http.ResponseWriter, r 
 	loginHTML := `<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OAuth2 Login</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 50px; background-color: #f5f5f5; }
-        .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="password"] { width: 100%%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
-        .btn { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%%; }
-        .btn:hover { background-color: #0056b3; }
-        .info { background-color: #e7f3ff; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
-        .error { background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 4px; margin-bottom: 20px; border: 1px solid #f5c6cb; }
-        .test-users { margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 4px; }
-        .test-users h4 { margin: 0 0 10px 0; color: #6c757d; }
-        .test-users ul { margin: 0; padding-left: 20px; }
-        .test-users li { margin-bottom: 5px; font-family: monospace; font-size: 12px; }
-    </style>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>OAuth2 Login</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 50px; background-color: #f5f5f5; }
+		.container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+		.form-group { margin-bottom: 20px; }
+		label { display: block; margin-bottom: 5px; font-weight: bold; }
+		input[type="text"], input[type="password"] { width: 100%%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+		.btn { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%%; }
+		.btn:hover { background-color: #0056b3; }
+		.info { background-color: #e7f3ff; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+		.error { background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 4px; margin-bottom: 20px; border: 1px solid #f5c6cb; }
+		.test-users { margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 4px; }
+		.test-users h4 { margin: 0 0 10px 0; color: #6c757d; }
+		.test-users ul { margin: 0; padding-left: 20px; }
+		.test-users li { margin-bottom: 5px; font-family: monospace; font-size: 12px; }
+	</style>
 </head>
 <body>
-    <div class="container">
-        <h2>🔐 OAuth2 Login</h2>
-        ` + errorHTML + `
-        <div class="info">
-            <strong>Client:</strong> ` + ar.GetClient().GetID() + `<br>
-            <strong>Scopes:</strong> ` + strings.Join(ar.GetRequestedScopes(), ", ") + `<br>
-            <strong>Redirect URI:</strong> ` + ar.GetRedirectURI().String() + `
-        </div>
-        
-        <form method="post" action="/auth` + query + `">
-            <input type="hidden" name="action" value="login">
-            <div class="form-group">
-                <label for="username">Username:</label>
-                <input type="text" id="username" name="username" required>
-            </div>
-            <div class="form-group">
-                <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required>
-            </div>
-            <button type="submit" class="btn">Login</button>
-        </form>
+	<div class="container">
+		<h2>🔐 OAuth2 Login</h2>
+		` + errorHTML + `
+		<div class="info">
+			<strong>Client:</strong> ` + ar.GetClient().GetID() + `<br>
+			<strong>Scopes:</strong> ` + strings.Join(ar.GetRequestedScopes(), ", ") + `<br>
+			<strong>Redirect URI:</strong> ` + ar.GetRedirectURI().String() + `
+		</div>
+		
+		<form method="post" action="/auth` + query + `">
+			<input type="hidden" name="action" value="login">
+			<div class="form-group">
+				<label for="username">Username:</label>
+				<input type="text" id="username" name="username" required>
+			</div>
+			<div class="form-group">
+				<label for="password">Password:</label>
+				<input type="password" id="password" name="password" required>
+			</div>
+			<button type="submit" class="btn">Login</button>
+		</form>
 
-        <div class="test-users">
-            <h4>Available Test Users:</h4>
-            <ul>` + f.generateTestUsersList() + `</ul>
-        </div>
-    </div>
+		<div class="test-users">
+			<h4>Available Test Users:</h4>
+			<ul>` + f.generateTestUsersList() + `</ul>
+		</div>
+	</div>
 </body>
 </html>`
 
@@ -222,45 +243,45 @@ func (f *AuthorizationCodeFlow) showConsentForm(w http.ResponseWriter, r *http.R
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OAuth2 Consent</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 50px; background-color: #f5f5f5; }
-        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .form-group { margin-bottom: 20px; }
-        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
-        .btn-primary { background-color: #28a745; color: white; }
-        .btn-secondary { background-color: #6c757d; color: white; }
-        .btn:hover { opacity: 0.8; }
-        .info { background-color: #e7f3ff; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
-        .scopes { background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
-        .scopes ul { margin: 0; padding-left: 20px; }
-        .scopes li { margin-bottom: 5px; }
-    </style>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>OAuth2 Consent</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 50px; background-color: #f5f5f5; }
+		.container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+		.form-group { margin-bottom: 20px; }
+		.btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+		.btn-primary { background-color: #28a745; color: white; }
+		.btn-secondary { background-color: #6c757d; color: white; }
+		.btn:hover { opacity: 0.8; }
+		.info { background-color: #e7f3ff; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+		.scopes { background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+		.scopes ul { margin: 0; padding-left: 20px; }
+		.scopes li { margin-bottom: 5px; }
+	</style>
 </head>
 <body>
-    <div class="container">
-        <h2>🛡️ Authorization Request</h2>
-        <div class="info">
-            <strong>Hello, %s!</strong><br><br>
-            The application <strong>%s</strong> is requesting access to your account.
-        </div>
-        
-        <div class="scopes">
-            <h4>Requested Permissions:</h4>
-            <ul>
-                %s
-            </ul>
-        </div>
-        
-        <form method="post" action="/auth%s">
-            <input type="hidden" name="action" value="consent">
-            <input type="hidden" name="user_id" value="%s">
-            <button type="submit" name="consent" value="allow" class="btn btn-primary">Allow</button>
-            <button type="submit" name="consent" value="deny" class="btn btn-secondary">Deny</button>
-        </form>
-    </div>
+	<div class="container">
+		<h2>🛡️ Authorization Request</h2>
+		<div class="info">
+			<strong>Hello, %s!</strong><br><br>
+			The application <strong>%s</strong> is requesting access to your account.
+		</div>
+		
+		<div class="scopes">
+			<h4>Requested Permissions:</h4>
+			<ul>
+				%s
+			</ul>
+		</div>
+		
+		<form method="post" action="/auth%s">
+			<input type="hidden" name="action" value="consent">
+			<input type="hidden" name="user_id" value="%s">
+			<button type="submit" name="consent" value="allow" class="btn btn-primary">Allow</button>
+			<button type="submit" name="consent" value="deny" class="btn btn-secondary">Deny</button>
+		</form>
+	</div>
 </body>
 </html>`,
 		userName,
@@ -348,35 +369,45 @@ func (f *AuthorizationCodeFlow) HandleCallback(w http.ResponseWriter, r *http.Re
 	state := r.URL.Query().Get("state")
 	errorParam := r.URL.Query().Get("error")
 
+	// For testing: warn if state is missing or too short
+	var stateWarning string
+	if state == "" {
+		stateWarning = `<div style="color:red;margin-bottom:10px;">⚠️ State parameter is missing! This is insecure and not recommended for production.</div>`
+	} else if len(state) < 8 {
+		stateWarning = `<div style="color:orange;margin-bottom:10px;">⚠️ State parameter is very short. Use a random, unguessable value for security.</div>`
+	}
+
 	if errorParam != "" {
 		errorDescription := r.URL.Query().Get("error_description")
 		content := fmt.Sprintf(`
-            <h2>❌ Authorization Error</h2>
-            <p><strong>Error:</strong> %s</p>
-            <p><strong>Description:</strong> %s</p>
-            <p><strong>State:</strong> %s</p>
-        `, errorParam, errorDescription, state)
+			<h2>❌ Authorization Error</h2>
+			<p><strong>Error:</strong> %s</p>
+			<p><strong>Description:</strong> %s</p>
+			<p><strong>State:</strong> %s</p>
+			%s
+		`, errorParam, errorDescription, state, stateWarning)
 		utils.WriteHTMLResponse(w, http.StatusBadRequest, content)
 		return
 	}
 
 	if code == "" {
 		content := `
-            <h2>❌ Missing Authorization Code</h2>
-            <p>No authorization code received in callback.</p>
-        `
+			<h2>❌ Missing Authorization Code</h2>
+			<p>No authorization code received in callback.</p>
+		`
 		utils.WriteHTMLResponse(w, http.StatusBadRequest, content)
 		return
 	}
 
 	// Display successful callback
 	content := fmt.Sprintf(`
-        <h2>✅ Authorization Successful</h2>
-        <p><strong>Authorization Code:</strong></p>
-        <div class="code">%s</div>
-        <p><strong>State:</strong> %s</p>
-        <p>You can now exchange this code for an access token at the token endpoint.</p>
-    `, code, state)
+		<h2>✅ Authorization Successful</h2>
+		%s
+		<p><strong>Authorization Code:</strong></p>
+		<div class="code">%s</div>
+		<p><strong>State:</strong> %s</p>
+		<p>You can now exchange this code for an access token at the token endpoint.</p>
+	`, stateWarning, code, state)
 	utils.WriteHTMLResponse(w, http.StatusOK, content)
 
 	log.Printf("✅ Authorization callback received: code=%s, state=%s", code, state)

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OAuth2 Server Operations</title>
+    <style>
+      body {
+        font-family: "Segoe UI", "Roboto", "Arial", sans-serif;
+        background: #f7f8fa;
+        margin: 0;
+        color: #222;
+      }
+      .container {
+        max-width: 900px;
+        margin: 40px auto 40px auto;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 4px 32px rgba(0, 0, 0, 0.08);
+        padding: 32px 32px 40px 32px;
+      }
+      .header {
+        border-bottom: 1px solid #e5e7eb;
+        margin-bottom: 24px;
+        padding-bottom: 12px;
+      }
+      .header h1 {
+        margin: 0 0 8px 0;
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #2d3748;
+      }
+      .header p {
+        margin: 0;
+        color: #4a5568;
+      }
+      .nav {
+        margin: 24px 0 24px 0;
+      }
+      .nav-links {
+        display: flex;
+        gap: 18px;
+      }
+      .nav-link {
+        color: #2563eb;
+        text-decoration: none;
+        font-weight: 500;
+        padding: 6px 14px;
+        border-radius: 6px;
+        transition: background 0.15s;
+      }
+      .nav-link:hover {
+        background: #e0e7ff;
+      }
+      .nav-link.active {
+        background: #2563eb;
+        color: #fff;
+      }
+      .nav-link.client-mgmt-btn {
+        background: #059669;
+        color: #fff;
+        margin-left: auto;
+      }
+      .tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 1.5px solid #e5e7eb;
+        margin-bottom: 24px;
+      }
+      .tab-btn {
+        background: none;
+        border: none;
+        font-size: 1.08rem;
+        font-weight: 500;
+        color: #2563eb;
+        padding: 12px 32px 10px 32px;
+        cursor: pointer;
+        border-bottom: 3px solid transparent;
+        transition: color 0.15s, border-bottom 0.15s;
+      }
+      .tab-btn.active {
+        color: #1a202c;
+        border-bottom: 3px solid #2563eb;
+        background: #f3f4f6;
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+      }
+      .section {
+        margin-top: 32px;
+      }
+      .section-header h2,
+      .section-header h3 {
+        margin: 0 0 10px 0;
+        font-size: 1.3rem;
+        color: #1a202c;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>OAuth2 Server Operations</h1>
+        <p>
+          Modern OAuth2 and OpenID Connect server with interactive API docs and
+          client dashboard.
+        </p>
+      </div>
+      <div class="tabs">
+        <button
+          class="tab-btn active"
+          id="tab-api-explorer"
+          onclick="showTab('api-explorer')"
+        >
+          API Explorer
+        </button>
+        <button
+          class="tab-btn"
+          id="tab-client-mgmt"
+          onclick="showTab('client-mgmt')"
+        >
+          Client Management
+        </button>
+      </div>
+      <div id="tab-content-api-explorer" class="tab-content active">
+        <div class="section-header"><h2>API Explorer</h2></div>
+        <div class="swagger-explorer">
+          <!-- Endpoints will be rendered here by Go template -->
+          {{.ApiExplorerHTML}}
+        </div>
+        <style>
+          .swagger-explorer .endpoint-card {
+            background: #f9fafb;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px #0001;
+            margin-bottom: 24px;
+            padding: 0;
+            overflow: hidden;
+            border: 1.5px solid #e5e7eb;
+          }
+          .swagger-explorer .endpoint-summary {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            padding: 18px 24px;
+            font-size: 1.08rem;
+            font-weight: 500;
+            background: #f3f4f6;
+            border-bottom: 1px solid #e5e7eb;
+            transition: background 0.15s;
+          }
+          .swagger-explorer .endpoint-summary:hover {
+            background: #e0e7ff;
+          }
+          .swagger-explorer .method {
+            font-family: monospace;
+            font-size: 0.98rem;
+            font-weight: 600;
+            border-radius: 4px;
+            padding: 2px 10px;
+            margin-right: 18px;
+            color: #fff;
+            background: #2563eb;
+            text-transform: uppercase;
+          }
+          .swagger-explorer .method.get {
+            background: #059669;
+          }
+          .swagger-explorer .method.post {
+            background: #2563eb;
+          }
+          .swagger-explorer .method.delete {
+            background: #dc2626;
+          }
+          .swagger-explorer .method.put {
+            background: #f59e42;
+          }
+          .swagger-explorer .endpoint-details {
+            display: none;
+            padding: 24px;
+            background: #fff;
+          }
+          .swagger-explorer .endpoint-card.open .endpoint-details {
+            display: block;
+          }
+          .swagger-explorer .endpoint-card.open .endpoint-summary {
+            background: #e0e7ff;
+          }
+          .swagger-explorer .try-btn {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 7px 18px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            margin-top: 10px;
+            margin-bottom: 10px;
+            transition: background 0.15s;
+          }
+          .swagger-explorer .try-btn:hover {
+            background: #1e40af;
+          }
+          .swagger-explorer .request-response {
+            margin-top: 18px;
+            background: #f3f4f6;
+            border-radius: 6px;
+            padding: 14px 18px;
+            font-size: 0.98rem;
+            color: #222;
+            font-family: "Fira Mono", "Consolas", monospace;
+            white-space: pre-wrap;
+          }
+        </style>
+        <script>
+          // Collapsible endpoint cards
+          document.addEventListener("DOMContentLoaded", function () {
+            document
+              .querySelectorAll(".swagger-explorer .endpoint-summary")
+              .forEach(function (summary) {
+                summary.addEventListener("click", function () {
+                  var card = summary.closest(".endpoint-card");
+                  if (card.classList.contains("open")) {
+                    card.classList.remove("open");
+                  } else {
+                    document
+                      .querySelectorAll(".swagger-explorer .endpoint-card")
+                      .forEach(function (c) {
+                        c.classList.remove("open");
+                      });
+                    card.classList.add("open");
+                  }
+                });
+              });
+          });
+        </script>
+      </div>
+      <div id="tab-content-client-mgmt" class="tab-content">
+        <div class="section-header"><h2>Client Management Dashboard</h2></div>
+        <div class="section-content">{{.ClientMgmtHTML}}</div>
+      </div>
+    </div>
+    <script>
+      function showTab(tab) {
+        document
+          .getElementById("tab-content-api-explorer")
+          .classList.remove("active");
+        document
+          .getElementById("tab-content-client-mgmt")
+          .classList.remove("active");
+        document.getElementById("tab-api-explorer").classList.remove("active");
+        document.getElementById("tab-client-mgmt").classList.remove("active");
+        if (tab === "api-explorer") {
+          document
+            .getElementById("tab-content-api-explorer")
+            .classList.add("active");
+          document.getElementById("tab-api-explorer").classList.add("active");
+        } else {
+          document
+            .getElementById("tab-content-client-mgmt")
+            .classList.add("active");
+          document.getElementById("tab-client-mgmt").classList.add("active");
+        }
+      }
+    </script>
+  </body>
+</html>

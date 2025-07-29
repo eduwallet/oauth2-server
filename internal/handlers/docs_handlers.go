@@ -3,13 +3,248 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
-
 	"oauth2-server/internal/store"
 	"oauth2-server/pkg/config"
+	"path/filepath"
 )
 
 // DocsHandler provides interactive API documentation
+// --- OAuth2 Flow Endpoint Generators for API Explorer ---
+
+// generateAuthorizationCodeEndpoints creates HTML for the Authorization Code flow
+func (h *DocsHandler) generateAuthorizationCodeEndpoints() string {
+	return `
+    <div class="endpoint-card">
+      <div class="endpoint-summary">
+        <span class="method get">GET</span>
+        <span style="margin-right:12px;">/auth</span>
+        <span>Authorization Code Flow</span>
+      </div>
+      <div class="endpoint-details">
+        <div style="margin-bottom:10px;">
+          <strong>Description:</strong> Start the authorization code flow (user login & consent).
+        </div>
+        <form class="swagger-form" onsubmit="event.preventDefault(); tryAuthCodeFlow(this);">
+          <div class="form-group">
+            <label>client_id</label>
+            <input name="client_id" value="frontend-app" required>
+          </div>
+          <div class="form-group">
+            <label>redirect_uri</label>
+            <input name="redirect_uri" value="http://localhost:8080/callback" required>
+          </div>
+          <div class="form-group">
+            <label>scope</label>
+            <input name="scope" value="openid profile email api:read">
+          </div>
+          <div class="form-group">
+            <label>response_type</label>
+            <input name="response_type" value="code">
+          </div>
+          <button type="submit" class="try-btn">Try it out</button>
+        </form>
+        <div class="request-response" id="authcode-response" style="display:none;"></div>
+      </div>
+    </div>
+    <script>
+    function tryAuthCodeFlow(form) {
+      // Build query string
+      var params = new URLSearchParams();
+      for (var i = 0; i < form.elements.length; i++) {
+        var el = form.elements[i];
+        if (el.name && el.value) params.append(el.name, el.value);
+      }
+      var url = '/auth?' + params.toString();
+      // Show curl
+      var curl = 'curl -X GET "' + window.location.origin + url + '"';
+      var respDiv = document.getElementById('authcode-response');
+      respDiv.style.display = 'block';
+      respDiv.textContent = 'Request: ' + curl + '\n\nRedirecting to: ' + url;
+      // Actually redirect for real auth flow
+      window.location.href = url;
+    }
+    </script>
+`
+}
+
+// generateClientCredentialsEndpoints creates HTML for the Client Credentials flow
+func (h *DocsHandler) generateClientCredentialsEndpoints() string {
+	return `
+    <div class="endpoint-card">
+      <div class="endpoint-summary">
+        <span class="method post">POST</span>
+        <span style="margin-right:12px;">/token</span>
+        <span>Client Credentials Flow</span>
+      </div>
+      <div class="endpoint-details">
+        <div style="margin-bottom:10px;">
+          <strong>Description:</strong> Obtain an access token using client credentials.
+        </div>
+        <form class="swagger-form" onsubmit="event.preventDefault(); tryClientCredsFlow(this);">
+          <div class="form-group">
+            <label>client_id</label>
+            <input name="client_id" value="backend-client" required>
+          </div>
+          <div class="form-group">
+            <label>client_secret</label>
+            <input name="client_secret" value="backend-client-secret" required>
+          </div>
+          <div class="form-group">
+            <label>grant_type</label>
+            <input name="grant_type" value="client_credentials">
+          </div>
+          <div class="form-group">
+            <label>scope</label>
+            <input name="scope" value="api:read api:write">
+          </div>
+          <button type="submit" class="try-btn">Try it out</button>
+        </form>
+        <div class="request-response" id="clientcreds-response" style="display:none;"></div>
+      </div>
+    </div>
+    <script>
+    function tryClientCredsFlow(form) {
+      var params = new URLSearchParams();
+      for (var i = 0; i < form.elements.length; i++) {
+        var el = form.elements[i];
+        if (el.name && el.value) params.append(el.name, el.value);
+      }
+      var url = '/token';
+      var curl = 'curl -X POST "' + window.location.origin + url + '" -d "' + params.toString().replace(/&/g, '" -d "') + '"';
+      var respDiv = document.getElementById('clientcreds-response');
+      respDiv.style.display = 'block';
+      respDiv.textContent = 'Request: ' + curl + '\n\n';
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params })
+        .then(r => r.text())
+        .then(txt => { respDiv.textContent += 'Response:\n' + txt; })
+        .catch(e => { respDiv.textContent += 'Error: ' + e; });
+    }
+    </script>
+    `
+}
+
+// generateRefreshTokenEndpoints creates HTML for the Refresh Token flow
+func (h *DocsHandler) generateRefreshTokenEndpoints() string {
+	return `
+    <div class="endpoint-card">
+      <div class="endpoint-summary">
+        <span class="method post">POST</span>
+        <span style="margin-right:12px;">/token</span>
+        <span>Refresh Token Flow</span>
+      </div>
+      <div class="endpoint-details">
+        <div style="margin-bottom:10px;">
+          <strong>Description:</strong> Exchange a refresh token for a new access token.
+        </div>
+        <form class="swagger-form" onsubmit="event.preventDefault(); tryRefreshTokenFlow(this);">
+          <div class="form-group">
+            <label>client_id</label>
+            <input name="client_id" value="frontend-app" required>
+          </div>
+          <div class="form-group">
+            <label>client_secret</label>
+            <input name="client_secret" value="frontend-client-secret" required>
+          </div>
+          <div class="form-group">
+            <label>grant_type</label>
+            <input name="grant_type" value="refresh_token">
+          </div>
+          <div class="form-group">
+            <label>refresh_token</label>
+            <input name="refresh_token" value="">
+          </div>
+          <button type="submit" class="try-btn">Try it out</button>
+        </form>
+        <div class="request-response" id="refresh-response" style="display:none;"></div>
+      </div>
+    </div>
+    <script>
+    function tryRefreshTokenFlow(form) {
+      var params = new URLSearchParams();
+      for (var i = 0; i < form.elements.length; i++) {
+        var el = form.elements[i];
+        if (el.name && el.value) params.append(el.name, el.value);
+      }
+      var url = '/token';
+      var curl = 'curl -X POST "' + window.location.origin + url + '" -d "' + params.toString().replace(/&/g, '" -d "') + '"';
+      var respDiv = document.getElementById('refresh-response');
+      respDiv.style.display = 'block';
+      respDiv.textContent = 'Request: ' + curl + '\n\n';
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params })
+        .then(r => r.text())
+        .then(txt => { respDiv.textContent += 'Response:\n' + txt; })
+        .catch(e => { respDiv.textContent += 'Error: ' + e; });
+    }
+    </script>
+    `
+}
+
+// generateTokenExchangeEndpoints creates HTML for the Token Exchange flow
+func (h *DocsHandler) generateTokenExchangeEndpoints() string {
+	return `
+    <div class="endpoint-card">
+      <div class="endpoint-summary">
+        <span class="method post">POST</span>
+        <span style="margin-right:12px;">/token</span>
+        <span>Token Exchange Flow</span>
+      </div>
+      <div class="endpoint-details">
+        <div style="margin-bottom:10px;">
+          <strong>Description:</strong> Exchange a subject token for a new token (RFC 8693).
+        </div>
+        <form class="swagger-form" onsubmit="event.preventDefault(); tryTokenExchangeFlow(this);">
+          <div class="form-group">
+            <label>client_id</label>
+            <input name="client_id" value="backend-client" required>
+          </div>
+          <div class="form-group">
+            <label>client_secret</label>
+            <input name="client_secret" value="backend-client-secret" required>
+          </div>
+          <div class="form-group">
+            <label>grant_type</label>
+            <input name="grant_type" value="urn:ietf:params:oauth:grant-type:token-exchange">
+          </div>
+          <div class="form-group">
+            <label>subject_token</label>
+            <input name="subject_token" value="">
+          </div>
+          <div class="form-group">
+            <label>subject_token_type</label>
+            <input name="subject_token_type" value="urn:ietf:params:oauth:token-type:access_token">
+          </div>
+          <div class="form-group">
+            <label>audience</label>
+            <input name="audience" value="downstream-service">
+          </div>
+          <button type="submit" class="try-btn">Try it out</button>
+        </form>
+        <div class="request-response" id="tokenexchange-response" style="display:none;"></div>
+      </div>
+    </div>
+    <script>
+    function tryTokenExchangeFlow(form) {
+      var params = new URLSearchParams();
+      for (var i = 0; i < form.elements.length; i++) {
+        var el = form.elements[i];
+        if (el.name && el.value) params.append(el.name, el.value);
+      }
+      var url = '/token';
+      var curl = 'curl -X POST "' + window.location.origin + url + '" -d "' + params.toString().replace(/&/g, '" -d "') + '"';
+      var respDiv = document.getElementById('tokenexchange-response');
+      respDiv.style.display = 'block';
+      respDiv.textContent = 'Request: ' + curl + '\n\n';
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params })
+        .then(r => r.text())
+        .then(txt => { respDiv.textContent += 'Response:\n' + txt; })
+        .catch(e => { respDiv.textContent += 'Error: ' + e; });
+    }
+    </script>
+    `
+}
+
 type DocsHandler struct {
 	config      *config.Config
 	clientStore *store.ClientStore
@@ -55,474 +290,105 @@ func (h *DocsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// serveDocs serves the interactive documentation UI
+// generateAllApiExplorerSections combines all API explorer flows into one HTML string
+func (h *DocsHandler) generateAllApiExplorerSections() string {
+	// Combine all major OAuth2 flows for the API Explorer
+	return h.generateAuthorizationCodeEndpoints() +
+		h.generateClientCredentialsEndpoints() +
+		h.generateRefreshTokenEndpoints() +
+		h.generateTokenExchangeEndpoints() +
+		h.generateDeviceFlowEndpoints()
+}
+
+// serveDocs serves the interactive documentation UI using a template
 func (h *DocsHandler) serveDocs(w http.ResponseWriter, r *http.Request) {
-	html := fmt.Sprintf(`<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OAuth2 Server API Documentation</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', 'Roboto', 'Arial', sans-serif;
-            background: #f7f8fa;
-            margin: 0;
-            color: #222;
-        }
-        .container {
-            max-width: 900px;
-            margin: 40px auto 40px auto;
-            background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 4px 32px rgba(0,0,0,0.08);
-            padding: 32px 32px 40px 32px;
-        }
-        .header {
-            border-bottom: 1px solid #e5e7eb;
-            margin-bottom: 24px;
-            padding-bottom: 12px;
-        }
-        .header h1 {
-            margin: 0 0 8px 0;
-            font-size: 2.2rem;
-            font-weight: 700;
-            color: #2d3748;
-        }
-        .header p {
-            margin: 0;
-            color: #4a5568;
-        }
-        .nav {
-            margin: 24px 0 24px 0;
-        }
-        .nav-links {
-            display: flex;
-            gap: 18px;
-        }
-        .nav-link {
-            color: #2563eb;
-            text-decoration: none;
-            font-weight: 500;
-            padding: 6px 14px;
-            border-radius: 6px;
-            transition: background 0.15s;
-        }
-        .nav-link:hover {
-            background: #e0e7ff;
-        }
-        .section {
-            margin-top: 32px;
-        }
-        .section-header h2, .section-header h3 {
-            margin: 0 0 10px 0;
-            font-size: 1.3rem;
-            color: #1a202c;
-            font-weight: 600;
-        }
-        .section-content {
-            margin-left: 8px;
-        }
-        .endpoint {
-            background: #f8fafc;
-            border-radius: 8px;
-            margin-bottom: 22px;
-            padding: 0;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.03);
-            border-left: 6px solid #2563eb;
-            overflow: hidden;
-        }
-        .endpoint .endpoint-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 1.08rem;
-            background: #e0e7ff;
-            padding: 12px 20px 10px 20px;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        .endpoint .method {
-            font-size: 0.98rem;
-            font-weight: 700;
-            padding: 2px 14px;
-            border-radius: 5px;
-            color: #fff;
-            margin-right: 10px;
-            font-family: 'Fira Mono', 'Menlo', 'Consolas', monospace;
-            letter-spacing: 0.5px;
-        }
-        .endpoint .method.get { background: #2563eb; }
-        .endpoint .method.post { background: #059669; }
-        .endpoint .method.delete { background: #dc2626; }
-        .endpoint .method.put { background: #f59e42; }
-        .endpoint .path {
-            font-family: 'Fira Mono', 'Menlo', 'Consolas', monospace;
-            font-size: 1.08rem;
-            color: #22223b;
-            background: #f3f4f6;
-            padding: 2px 10px;
-            border-radius: 4px;
-            margin-right: 10px;
-        }
-        .endpoint .summary {
-            font-weight: 500;
-            color: #374151;
-            font-size: 1.01rem;
-        }
-        .endpoint-details {
-            padding: 18px 22px 12px 22px;
-        }
-        .endpoint-details p {
-            margin: 0 0 10px 0;
-            color: #374151;
-            font-size: 0.98rem;
-        }
-        .test-form {
-            margin-top: 8px;
-        }
-        .form-group {
-            margin-bottom: 10px;
-        }
-        .form-group label {
-            display: block;
-            font-size: 0.98rem;
-            color: #374151;
-            margin-bottom: 2px;
-        }
-        .form-group input, .form-group select, .form-group textarea {
-            width: 100%;
-            padding: 7px 10px;
-            border: 1px solid #cbd5e1;
-            border-radius: 5px;
-            font-size: 1rem;
-            background: #fff;
-            margin-bottom: 2px;
-        }
-        .form-group textarea {
-            min-height: 38px;
-            resize: vertical;
-        }
-        .btn {
-            background: #2563eb;
-            color: #fff;
-            border: none;
-            border-radius: 5px;
-            padding: 7px 18px;
-            font-size: 1rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        .btn:hover {
-            background: #1d4ed8;
-        }
-        .btn-test {
-            background: #059669;
-        }
-        .btn-test:hover {
-            background: #047857;
-        }
-        .client-table {
-            border-collapse: collapse;
-            width: 100%;
-            margin-top: 10px;
-        }
-        .client-table th, .client-table td {
-            border-bottom: 1px solid #e5e7eb;
-            padding: 8px 10px;
-            text-align: left;
-        }
-        .client-table th {
-            background: #f3f4f6;
-            font-weight: 600;
-        }
-        .client-table tr:hover {
-            background: #e0e7ff;
-        }
-        .card {
-            background: #f9fafb;
-            border-radius: 8px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-            padding: 18px 20px;
-            margin-bottom: 12px;
-        }
-        #edit-client-modal {
-            display: none;
-            align-items: center;
-            justify-content: center;
-        }
-        #edit-client-modal[style*="display:flex"] {
-            display: flex !important;
-        }
-        @media (max-width: 600px) {
-            .container {
-                padding: 10px 2vw 20px 2vw;
-            }
-            .header h1 {
-                font-size: 1.3rem;
-            }
-            .section-header h2, .section-header h3 {
-                font-size: 1.05rem;
-            }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>OAuth2 Server API Documentation</h1>
-            <p>Modern OAuth2 and OpenID Connect server with interactive API docs and client dashboard.</p>
-        </div>
-        <div class="nav">
-            <div class="nav-links">
-                <a href="%s/docs" class="nav-link">API Docs</a>
-                <a href="%s/health" class="nav-link">Health</a>
-                <a href="%s/.well-known/oauth-authorization-server" class="nav-link">Discovery</a>
-            </div>
-        </div>
-        <div class="section">
-            <div class="section-header"><h2>Authorization & User Info</h2></div>
-            <div class="section-content">
-                %s
-            </div>
-        </div>
-        <div class="section">
-            <div class="section-header"><h2>Token Endpoints</h2></div>
-            <div class="section-content">
-                %s
-            </div>
-        </div>
-        <div class="section">
-            <div class="section-header"><h2>Device Flow</h2></div>
-            <div class="section-content">
-                %s
-            </div>
-        </div>
-        %s
-    </div>
-</body>
-</html>`,
-		h.config.BaseURL,
-		h.config.BaseURL,
-		h.config.BaseURL,
-		h.generateAuthEndpoints(),
-		h.generateTokenEndpoints(),
-		h.generateDeviceFlowEndpoints(),
-		h.generateClientMgmtEndpoints(),
+	tmpl, err := template.ParseFiles(
+		filepath.Join("templates", "docs.html"),
+		filepath.Join("templates", "api_explorer.html"),
+		filepath.Join("templates", "client_mgmt.html"),
+		filepath.Join("templates", "device_flow.html"),
 	)
-
-	fmt.Printf("[DocsHandler] serveDocs HTML preview: %s\n", html[:200])
+	if err != nil {
+		http.Error(w, "Template parsing error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := struct {
+		BaseURL         string
+		ApiExplorerHTML template.HTML
+		ClientMgmtHTML  template.HTML
+		DeviceFlowHTML  template.HTML
+	}{
+		BaseURL:         h.config.BaseURL,
+		ApiExplorerHTML: template.HTML(h.generateAllApiExplorerSections()),
+		ClientMgmtHTML:  template.HTML(h.generateClientMgmtEndpoints()),
+		DeviceFlowHTML:  template.HTML(h.generateDeviceFlowEndpoints()),
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
-}
-
-// generateAuthEndpoints creates HTML for authentication endpoints
-func (h *DocsHandler) generateAuthEndpoints() string {
-	return `
-        <div class="endpoint">
-            <div class="endpoint-header">
-                <span class="method get">GET</span>
-                <span class="path">/auth</span>
-                <span class="summary">Authorization Endpoint</span>
-            </div>
-            <div class="endpoint-details">
-                <p><strong>Description:</strong> Initiates the OAuth2 authorization code flow.</p>
-                <div class="test-form">
-                    <form onsubmit="event.preventDefault(); testEndpoint(this, '/auth', 'GET');">
-                        <div class="form-group">
-                            <label>Response Type:</label>
-                            <select name="response_type">
-                                <option value="code">code</option>
-                                <option value="token">token</option>
-                                <option value="id_token">id_token</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Client ID:</label>
-                            <input name="client_id" value="frontend-app" placeholder="frontend-app">
-                        </div>
-                        <div class="form-group">
-                            <label>Redirect URI:</label>
-                            <input name="redirect_uri" value="` + h.config.BaseURL + `/client1/callback">
-                        </div>
-                        <div class="form-group">
-                            <label>Scope:</label>
-                            <input name="scope" value="openid profile email api:read">
-                        </div>
-                        <div class="form-group">
-                            <label>State:</label>
-                            <input name="state" value="xyz123">
-                        </div>
-                        <button type="submit" class="btn btn-test">Test Authorization</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-
-        <div class="endpoint">
-            <div class="endpoint-header">
-                <span class="method get">GET</span>
-                <span class="path">/userinfo</span>
-                <span class="summary">User Info Endpoint</span>
-            </div>
-            <div class="endpoint-details">
-                <p><strong>Description:</strong> Returns user information for the authenticated user.</p>
-                <div class="test-form">
-                    <form onsubmit="event.preventDefault(); testEndpoint(this, '/userinfo', 'GET');">
-                        <div class="form-group">
-                            <label>Authorization Header:</label>
-                            <input name="authorization" placeholder="Bearer YOUR_ACCESS_TOKEN">
-                        </div>
-                        <button type="submit" class="btn btn-test">Test UserInfo</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    `
-}
-
-// generateTokenEndpoints creates HTML for token endpoints
-func (h *DocsHandler) generateTokenEndpoints() string {
-	return `
-        <div class="endpoint">
-            <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span>/token</span>
-                <span>Token Endpoint</span>
-            </div>
-            <div class="endpoint-details">
-                <p>Exchange authorization code for access token or handle other token grant types.</p>
-                <div class="test-form">
-                    <form onsubmit="event.preventDefault(); testEndpoint(this, '/token', 'POST');">
-                        <div class="form-group">
-                            <label>Grant Type:</label>
-                            <select name="grant_type">
-                                <option value="authorization_code">authorization_code</option>
-                                <option value="client_credentials">client_credentials</option>
-                                <option value="refresh_token">refresh_token</option>
-                                <option value="urn:ietf:params:oauth:grant-type:device_code">device_code</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Client ID:</label>
-                            <input name="client_id" value="frontend-app">
-                        </div>
-                        <div class="form-group">
-                            <label>Client Secret:</label>
-                            <input name="client_secret" value="frontend-secret">
-                        </div>
-                        <div class="form-group">
-                            <label>Code (for authorization_code):</label>
-                            <input name="code" placeholder="Authorization code from /auth">
-                        </div>
-                        <div class="form-group">
-                            <label>Redirect URI (for authorization_code):</label>
-                            <input name="redirect_uri" value="` + h.config.BaseURL + `/client1/callback">
-                        </div>
-                        <button type="submit" class="btn btn-test">Test Token Request</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-
-        <div class="endpoint">
-            <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span>/introspect</span>
-                <span>Token Introspection</span>
-            </div>
-            <div class="endpoint-details">
-                <p>Get information about an access token.</p>
-                <div class="test-form">
-                    <form onsubmit="event.preventDefault(); testEndpoint(this, '/introspect', 'POST');">
-                        <div class="form-group">
-                            <label>Token:</label>
-                            <input name="token" placeholder="Access token to introspect">
-                        </div>
-                        <div class="form-group">
-                            <label>Client ID:</label>
-                            <input name="client_id" value="frontend-app">
-                        </div>
-                        <div class="form-group">
-                            <label>Client Secret:</label>
-                            <input name="client_secret" value="frontend-secret">
-                        </div>
-                        <button type="submit" class="btn btn-test">Test Introspection</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-
-        <div class="endpoint">
-            <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span>/revoke</span>
-                <span>Token Revocation</span>
-            </div>
-            <div class="endpoint-details">
-                <p>Revoke an access or refresh token.</p>
-                <div class="test-form">
-                    <form onsubmit="event.preventDefault(); testEndpoint(this, '/revoke', 'POST');">
-                        <div class="form-group">
-                            <label>Token:</label>
-                            <input name="token" placeholder="Token to revoke">
-                        </div>
-                        <div class="form-group">
-                            <label>Client ID:</label>
-                            <input name="client_id" value="frontend-app">
-                        </div>
-                        <div class="form-group">
-                            <label>Client Secret:</label>
-                            <input name="client_secret" value="frontend-secret">
-                        </div>
-                        <button type="submit" class="btn btn-test">Test Revocation</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    `
+	if err := tmpl.ExecuteTemplate(w, "docs.html", data); err != nil {
+		http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // generateDeviceFlowEndpoints creates HTML for device flow endpoints
 func (h *DocsHandler) generateDeviceFlowEndpoints() string {
 	return `
-        <div class="endpoint">
-            <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span>/device_authorization</span>
-                <span>Device Authorization</span>
-            </div>
-            <div class="endpoint-details">
-                <p>Start the device authorization flow.</p>
-                <div class="test-form">
-                    <form onsubmit="event.preventDefault(); testEndpoint(this, '/device_authorization', 'POST');">
-                        <div class="form-group">
-                            <label>Client ID:</label>
-                            <input name="client_id" value="frontend-app">
-                        </div>
-                        <div class="form-group">
-                            <label>Scope:</label>
-                            <input name="scope" value="api:read api:write">
-                        </div>
-                        <button type="submit" class="btn btn-test">Test Device Authorization</button>
-                    </form>
-                </div>
-            </div>
+    <div class="endpoint-card">
+      <div class="endpoint-summary">
+        <span class="method post">POST</span>
+        <span style="margin-right:12px;">/device_authorization</span>
+        <span>Device Authorization</span>
+      </div>
+      <div class="endpoint-details">
+        <div style="margin-bottom:10px;">
+          <strong>Description:</strong> Start the device authorization flow.
         </div>
-
-        <div class="endpoint">
-            <div class="endpoint-header">
-                <span class="method get">GET</span>
-                <span>/device</span>
-                <span>Device Verification</span>
-            </div>
-            <div class="endpoint-details">
-                <p>Device verification page for users to enter their code.</p>
-                <div class="test-form">
-                    <a href="/device" class="btn">Open Device Verification</a>
-                </div>
-            </div>
+        <form class="swagger-form" onsubmit="event.preventDefault(); tryDeviceAuthFlow(this);">
+          <div class="form-group">
+            <label>client_id</label>
+            <input name="client_id" value="frontend-app" required>
+          </div>
+          <div class="form-group">
+            <label>scope</label>
+            <input name="scope" value="api:read api:write">
+          </div>
+          <button type="submit" class="try-btn">Try it out</button>
+        </form>
+        <div class="request-response" id="deviceauth-response" style="display:none;"></div>
+      </div>
+    </div>
+    <div class="endpoint-card">
+      <div class="endpoint-summary">
+        <span class="method get">GET</span>
+        <span style="margin-right:12px;">/device</span>
+        <span>Device Verification</span>
+      </div>
+      <div class="endpoint-details">
+        <div style="margin-bottom:10px;">
+          <strong>Description:</strong> Device verification page for users to enter their code.
         </div>
+        <div class="test-form">
+          <a href="/device" class="btn">Open Device Verification</a>
+        </div>
+      </div>
+    </div>
+    <script>
+    function tryDeviceAuthFlow(form) {
+      var params = new URLSearchParams();
+      for (var i = 0; i < form.elements.length; i++) {
+        var el = form.elements[i];
+        if (el.name && el.value) params.append(el.name, el.value);
+      }
+      var url = '/device_authorization';
+      var curl = 'curl -X POST "' + window.location.origin + url + '" -d "' + params.toString().replace(/&/g, '" -d "') + '"';
+      var respDiv = document.getElementById('deviceauth-response');
+      respDiv.style.display = 'block';
+      respDiv.textContent = 'Request: ' + curl + '\n\n';
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params })
+        .then(r => r.text())
+        .then(txt => { respDiv.textContent += 'Response:\n' + txt; })
+        .catch(e => { respDiv.textContent += 'Error: ' + e; });
+    }
+    </script>
     `
 }
 
@@ -533,11 +399,7 @@ func (h *DocsHandler) generateClientMgmtEndpoints() string {
             <h3>📋 Client Management Dashboard</h3>
         </div>
         <div class="section-content">
-            <div style="margin-bottom: 20px;">
-                <button onclick="loadClientDashboard()" class="btn btn-test">Load Clients Dashboard</button>
-                <button onclick="refreshClientTable()" class="btn" style="margin-left: 10px;">Refresh</button>
-            </div>
-            <div id="client-dashboard" style="display: none;">
+            <div id="client-dashboard">
                 <div id="client-table-container"></div>
                 <div id="client-detail" style="margin-top:30px;"></div>
             </div>
@@ -593,12 +455,57 @@ func (h *DocsHandler) generateClientMgmtEndpoints() string {
     </div>
 
     <script>
-    function loadClientDashboard() {
-        document.getElementById('client-dashboard').style.display = 'block';
-        refreshClientTable();
-    }
+    // Load clients immediately on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadAndRenderClients();
+        var form = document.getElementById('edit-client-form');
+        if (form) {
+            form.onsubmit = function(e) {
+                e.preventDefault();
+                var clientId = document.getElementById('edit-client-id').value;
+                var name = document.getElementById('edit-client-name').value;
+                var description = document.getElementById('edit-client-description').value;
+                var redirect_uris = document.getElementById('edit-client-redirect-uris').value.split(',').map(s => s.trim()).filter(Boolean);
+                var grant_types = document.getElementById('edit-client-grant-types').value.split(',').map(s => s.trim()).filter(Boolean);
+                var response_types = document.getElementById('edit-client-response-types').value.split(',').map(s => s.trim()).filter(Boolean);
+                var scopes = document.getElementById('edit-client-scopes').value.split(',').map(s => s.trim()).filter(Boolean);
+                var isPublic = document.getElementById('edit-client-public').checked;
+                var authMethod = document.getElementById('edit-client-auth-method').value;
+                var payload = {
+                    name: name,
+                    description: description,
+                    redirect_uris: redirect_uris,
+                    grant_types: grant_types,
+                    response_types: response_types,
+                    scopes: scopes,
+                    public: isPublic,
+                    token_endpoint_auth_method: authMethod
+                };
+                fetch('/api/clients/' + encodeURIComponent(clientId), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(response => {
+                    if (response.ok) {
+                        document.getElementById('edit-client-modal-msg').innerHTML = '<span style="color:green;">Client updated successfully.</span>';
+                        setTimeout(() => {
+                            closeEditClientModal();
+                            loadAndRenderClients();
+                            showClientDetail(clientId);
+                        }, 800);
+                    } else {
+                        return response.text().then(text => { throw new Error(text); });
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('edit-client-modal-msg').innerHTML = '<span style="color:red;">Error: ' + error.message + '</span>';
+                });
+            };
+        }
+    });
 
-    function refreshClientTable() {
+    function loadAndRenderClients() {
         const container = document.getElementById('client-table-container');
         container.innerHTML = '<p>Loading clients...</p>';
         fetch('/api/clients')
@@ -663,11 +570,9 @@ func (h *DocsHandler) generateClientMgmtEndpoints() string {
                 html += '<div style="margin-top: 15px;">' +
                     '<button onclick="editClient(\'' + client.id + '\')" class="btn" style="margin-right: 10px;">' +
                         '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="vertical-align:middle;margin-right:4px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.862 3.487a2.25 2.25 0 1 1 3.182 3.182L7.5 19.213l-4 1 1-4 12.362-12.726z"/></svg>' +
-                        'Edit' +
                     '</button>' +
                     '<button onclick="deleteClientFromTable(\'' + client.id + '\')" class="btn" style="background: #dc3545;">' +
                         '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="vertical-align:middle;margin-right:4px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 7h12M9 7V5a3 3 0 0 1 6 0v2m2 0v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7h12z"/></svg>' +
-                        'Delete' +
                     '</button>' +
                     '</div>';
                 html += '</div>';
@@ -703,54 +608,6 @@ func (h *DocsHandler) generateClientMgmtEndpoints() string {
       document.getElementById('edit-client-modal').style.display = 'none';
     }
 
-    document.addEventListener('DOMContentLoaded', function() {
-      var form = document.getElementById('edit-client-form');
-      if (form) {
-        form.onsubmit = function(e) {
-          e.preventDefault();
-          var clientId = document.getElementById('edit-client-id').value;
-          var name = document.getElementById('edit-client-name').value;
-          var description = document.getElementById('edit-client-description').value;
-          var redirect_uris = document.getElementById('edit-client-redirect-uris').value.split(',').map(s => s.trim()).filter(Boolean);
-          var grant_types = document.getElementById('edit-client-grant-types').value.split(',').map(s => s.trim()).filter(Boolean);
-          var response_types = document.getElementById('edit-client-response-types').value.split(',').map(s => s.trim()).filter(Boolean);
-          var scopes = document.getElementById('edit-client-scopes').value.split(',').map(s => s.trim()).filter(Boolean);
-          var isPublic = document.getElementById('edit-client-public').checked;
-          var authMethod = document.getElementById('edit-client-auth-method').value;
-          var payload = {
-            name: name,
-            description: description,
-            redirect_uris: redirect_uris,
-            grant_types: grant_types,
-            response_types: response_types,
-            scopes: scopes,
-            public: isPublic,
-            token_endpoint_auth_method: authMethod
-          };
-          fetch('/api/clients/' + encodeURIComponent(clientId), {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          })
-          .then(response => {
-            if (response.ok) {
-              document.getElementById('edit-client-modal-msg').innerHTML = '<span style="color:green;">Client updated successfully.</span>';
-              setTimeout(() => {
-                closeEditClientModal();
-                if (typeof refreshClientTable === 'function') refreshClientTable();
-                if (typeof showClientDetail === 'function') showClientDetail(clientId);
-              }, 800);
-            } else {
-              return response.text().then(text => { throw new Error(text); });
-            }
-          })
-          .catch(error => {
-            document.getElementById('edit-client-modal-msg').innerHTML = '<span style="color:red;">Error: ' + error.message + '</span>';
-          });
-        };
-      }
-    });
-
     function deleteClientFromTable(clientId) {
         if (confirm('Are you sure you want to delete client "' + clientId + '"? This action cannot be undone.')) {
             fetch('/api/clients/' + encodeURIComponent(clientId), {
@@ -759,8 +616,9 @@ func (h *DocsHandler) generateClientMgmtEndpoints() string {
             .then(response => {
                 if (response.status === 204) {
                     alert('Client deleted successfully');
-                    refreshClientTable();
+                    // Always clear details and refresh list
                     document.getElementById('client-detail').innerHTML = '';
+                    loadAndRenderClients();
                 } else {
                     throw new Error('Failed to delete client');
                 }
@@ -823,7 +681,7 @@ func (h *DocsHandler) serveOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 						{
 							"name":        "state",
 							"in":          "query",
-							"required":    false,
+							"required":    true,
 							"description": "State parameter",
 							"schema":      map[string]string{"type": "string"},
 						},
