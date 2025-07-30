@@ -1,6 +1,6 @@
 # OAuth2 Server
 
-This project implements a comprehensive OAuth2/OIDC server that supports various authorization flows, including client credentials, authorization code, device code, and token exchange. It is designed to allow clients to authenticate and obtain access tokens securely using the fosite framework.
+A feature-rich OAuth2 and OpenID Connect server supporting multiple flows, dynamic client registration, token exchange, audience management, and introspection.
 
 ## Key Features
 
@@ -18,20 +18,28 @@ Enable secure service-to-service token delegation:
 - Backend service exchanges frontend token for backend-specific token
 - Maintains security boundaries between services
 - Supports audience-specific tokens
+- **Supports `requested_token_type`**: You can request a `refresh_token` or `access_token` as the result of a token exchange.
 
 ### 🔧 Dynamic Client Registration (RFC 7591)
 Programmatic client registration at runtime:
 - REST API for client management
+- Specify `audience` during registration
 - Web interface for testing and administration
 - Support for various client types and configurations
 - Real-time client updates without server restart
 
 ### ♻️ Refresh Tokens
 For long-running applications:
-- Configurable token lifespans
+- Configurable token lifespans per token type
 - Automatic token renewal
 - Secure token rotation
 - Support for offline access scenarios
+
+### 🎯 Audience Support
+- Specify `audience` during client registration and token requests.
+- Tokens include an `aud` claim (array of strings) in both the token and introspection response.
+- Audience is validated on token issuance and refresh.
+- Refresh tokens can be used by the original client or any client in the audience.
 
 ### 🎯 Two-Client Architecture
 Clear separation of concerns:
@@ -62,7 +70,7 @@ Clear separation of concerns:
 - ✅ **Health checks** - Liveness and readiness probes
 - ✅ **Monitoring ready** - Prometheus metrics support
 - ✅ **Ingress support** - TLS termination and routing
-  
+
 ## Project Structure
 
 - **cmd/server/main.go**: Entry point of the application. Initializes the server and sets up routes and middleware.
@@ -111,17 +119,23 @@ Clear separation of concerns:
   - Token Exchange (RFC 8693)
 
 - **Security Features**:
-  - JWT-based tokens with configurable expiration
+  - JWT-based tokens with configurable expiration per token type
   - PKCE (Proof Key for Code Exchange) support
   - Configurable HTTPS requirements
   - Proxy-aware redirect URI resolution
   - Rate limiting and CORS support
 
 - **Management Features**:
-  - Dynamic client registration via API
+  - Dynamic client registration via API (with audience support)
   - Web-based documentation and client management
   - Health check endpoints
   - Prometheus metrics (optional)
+
+- **Token Introspection**:
+  - `/introspect` endpoint returns all standard fields, including `aud` as a JSON array.
+
+- **Token Statistics**:
+  - `/token/stats` endpoint provides statistics about issued, active, revoked, and expired tokens.
 
 ## Setup Instructions
 
@@ -156,7 +170,7 @@ Clear separation of concerns:
    ```bash
    # Create namespace
    kubectl create namespace oauth2-server
-   
+
    # Install chart
    helm install oauth2-server ./helm/oauth2-server \
      -n oauth2-server \
@@ -202,21 +216,23 @@ See `helm/oauth2-server/values.yaml` for all available Helm chart configuration 
 | Endpoint | Method | Description | RFC |
 |----------|--------|-------------|-----|
 | `/oauth2/auth` | GET | Authorization endpoint | RFC 6749 |
-| `/oauth2/token` | POST | Token endpoint (all grant types) | RFC 6749 |
+| `/oauth2/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
 | `/oauth2/device` | POST | Device authorization | RFC 8628 |
 | `/device` | GET/POST | Device verification UI | RFC 8628 |
-| `/oauth2/introspect` | POST | Token introspection | RFC 7662 |
+| `/oauth2/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
 | `/oauth2/userinfo` | GET | UserInfo endpoint | OIDC Core |
+| `/token/stats` | GET | Token statistics endpoint | Custom |
 
 ### Management Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/clients` | GET | List OAuth2 clients |
-| `/api/clients` | POST | Create new client |
+| `/api/clients` | POST | Create new client (specify `audience`) |
 | `/api/clients/{id}` | GET | Get specific client |
 | `/api/clients/{id}` | PUT | Update client |
 | `/api/clients/{id}` | DELETE | Delete client |
+| `/register` | POST | Dynamic client registration (with audience) |
 
 ### Discovery & Health
 
@@ -242,8 +258,63 @@ curl -X POST http://localhost:8080/api/clients \
     "name": "My App",
     "redirect_uris": ["https://myapp.com/callback"],
     "grant_types": ["authorization_code", "refresh_token"],
+    "audience": ["client_id_of_backend"],
     "scope": "openid profile email"
   }'
+```
+
+### Token Exchange for Refresh Token
+
+```bash
+curl -X POST http://localhost:8080/oauth2/token \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+  -d "subject_token=<refresh_token>" \
+  -d "subject_token_type=urn:ietf:params:oauth:token-type:refresh_token" \
+  -d "requested_token_type=urn:ietf:params:oauth:token-type:refresh_token" \
+  -d "audience=<target_audience>"
+```
+
+### Introspect a Token
+
+```bash
+curl -X POST http://localhost:8080/oauth2/introspect \
+  -d "token=<access_or_refresh_token>"
+```
+
+**Response:**
+```json
+{
+  "active": true,
+  "client_id": "client_xyz",
+  "scope": "openid offline_access",
+  "token_type": "access_token",
+  "exp": 1753869233,
+  "iat": 1753865633,
+  "aud": ["client_abc", "client_xyz"],
+  "iss": "http://localhost:8080",
+  "sub": "user-001"
+}
+```
+
+### Token Statistics
+
+```bash
+curl http://localhost:8080/token/stats
+```
+
+**Response:**
+```json
+{
+  "active_tokens": 5,
+  "expired_tokens": 2,
+  "revoked_tokens": 1,
+  "total_tokens": 8,
+  "by_type": {
+    "access_token": { "active": 3, "expired": 1, "revoked": 0, "total": 4 },
+    "refresh_token": { "active": 2, "expired": 1, "revoked": 1, "total": 4 }
+  },
+  "request_time": "2025-07-30T12:00:00Z"
+}
 ```
 
 ### Authorization Code Flow
@@ -256,7 +327,7 @@ curl -X POST http://localhost:8080/api/clients \
 
 - Use the included Makefile commands: `make test`, `make lint`
 - Access interactive documentation at `http://localhost:8080/docs`
-- Use tools like Postman or curl to test endpoints
+- Use tools like Postman, Insomnia, or curl to test endpoints
 
 ## Development
 
@@ -330,7 +401,7 @@ Backend services exchange tokens for secure API access:
 # Service A authenticates user (frontend flow)
 # Service A needs to call Service B on behalf of user
 # Service A exchanges user token for Service B specific token
-curl -X POST /token \
+curl -X POST /oauth2/token \
   -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
   -d "subject_token=<frontend_user_token>" \
   -d "audience=service-b"

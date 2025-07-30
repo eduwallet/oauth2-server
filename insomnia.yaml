@@ -1,0 +1,654 @@
+type: collection.insomnia.rest/5.0
+name: OAuth2
+meta:
+  id: wrk_f60bcc8e96414d19bdf020f5de599783
+  created: 1753691818758
+  modified: 1753909840301
+  description: ""
+collection:
+  - name: OAuth2 Server
+    meta:
+      id: fld_b175237f82d14421a40e07b14131d469
+      created: 1753857317928
+      modified: 1753857436936
+      sortKey: -1753857407666
+      description: ""
+    children:
+      - url: "{{ _.provider }}/.well-known/oauth-authorization-server"
+        name: 1] Server Metadata
+        meta:
+          id: req_fb77b51887a146f9bb5458ac4bf023a8
+          created: 1753691925405
+          modified: 1753857904247
+          isPrivate: false
+          description: ""
+          sortKey: -1753857322314
+        method: GET
+        parameters:
+          - id: pair_4be56eb33f1544508f2bea8986df200c
+            name: client_name
+            value: xxx
+            description: ""
+            disabled: false
+        headers:
+          - name: User-Agent
+            value: insomnia/11.3.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{{ _.provider }}/stats"
+        name: Server Statistics
+        meta:
+          id: req_d33ad6cdb5a44c3e833b4542d68bf1b7
+          created: 1753711102320
+          modified: 1753857793679
+          isPrivate: false
+          description: ""
+          sortKey: -1753857322089
+        method: GET
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: false
+          username: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+  - name: Frontend Application
+    meta:
+      id: fld_d36b3a21857e4c96919408f9552cba16
+      created: 1753857386974
+      modified: 1753857424016
+      sortKey: -1753857386974
+      description: ""
+    children:
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC5kZXZpY2VfYXV0aG9yaXphdGlvbl9lbmRwb2ludA==::46b', 'never', 60
+          %}"
+        name: 4] Device Code Flow
+        meta:
+          id: req_f79d09a9a8104295a59d9b8e3257357a
+          created: 1753696369928
+          modified: 1753860498689
+          isPrivate: false
+          description: ""
+          sortKey: -1753857452049
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_812e458eb73e47ccb136dd6b30334a57
+              name: client_id
+              value: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+                'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+            - id: pair_cb556e63582b40efb05ff808eebd7a24
+              name: scope
+              value: openid offline_access
+              description: ""
+              disabled: false
+            - id: pair_75e4ba4a7abe42b1a943d60ca81f314e
+              name: audience
+              value: "{% response 'body', 'req_63deea82635d47e5a366083587239a9e',
+                'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+        parameters:
+          - id: pair_6823b43a0abe48f9b02a2e12a9535b65
+            name: client_name
+            value: xxx
+            description: ""
+            disabled: false
+          - id: pair_9204b66d34f7487cb3b8f12b141e1189
+            name: redirect_uris
+            value: '["/callback", "/oauth/callback"]'
+            description: ""
+            disabled: false
+        headers:
+          - name: Content-Type
+            value: application/x-www-form-urlencoded
+          - name: User-Agent
+            value: insomnia/11.3.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC50b2tlbl9lbmRwb2ludA==::46b', 'never', 60 %}"
+        name: 5] Get Initial Access Token & Refresh Token
+        meta:
+          id: req_c2dc4bd656464052807574054c787f41
+          created: 1753702955180
+          modified: 1753869000132
+          isPrivate: false
+          description: ""
+          sortKey: -1753857452024
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_2ba73fbca71b4233845629bba6ec703f
+              name: client_id
+              value: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+                'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+              description: ""
+            - id: pair_8d4342c279d74ef897aedfcc1a6acde1
+              name: device_code
+              value: "{% response 'body', 'req_f79d09a9a8104295a59d9b8e3257357a',
+                'b64::JC5kZXZpY2VfY29kZQ==::46b', 'never', 60 %}"
+              description: ""
+            - id: pair_06aa6cf0b02b40a1936222a8e2b46899
+              name: grant_type
+              value: urn:ietf:params:oauth:grant-type:device_code
+              description: ""
+        headers:
+          - id: pair_a162cc5ff8aa4ef8a1d2f41bbf221648
+            name: Content-Type
+            value: application/x-www-form-urlencoded
+            description: ""
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: true
+          username: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC50b2tlbl9lbmRwb2ludA==::46b', 'never', 60 %}"
+        name: Refresh Token...
+        meta:
+          id: req_e79946ee714e4d0398f4b9e22b62da72
+          created: 1753703369655
+          modified: 1753881686585
+          isPrivate: false
+          description: ""
+          sortKey: -1753857451936.5
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_06aa6cf0b02b40a1936222a8e2b46899
+              name: grant_type
+              value: refresh_token
+              description: ""
+            - id: pair_3faae8ea96ce422c9113cc77b4296ca3
+              name: refresh_token
+              value: "{% response 'body', 'req_c2dc4bd656464052807574054c787f41',
+                'b64::JC5yZWZyZXNoX3Rva2Vu::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+            - id: pair_6dd8fcbcadaa4be1a17c985a0624a9cc
+              name: scope
+              value: ""
+              description: ""
+              disabled: true
+        parameters:
+          - id: pair_63345ff6b967414591bec6c512ae9b11
+            name: audience
+            value: "{% response 'body', 'req_63deea82635d47e5a366083587239a9e',
+              'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+            description: ""
+            disabled: false
+        headers:
+          - id: pair_a162cc5ff8aa4ef8a1d2f41bbf221648
+            name: Content-Type
+            value: application/x-www-form-urlencoded
+            description: ""
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: false
+          username: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC5yZWdpc3RyYXRpb25fZW5kcG9pbnQ=::46b', 'never', 60 %}"
+        name: 3] Register Frontend
+        meta:
+          id: req_8e68b1fea2b24e29943fb2f6ca3220c1
+          created: 1753703797715
+          modified: 1753857931172
+          isPrivate: false
+          description: ""
+          sortKey: -1753857452074
+        method: POST
+        body:
+          mimeType: application/json
+          text: >-
+            {
+            	"redirect_uris": [
+            		"http://localhost/callback"
+            	],
+            	"grant_types": [
+            		"client_credentials",
+            		"authorization_code",
+            		"refresh_token",
+            		"urn:ietf:params:oauth:grant-type:device_code",
+            		"urn:ietf:params:oauth:grant-type:token-exchange"
+            	],
+            	"response_types": [
+            		"code"
+            	],
+            	"audience": [
+            		"{% response 'body', 'req_63deea82635d47e5a366083587239a9e', 'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+            	]
+            }
+        parameters:
+          - id: pair_6823b43a0abe48f9b02a2e12a9535b65
+            name: client_name
+            value: xxx
+            description: ""
+            disabled: false
+          - id: pair_9204b66d34f7487cb3b8f12b141e1189
+            name: redirect_uris
+            value: '["/callback", "/oauth/callback"]'
+            description: ""
+            disabled: false
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.3.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC50b2tlbl9lbmRwb2ludA==::46b', 'never', 60 %}"
+        name: Token Exchange - frontend handover to backend
+        meta:
+          id: req_53ca953b66504f07b8c5505181bbf589
+          created: 1753706230464
+          modified: 1753882245020
+          isPrivate: false
+          description: ""
+          sortKey: -1753857451836.5
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_06aa6cf0b02b40a1936222a8e2b46899
+              name: grant_type
+              value: urn:ietf:params:oauth:grant-type:token-exchange
+              description: ""
+            - id: pair_9b96a947bef043fa891532f06efe587f
+              name: subject_token
+              value: "{% response 'body', 'req_e79946ee714e4d0398f4b9e22b62da72',
+                'b64::JC5yZWZyZXNoX3Rva2Vu::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+            - id: pair_9b1abaa8e63b4b338fc04a459457a9ff
+              name: subject_token_type
+              value: urn:ietf:params:oauth:token-type:refresh_token
+              description: ""
+              disabled: false
+            - id: pair_5dbefdd1ad384af3adec90a4a232a078
+              name: scope
+              value: openid offline_access
+              description: ""
+              disabled: false
+            - id: pair_a836a60cb43b423e97b021c5b28e73f5
+              name: audience
+              value: "{% response 'body', 'req_63deea82635d47e5a366083587239a9e',
+                'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+            - id: pair_878b0bb3ba0e4b9eb8bf58e39bea61b3
+              name: requested_token_type
+              value: urn:ietf:params:oauth:token-type:refresh_token
+              description: ""
+              disabled: false
+        headers:
+          - id: pair_a162cc5ff8aa4ef8a1d2f41bbf221648
+            name: Content-Type
+            value: application/x-www-form-urlencoded
+            description: ""
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: false
+          username: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC51c2VyaW5mb19lbmRwb2ludA==::46b', 'never', 60 %}"
+        name: User Info
+        meta:
+          id: req_fe8a2587de084af9917042a53f20cbc0
+          created: 1753707716195
+          modified: 1753857529989
+          isPrivate: false
+          description: ""
+          sortKey: -1753857451942.75
+        method: GET
+        authentication:
+          type: bearer
+          token: "{% response 'body', 'req_c2dc4bd656464052807574054c787f41',
+            'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC5pbnRyb3NwZWN0aW9uX2VuZHBvaW50::46b', 'never', 60 %}"
+        name: Introspect Access Token
+        meta:
+          id: req_6d6495c99d7f4dcf836e80437f334375
+          created: 1753709576508
+          modified: 1753857510018
+          isPrivate: false
+          description: ""
+          sortKey: -1753857451974
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_382dfbaa94104ab1bc4ec490693262dd
+              name: token
+              value: "{% response 'body', 'req_c2dc4bd656464052807574054c787f41',
+                'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+        headers:
+          - name: Content-Type
+            value: application/x-www-form-urlencoded
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: false
+          username: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC5pbnRyb3NwZWN0aW9uX2VuZHBvaW50::46b', 'never', 60 %}"
+        name: Introspect Refresh Token
+        meta:
+          id: req_5577a17ea4b9494f89536130399caa11
+          created: 1753881568942
+          modified: 1753881586176
+          isPrivate: false
+          description: ""
+          sortKey: -1753857451958.375
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_382dfbaa94104ab1bc4ec490693262dd
+              name: token
+              value: "{% response 'body', 'req_c2dc4bd656464052807574054c787f41',
+                'b64::JC5yZWZyZXNoX3Rva2Vu::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+        headers:
+          - name: Content-Type
+            value: application/x-www-form-urlencoded
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: false
+          username: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+  - name: Backend Application
+    meta:
+      id: fld_aeb1c3e573734fb1b510013951bee621
+      created: 1753857407566
+      modified: 1753857547055
+      sortKey: -1662373255812.125
+      description: ""
+    children:
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC5yZWdpc3RyYXRpb25fZW5kcG9pbnQ=::46b', 'never', 60 %}"
+        name: 2] Register Backend
+        meta:
+          id: req_63deea82635d47e5a366083587239a9e
+          created: 1753692121503
+          modified: 1753857915471
+          isPrivate: false
+          description: ""
+          sortKey: -1753857447503
+        method: POST
+        body:
+          mimeType: application/json
+          text: |-
+            {
+            	"redirect_uris": [
+            	],
+            	"grant_types": [
+            		"client_credentials",
+            		"refresh_token",
+            		"urn:ietf:params:oauth:grant-type:token-exchange"
+            	]
+            }
+        parameters:
+          - id: pair_6823b43a0abe48f9b02a2e12a9535b65
+            name: client_name
+            value: xxx
+            description: ""
+            disabled: false
+          - id: pair_9204b66d34f7487cb3b8f12b141e1189
+            name: redirect_uris
+            value: '["/callback", "/oauth/callback"]'
+            description: ""
+            disabled: false
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.3.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC50b2tlbl9lbmRwb2ludA==::46b', 'never', 60 %}"
+        name: Refresh Token...
+        meta:
+          id: req_16a4276b5d5d4d79a159f495abd47564
+          created: 1753857168637
+          modified: 1753882293741
+          isPrivate: false
+          description: ""
+          sortKey: -1753857447403
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_06aa6cf0b02b40a1936222a8e2b46899
+              name: grant_type
+              value: refresh_token
+              description: ""
+            - id: pair_3faae8ea96ce422c9113cc77b4296ca3
+              name: refresh_token
+              value: "{% response 'body', 'req_53ca953b66504f07b8c5505181bbf589',
+                'b64::JC5yZWZyZXNoX3Rva2Vu::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+            - id: pair_6dd8fcbcadaa4be1a17c985a0624a9cc
+              name: scope
+              value: ""
+              description: ""
+              disabled: true
+        headers:
+          - id: pair_a162cc5ff8aa4ef8a1d2f41bbf221648
+            name: Content-Type
+            value: application/x-www-form-urlencoded
+            description: ""
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: false
+          username: "{% response 'body', 'req_63deea82635d47e5a366083587239a9e',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_63deea82635d47e5a366083587239a9e',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC51c2VyaW5mb19lbmRwb2ludA==::46b', 'never', 60 %}"
+        name: User Info
+        meta:
+          id: req_be6dbc164c5c450d89df5e1636b14765
+          created: 1753857566773
+          modified: 1753866583372
+          isPrivate: false
+          description: ""
+          sortKey: -1753857447303
+        method: GET
+        authentication:
+          type: bearer
+          token: "{% response 'body', 'req_16a4276b5d5d4d79a159f495abd47564',
+            'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}{% response 'body',
+            'req_16a4276b5d5d4d79a159f495abd47564',
+            'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "{% response 'body', 'req_fb77b51887a146f9bb5458ac4bf023a8',
+          'b64::JC5pbnRyb3NwZWN0aW9uX2VuZHBvaW50::46b', 'never', 60 %}"
+        name: Introspect Access Token
+        meta:
+          id: req_b307e212970e4452b5b94c0fd15e6508
+          created: 1753857615000
+          modified: 1753866550284
+          isPrivate: false
+          description: ""
+          sortKey: -1753857447353
+        method: POST
+        body:
+          mimeType: application/x-www-form-urlencoded
+          params:
+            - id: pair_382dfbaa94104ab1bc4ec490693262dd
+              name: token
+              value: "{% response 'body', 'req_16a4276b5d5d4d79a159f495abd47564',
+                'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}"
+              description: ""
+              disabled: false
+        headers:
+          - name: Content-Type
+            value: application/x-www-form-urlencoded
+        authentication:
+          type: basic
+          useISO88591: false
+          disabled: false
+          username: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfaWQ=::46b', 'never', 60 %}"
+          password: "{% response 'body', 'req_8e68b1fea2b24e29943fb2f6ca3220c1',
+            'b64::JC5jbGllbnRfc2VjcmV0::46b', 'never', 60 %}"
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+cookieJar:
+  name: Default Jar
+  meta:
+    id: jar_e2df03519b9fb4c22922dee372bd7630f9feb407
+    created: 1753691818851
+    modified: 1753691818851
+environments:
+  name: Base Environment
+  meta:
+    id: env_e2df03519b9fb4c22922dee372bd7630f9feb407
+    created: 1753691818829
+    modified: 1753691818829
+    isPrivate: false
+  subEnvironments:
+    - name: localhost:8080
+      meta:
+        id: env_0350a5beec4745c8add852934a2a9a1f
+        created: 1753695022714
+        modified: 1753695044656
+        isPrivate: true
+        sortKey: 1753695022714
+      data:
+        provider: http://localhost:8080
