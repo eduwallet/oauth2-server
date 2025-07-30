@@ -115,7 +115,7 @@ func (h *RegistrationHandlers) HandleRegistration(w http.ResponseWriter, r *http
 		ClientURI:     req.ClientURI,
 		LogoURI:       req.LogoURI,
 		ContactEmails: req.Contacts,
-		Audience:      req.Audience, // <-- Add this line
+		Audience:      req.Audience,
 	}
 
 	// Store the client
@@ -139,7 +139,7 @@ func (h *RegistrationHandlers) HandleRegistration(w http.ResponseWriter, r *http
 		ResponseTypes:           responseTypes,
 		Scope:                   strings.Join(scopes, " "),
 		Contacts:                req.Contacts,
-		Audience:                req.Audience, // <-- Add this line
+		Audience:                req.Audience,
 		TosURI:                  req.TosURI,
 		PolicyURI:               req.PolicyURI,
 		TokenEndpointAuthMethod: authMethod,

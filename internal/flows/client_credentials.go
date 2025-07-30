@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"time"
 
 	"oauth2-server/internal/auth"
 	"oauth2-server/internal/store"
@@ -92,7 +91,7 @@ func (f *ClientCredentialsFlow) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse and validate scopes
-	requestedScopes := utils.SplitScopes(scope)
+	requestedScopes := utils.SplitString(scope)
 	if len(requestedScopes) == 0 {
 		requestedScopes = []string{"openid"} // Default scope
 	}
@@ -108,8 +107,7 @@ func (f *ClientCredentialsFlow) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate access token using high-level function (and store it)
-	expiresIn := time.Hour
-	accessToken, err := auth.GenerateAccessToken(f.tokenStore, "", clientID, requestedScopes, expiresIn)
+	accessToken, err := auth.GenerateAccessToken(f.tokenStore, "", clientID, requestedScopes, nil)
 	if err != nil {
 		log.Printf("❌ Error generating access token: %v", err)
 		utils.WriteServerError(w, "Failed to generate access token")
@@ -120,8 +118,8 @@ func (f *ClientCredentialsFlow) Handle(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"access_token": accessToken,
 		"token_type":   "Bearer",
-		"expires_in":   3600, // 1 hour
-		"scope":        utils.JoinScopes(requestedScopes),
+		"expires_in":   f.config.Security.TokenExpirySeconds,
+		"scope":        utils.JoinStrings(requestedScopes),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

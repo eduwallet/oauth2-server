@@ -112,8 +112,7 @@ func main() {
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
 
 	// Initialize stores
-	clientStore = store.NewClientStore()
-	tokenStore = store.NewTokenStore()
+	initializeStores()
 
 	// Load clients from configuration
 	if err := clientStore.LoadClientsFromConfig(cfg.Clients); err != nil {
@@ -147,7 +146,14 @@ func main() {
 func initializeStores() {
 	clientStore = store.NewClientStore()
 	authCodeStore = store.NewAuthCodeStore()
-	tokenStore = store.NewTokenStore()
+
+	// Token store with configurable expiry
+	expiryConfig := map[string]time.Duration{
+		"access_token":       time.Duration(cfg.Security.TokenExpirySeconds) * time.Second,
+		"refresh_token":      time.Duration(cfg.Security.RefreshTokenExpirySeconds) * time.Second,
+		"authorization_code": time.Duration(cfg.Security.AuthorizationCodeExpirySeconds) * time.Second,
+	}
+	tokenStore = store.NewTokenStore(expiryConfig)
 }
 
 func initializeOAuth2Provider() error {
@@ -225,23 +231,6 @@ func initializeFlows() {
 	log.Printf("✅ OAuth2 flows initialized")
 }
 
-func setupDefaultClients() {
-	log.Println("🔧 Setting up clients from configuration...")
-
-	for _, clientConfig := range cfg.Clients {
-		// Convert ClientConfig to models.ClientInfo
-		clientInfo := clientConfig.ToModelsClientInfo()
-		client := store.CreateDefaultClient(clientInfo)
-		if err := clientStore.StoreClient(client); err != nil {
-			log.Printf("❌ Failed to store client %s: %v", clientConfig.ID, err)
-			continue
-		}
-		log.Printf("✅ Client registered: %s (%s)", clientConfig.ID, clientConfig.Name)
-	}
-
-	log.Printf("🎯 %d clients registered successfully", len(cfg.Clients))
-}
-
 func setupRoutes() {
 	// OAuth2 endpoints with proxy awareness
 	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(wellKnownHandler))
@@ -251,8 +240,8 @@ func setupRoutes() {
 	http.HandleFunc("/token", proxyAwareMiddleware(tokenHandler))
 	http.HandleFunc("/userinfo", proxyAwareMiddleware(userInfoHandler))
 	http.HandleFunc("/callback", proxyAwareMiddleware(callbackHandler))
-	http.HandleFunc("/revoke", proxyAwareMiddleware(revokeHandler))
-	http.HandleFunc("/introspect", proxyAwareMiddleware(introspectHandler))
+	http.HandleFunc("/revoke", proxyAwareMiddleware(tokenHandlers.HandleTokenRevocation))
+	http.HandleFunc("/introspect", proxyAwareMiddleware(tokenHandlers.HandleTokenIntrospection))
 
 	// Device flow endpoints
 	http.HandleFunc("/device_authorization", proxyAwareMiddleware(deviceAuthHandler))
@@ -1065,107 +1054,4 @@ func getRequestBaseURL(r *http.Request) string {
 	}
 
 	return scheme + "://" + host
-}
-
-// Add token revocation handler
-func revokeHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		utils.WriteMethodNotAllowedError(w)
-		return
-	}
-
-	if err := r.ParseForm(); err != nil {
-		utils.WriteInvalidRequestError(w, "Failed to parse request")
-		return
-	}
-
-	token := r.FormValue("token")
-	if token == "" {
-		utils.WriteInvalidRequestError(w, "Token parameter is required")
-		return
-	}
-
-	// Extract client credentials
-	clientID, clientSecret, err := auth.ExtractClientCredentials(r)
-	if err != nil {
-		utils.WriteInvalidClientError(w, "Client authentication required")
-		return
-	}
-
-	// Authenticate client
-	if err := clientStore.ValidateClientCredentials(clientID, clientSecret); err != nil {
-		utils.WriteInvalidClientError(w, "Client authentication failed")
-		return
-	}
-
-	// For demo purposes, just return success
-	// In a real implementation, you'd revoke the token from your token store
-	w.WriteHeader(http.StatusOK)
-	log.Printf("✅ Token revoked for client: %s", clientID)
-}
-
-// Add token introspection handler
-func introspectHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		utils.WriteMethodNotAllowedError(w)
-		return
-	}
-
-	if err := r.ParseForm(); err != nil {
-		utils.WriteInvalidRequestError(w, "Failed to parse request")
-		return
-	}
-
-	token := r.FormValue("token")
-	if token == "" {
-		utils.WriteInvalidRequestError(w, "Token parameter is required")
-		return
-	}
-
-	// Extract client credentials
-	clientID, clientSecret, err := auth.ExtractClientCredentials(r)
-	if err != nil {
-		utils.WriteInvalidClientError(w, "Client authentication required")
-		return
-	}
-
-	// Authenticate client
-	if err := clientStore.ValidateClientCredentials(clientID, clientSecret); err != nil {
-		utils.WriteInvalidClientError(w, "Client authentication failed")
-		return
-	}
-
-	// Get user information (use first user or default)
-	var userID string
-	if len(cfg.Users) > 0 {
-		userID = cfg.Users[0].ID
-	} else {
-		userID = "default-user"
-	}
-
-	// For demo purposes, return a basic introspection response
-	introspectionResponse := map[string]interface{}{
-		"active":     true,
-		"client_id":  clientID,
-		"token_type": "Bearer",
-		"scope":      "api:read api:write",
-		"exp":        time.Now().Add(time.Hour).Unix(),
-		"iat":        time.Now().Unix(),
-		"sub":        userID,
-		"aud":        []string{"api-service"},
-		"iss":        cfg.Server.BaseURL,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(introspectionResponse)
-	log.Printf("✅ Token introspected for client: %s", clientID)
-}
-
-// Example placeholder handlers for unimplemented flows
-func handleAuthCodeRequest(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Authorization code flow not implemented yet", http.StatusNotImplemented)
-}
-
-func handleClientCredentials(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Client credentials flow not implemented yet", http.StatusNotImplemented)
 }

@@ -8,6 +8,7 @@ type DeviceAuthorization struct {
 	UserCode     string    `json:"user_code"`
 	ClientID     string    `json:"client_id"`
 	Scopes       []string  `json:"scopes"`
+	Audiences    []string  `json:"audiences,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at"`
 	IssuedAt     time.Time `json:"issued_at"`
 	Authorized   bool      `json:"authorized"`

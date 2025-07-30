@@ -77,10 +77,9 @@ func (h *TokenHandlers) HandleTokenRevocation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Verify token belongs to the client
-	if tokenInfo.ClientID != clientID {
-		log.Printf("⚠️ Token does not belong to client %s", clientID)
-		w.WriteHeader(http.StatusOK) // Per RFC 7009, return success even if token doesn't belong to client
+	// Verify token belongs to the client or client is in the audience
+	if tokenInfo.ClientID != clientID && !utils.Contains(tokenInfo.Audience, clientID) {
+		utils.WriteErrorResponse(w, "invalid_grant", "Refresh token does not belong to client or audience")
 		return
 	}
 
@@ -191,6 +190,13 @@ func (h *TokenHandlers) HandleTokenExchange(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Get Client
+	client, err := h.clientStore.GetClient(r.Context(), clientID)
+	if err != nil {
+		utils.WriteInvalidClientError(w, "Client not found")
+		return
+	}
+
 	// Validate required parameters
 	subjectToken := r.FormValue("subject_token")
 	subjectTokenType := r.FormValue("subject_token_type")
@@ -217,12 +223,12 @@ func (h *TokenHandlers) HandleTokenExchange(w http.ResponseWriter, r *http.Reque
 	// Validate the subject token
 	tokenInfo, err := auth.ValidateToken(h.tokenStore, subjectToken)
 	if err != nil {
-		utils.WriteInvalidGrantError(w, "Invalid or expired subject_token")
+		utils.WriteInvalidRequestError(w, "Invalid or expired subject_token")
 		return
 	}
 
 	// Optional: Validate audience if provided
-	if audience != "" && !h.validateAudience(clientID, audience) {
+	if audience != "" && !auth.ClientHasAudience(client, audience) {
 		utils.WriteInvalidRequestError(w, "Invalid audience")
 		return
 	}
@@ -233,28 +239,42 @@ func (h *TokenHandlers) HandleTokenExchange(w http.ResponseWriter, r *http.Reque
 	scope := h.determineTokenExchangeScope(originalScope, requestedScope)
 	scopeSlice := strings.Fields(scope)
 
-	// Generate and store new access token
-	newAccessToken, err := auth.GenerateAccessToken(h.tokenStore, tokenInfo.UserID, clientID, scopeSlice, time.Hour)
+	requestedTokenType := r.FormValue("requested_token_type")
+
+	// Default to access_token if not specified
+	if requestedTokenType == "" {
+		requestedTokenType = "urn:ietf:params:oauth:token-type:access_token"
+	}
+
+	var issuedToken string
+	var issuedTokenType string
+	var expiresIn int
+
+	switch requestedTokenType {
+	case "urn:ietf:params:oauth:token-type:refresh_token":
+		issuedToken, err = auth.GenerateRefreshToken(h.tokenStore, tokenInfo.UserID, clientID, scopeSlice, []string{audience})
+		issuedTokenType = "refresh_token"
+		expiresIn = h.config.Security.RefreshTokenExpirySeconds
+	case "urn:ietf:params:oauth:token-type:access_token":
+		fallthrough
+	default:
+		issuedToken, err = auth.GenerateAccessToken(h.tokenStore, tokenInfo.UserID, clientID, scopeSlice, []string{audience})
+		issuedTokenType = "access_token"
+		expiresIn = h.config.Security.TokenExpirySeconds
+	}
 	if err != nil {
-		utils.WriteServerError(w, "Failed to generate access token")
+		utils.WriteServerError(w, "Failed to generate token")
 		return
 	}
 
 	// Prepare response
 	response := map[string]interface{}{
-		"access_token":      newAccessToken,
+		issuedTokenType:     issuedToken,
 		"token_type":        "Bearer",
-		"expires_in":        3600,
+		"expires_in":        expiresIn,
 		"scope":             scope,
-		"issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
-	}
-
-	// Optional: Include refresh token if appropriate
-	if strings.Contains(scope, "offline_access") {
-		refreshToken, err := auth.GenerateRefreshToken(h.tokenStore, tokenInfo.UserID, clientID, scopeSlice, 24*time.Hour)
-		if err == nil {
-			response["refresh_token"] = refreshToken
-		}
+		"issued_token_type": requestedTokenType,
+		"audience":          []string{audience},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -303,9 +323,20 @@ func (h *TokenHandlers) HandleClientCredentials(w http.ResponseWriter, r *http.R
 	}
 
 	// Validate requested scope
-	requestedScope := r.FormValue("scope")
+	requestedScope := utils.NormalizeScope(r.FormValue("scope"))
 	if requestedScope == "" {
 		requestedScope = strings.Join(client.GetScopes(), " ")
+	}
+
+	// Validate requested audience
+	requestedAudiences := utils.NormalizeAudience(r.FormValue("audience"))
+	if requestedAudiences != "" {
+		for _, aud := range utils.SplitString(requestedAudiences) {
+			if !auth.ClientHasAudience(client, aud) {
+				utils.WriteInvalidRequestError(w, "Invalid audience")
+				return
+			}
+		}
 	}
 
 	// Validate that the requested scope is allowed for this client
@@ -315,8 +346,10 @@ func (h *TokenHandlers) HandleClientCredentials(w http.ResponseWriter, r *http.R
 	}
 
 	// Generate access token (and store it)
-	scopeSlice := strings.Fields(requestedScope)
-	accessToken, err := auth.GenerateAccessToken(h.tokenStore, "", clientID, scopeSlice, time.Hour)
+	scopeSlice := utils.SplitString(requestedScope)
+	audiences := utils.SplitString(requestedAudiences)
+
+	accessToken, err := auth.GenerateAccessToken(h.tokenStore, "", clientID, scopeSlice, audiences)
 	if err != nil {
 		utils.WriteServerError(w, "Failed to generate access token")
 		return
@@ -326,14 +359,14 @@ func (h *TokenHandlers) HandleClientCredentials(w http.ResponseWriter, r *http.R
 	response := map[string]interface{}{
 		"access_token": accessToken,
 		"token_type":   "Bearer",
-		"expires_in":   3600,
+		"expires_in":   h.config.Security.TokenExpirySeconds,
 		"scope":        requestedScope,
 	}
 
 	// Generate refresh token if offline_access scope is requested
 	// This is useful for long-running services that need refresh capabilities
 	if strings.Contains(requestedScope, "offline_access") || strings.Contains(requestedScope, "refresh_token") {
-		refreshToken, err := auth.GenerateRefreshToken(h.tokenStore, "", clientID, scopeSlice, 30*24*time.Hour)
+		refreshToken, err := auth.GenerateRefreshToken(h.tokenStore, "", clientID, scopeSlice, audiences)
 		if err == nil {
 			response["refresh_token"] = refreshToken
 			log.Printf("✅ Refresh token issued for client credentials flow: %s", clientID)
@@ -393,9 +426,9 @@ func (h *TokenHandlers) HandleRefreshToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Verify token belongs to the client
-	if tokenInfo.ClientID != clientID {
-		utils.WriteErrorResponse(w, "invalid_grant", "Refresh token does not belong to client")
+	// Verify token belongs to the client or client is in the audience
+	if tokenInfo.ClientID != clientID && !utils.Contains(tokenInfo.Audience, clientID) {
+		utils.WriteErrorResponse(w, "invalid_grant", "Refresh token does not belong to client or audience")
 		return
 	}
 
@@ -414,7 +447,7 @@ func (h *TokenHandlers) HandleRefreshToken(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Generate new access token
-	newAccessToken, err := auth.GenerateAccessToken(h.tokenStore, tokenInfo.UserID, clientID, requestedScopeSlice, time.Hour)
+	newAccessToken, err := auth.GenerateAccessToken(h.tokenStore, tokenInfo.UserID, clientID, requestedScopeSlice, tokenInfo.Audience)
 	if err != nil {
 		log.Printf("❌ Error generating access token: %v", err)
 		utils.WriteServerError(w, "Failed to generate access token")
@@ -422,7 +455,7 @@ func (h *TokenHandlers) HandleRefreshToken(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Generate new refresh token
-	newRefreshToken, err := auth.GenerateRefreshToken(h.tokenStore, tokenInfo.UserID, clientID, requestedScopeSlice, 24*time.Hour)
+	newRefreshToken, err := auth.GenerateRefreshToken(h.tokenStore, tokenInfo.UserID, clientID, requestedScopeSlice, tokenInfo.Audience)
 	if err != nil {
 		log.Printf("❌ Error generating refresh token: %v", err)
 		utils.WriteServerError(w, "Failed to generate refresh token")
@@ -440,7 +473,7 @@ func (h *TokenHandlers) HandleRefreshToken(w http.ResponseWriter, r *http.Reques
 	response := map[string]interface{}{
 		"access_token":  newAccessToken,
 		"token_type":    "Bearer",
-		"expires_in":    3600, // 1 hour
+		"expires_in":    h.config.Security.TokenExpirySeconds,
 		"refresh_token": newRefreshToken,
 		"scope":         strings.Join(requestedScopeSlice, " "),
 	}
@@ -556,30 +589,6 @@ func (h *TokenHandlers) validateClientScope(client interface{}, requestedScope s
 		}
 	}
 	return true
-}
-
-// validateAudience validates the audience parameter for token exchange
-func (h *TokenHandlers) validateAudience(clientID, audience string) bool {
-	// Get client and check if the audience is in the client's allowed audiences
-	client, err := h.clientStore.GetClient(nil, clientID)
-	if err != nil {
-		return false
-	}
-
-	// Use type switch to handle different client types
-	switch c := client.(type) {
-	case interface{ GetAudience() fosite.Arguments }:
-		for _, aud := range c.GetAudience() {
-			if aud == audience {
-				return true
-			}
-		}
-	default:
-		// If client doesn't implement GetAudience, allow any audience for now
-		// In production, you might want to be more restrictive
-		return true
-	}
-	return false
 }
 
 // determineTokenExchangeScope determines the scope for token exchange

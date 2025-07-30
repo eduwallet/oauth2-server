@@ -5,15 +5,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"strings"
 	"time"
 
+	"oauth2-server/internal/models"
 	"oauth2-server/internal/store"
+	"oauth2-server/internal/utils"
 )
 
 // GenerateAccessToken generates and stores an access token for the given user and client
-func GenerateAccessToken(tokenStore *store.TokenStore, userID, clientID string, scopes []string, expiresIn time.Duration) (string, error) {
+func GenerateAccessToken(tokenStore *store.TokenStore, userID, clientID string, scopes []string, audiences []string) (string, error) {
 	// Generate a random token (in a real implementation, you'd use JWT)
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -27,8 +30,7 @@ func GenerateAccessToken(tokenStore *store.TokenStore, userID, clientID string, 
 	timestamp := time.Now().Unix()
 	tokenValue := fmt.Sprintf("at_%s_%d", token, timestamp)
 
-	expiresAt := time.Now().Add(expiresIn)
-	if err := tokenStore.StoreToken(tokenValue, "access_token", clientID, userID, scopes, expiresAt); err != nil {
+	if err := tokenStore.StoreToken(tokenValue, "access_token", clientID, userID, scopes, audiences); err != nil {
 		return "", err
 	}
 
@@ -36,7 +38,7 @@ func GenerateAccessToken(tokenStore *store.TokenStore, userID, clientID string, 
 }
 
 // GenerateRefreshToken generates and stores a refresh token for the given user and client
-func GenerateRefreshToken(tokenStore *store.TokenStore, userID, clientID string, scopes []string, expiresIn time.Duration) (string, error) {
+func GenerateRefreshToken(tokenStore *store.TokenStore, userID, clientID string, scopes []string, audiences []string) (string, error) {
 	// Generate a random refresh token
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -47,8 +49,7 @@ func GenerateRefreshToken(tokenStore *store.TokenStore, userID, clientID string,
 	timestamp := time.Now().Unix()
 	tokenValue := fmt.Sprintf("rt_%s_%d", token, timestamp)
 
-	expiresAt := time.Now().Add(expiresIn)
-	if err := tokenStore.StoreToken(tokenValue, "refresh_token", clientID, userID, scopes, expiresAt); err != nil {
+	if err := tokenStore.StoreToken(tokenValue, "refresh_token", clientID, userID, scopes, audiences); err != nil {
 		return "", err
 	}
 
@@ -56,7 +57,7 @@ func GenerateRefreshToken(tokenStore *store.TokenStore, userID, clientID string,
 }
 
 // GenerateAuthorizationCode generates and stores an authorization code
-func GenerateAuthorizationCode(tokenStore *store.TokenStore, userID, clientID string, expiresIn time.Duration) (string, error) {
+func GenerateAuthorizationCode(tokenStore *store.TokenStore, userID, clientID string) (string, error) {
 	codeBytes := make([]byte, 32)
 	if _, err := rand.Read(codeBytes); err != nil {
 		return "", fmt.Errorf("failed to generate random authorization code: %w", err)
@@ -64,8 +65,7 @@ func GenerateAuthorizationCode(tokenStore *store.TokenStore, userID, clientID st
 
 	code := base64.URLEncoding.EncodeToString(codeBytes)
 	codeValue := fmt.Sprintf("ac_%s", code)
-	expiresAt := time.Now().Add(expiresIn)
-	if err := tokenStore.StoreToken(codeValue, "authorization_code", clientID, userID, nil, expiresAt); err != nil {
+	if err := tokenStore.StoreToken(codeValue, "authorization_code", clientID, userID, nil, nil); err != nil {
 		return "", err
 	}
 
@@ -81,8 +81,7 @@ func GenerateDeviceCode(tokenStore *store.TokenStore, userID, clientID string, e
 
 	code := base64.URLEncoding.EncodeToString(codeBytes)
 	codeValue := fmt.Sprintf("dc_%s", code)
-	expiresAt := time.Now().Add(expiresIn)
-	if err := tokenStore.StoreToken(codeValue, "device_code", clientID, userID, nil, expiresAt); err != nil {
+	if err := tokenStore.StoreToken(codeValue, "device_code", clientID, userID, nil, nil); err != nil {
 		return "", err
 	}
 
@@ -123,13 +122,19 @@ type TokenInfo struct {
 }
 
 // StoreToken stores a token using the TokenStore (for custom tokens)
-func StoreToken(tokenStore *store.TokenStore, tokenValue, tokenType, clientID, userID string, scopes []string, expiresAt time.Time) error {
-	return tokenStore.StoreToken(tokenValue, tokenType, clientID, userID, scopes, expiresAt)
+func StoreToken(tokenStore *store.TokenStore, tokenValue, tokenType, clientID, userID string, scopes []string, audiences []string) error {
+	return tokenStore.StoreToken(tokenValue, tokenType, clientID, userID, scopes, audiences)
 }
 
 // ValidateToken validates a token and returns token information using the TokenStore
 func ValidateToken(tokenStore *store.TokenStore, token string) (*store.TokenInfo, error) {
-	return tokenStore.ValidateToken(token)
+	log.Printf("Validating token: %s", token)
+	tokenInfo, err := tokenStore.ValidateToken(token)
+	if err != nil {
+		log.Printf("❌ Token validation failed: %v", err)
+		return nil, err
+	}
+	return tokenInfo, nil
 }
 
 // RevokeToken revokes a token using the TokenStore
@@ -203,25 +208,25 @@ func ExtractBearerToken(authHeader string) (string, error) {
 }
 
 // IntrospectToken performs token introspection (RFC 7662)
-func IntrospectToken(tokenStore *store.TokenStore, token string) (map[string]interface{}, error) {
+func IntrospectToken(tokenStore *store.TokenStore, token string) (*models.IntrospectionResponse, error) {
 	tokenInfo, err := ValidateToken(tokenStore, token)
 	if err != nil {
-		return map[string]interface{}{
-			"active": false,
+		return &models.IntrospectionResponse{
+			Active: false,
 		}, nil
 	}
 
-	// Return introspection response
-	response := map[string]interface{}{
-		"active":     tokenInfo.Active,
-		"token_type": tokenInfo.TokenType,
-		"scope":      tokenInfo.Scopes,
-		"client_id":  tokenInfo.ClientID,
-		"username":   tokenInfo.UserID,
-		"exp":        tokenInfo.ExpiresAt.Unix(),
-		"iat":        tokenInfo.IssuedAt.Unix(),
-		"iss":        tokenInfo.Issuer,
-		"aud":        tokenInfo.Audience,
+	response := &models.IntrospectionResponse{
+		Active:    tokenInfo.Active,
+		TokenType: tokenInfo.TokenType,
+		Scope:     utils.JoinStrings(tokenInfo.Scopes),
+		ClientID:  tokenInfo.ClientID,
+		Username:  tokenInfo.UserID,
+		Exp:       tokenInfo.ExpiresAt.Unix(),
+		Iat:       tokenInfo.IssuedAt.Unix(),
+		Iss:       tokenInfo.Issuer,
+		Aud:       tokenInfo.Audience,
+		Sub:       tokenInfo.UserID,
 	}
 
 	return response, nil
@@ -255,15 +260,16 @@ func RefreshAccessToken(tokenStore *store.TokenStore, refreshToken, clientID, us
 
 	// Use the scopes from the refresh token
 	scopes := tokenData.Scopes
+	audiences := tokenData.Audience
 
 	// Generate new access token with the same scopes as the refresh token
-	newAccessToken, err := GenerateAccessToken(tokenStore, userID, clientID, scopes, accessTokenExpiresIn)
+	newAccessToken, err := GenerateAccessToken(tokenStore, userID, clientID, scopes, audiences)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate new access token: %w", err)
 	}
 
 	// Generate new refresh token (optional, some implementations keep the same one)
-	newRefreshToken, err := GenerateRefreshToken(tokenStore, userID, clientID, scopes, refreshTokenExpiresIn)
+	newRefreshToken, err := GenerateRefreshToken(tokenStore, userID, clientID, scopes, audiences)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate new refresh token: %w", err)
 	}

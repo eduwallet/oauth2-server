@@ -51,12 +51,13 @@ type ServerConfig struct {
 
 // SecurityConfig holds security-related configuration
 type SecurityConfig struct {
-	JWTSecret                 string `yaml:"jwt_signing_key"`
-	TokenExpirySeconds        int    `yaml:"token_expiry_seconds"`
-	RefreshTokenExpirySeconds int    `yaml:"refresh_token_expiry_seconds"`
-	DeviceCodeExpirySeconds   int    `yaml:"device_code_expiry_seconds"`
-	EnablePKCE                bool   `yaml:"enable_pkce"`
-	RequireHTTPS              bool   `yaml:"require_https"`
+	JWTSecret                      string `yaml:"jwt_signing_key"`
+	TokenExpirySeconds             int    `yaml:"token_expiry_seconds"`
+	RefreshTokenExpirySeconds      int    `yaml:"refresh_token_expiry_seconds"`
+	DeviceCodeExpirySeconds        int    `yaml:"device_code_expiry_seconds"`
+	AuthorizationCodeExpirySeconds int    `yaml:"authorization_code_expiry_seconds"`
+	EnablePKCE                     bool   `yaml:"enable_pkce"`
+	RequireHTTPS                   bool   `yaml:"require_https"`
 }
 
 // LoggingConfig holds logging configuration
@@ -259,16 +260,6 @@ func LoadYAMLConfig(configPath string) (*YAMLConfig, error) {
 	}
 
 	return &yamlConfig, nil
-}
-
-// Example of how to replace io/ioutil.ReadFile:
-func loadConfigFile(filename string) ([]byte, error) {
-	return os.ReadFile(filename)
-}
-
-// Example of how to replace io/ioutil.WriteFile:
-func saveConfigFile(filename string, data []byte) error {
-	return os.WriteFile(filename, data, 0644)
 }
 
 // Helper functions

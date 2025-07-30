@@ -49,19 +49,6 @@ func ValidateJWT(tokenString string, signingKey []byte) (jwt.MapClaims, error) {
 	return nil, fmt.Errorf("invalid token")
 }
 
-// ParseScope parses a space-separated scope string into a slice
-func ParseScope(scope string) []string {
-	if scope == "" {
-		return []string{}
-	}
-	return strings.Fields(scope)
-}
-
-// JoinScope joins a slice of scopes into a space-separated string
-func JoinScope(scopes []string) string {
-	return strings.Join(scopes, " ")
-}
-
 // ExtractBearerToken extracts a bearer token from the Authorization header
 func ExtractBearerToken(r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
@@ -130,21 +117,21 @@ func RemoveDuplicates(slice []string) []string {
 	return result
 }
 
-// SplitScopes splits a space-separated scope string into individual scopes
-func SplitScopes(scopes string) []string {
-	if scopes == "" {
+// SplitString splits a space-separated scope string into individual scopes
+func SplitString(values string) []string {
+	if values == "" {
 		return []string{}
 	}
-	return strings.Fields(scopes)
+	return strings.Fields(values)
 }
 
-// JoinScopes joins individual scopes into a space-separated string
-func JoinScopes(scopes []string) string {
+// JoinStrings joins individual scopes into a space-separated string
+func JoinStrings(values []string) string {
 	// Filter out empty strings
 	var filtered []string
-	for _, scope := range scopes {
-		if scope != "" {
-			filtered = append(filtered, scope)
+	for _, value := range values {
+		if value != "" {
+			filtered = append(filtered, value)
 		}
 	}
 	return strings.Join(filtered, " ")
@@ -152,9 +139,16 @@ func JoinScopes(scopes []string) string {
 
 // NormalizeScope normalizes a scope string by removing duplicates and sorting
 func NormalizeScope(scopes string) string {
-	scopeList := SplitScopes(scopes)
+	scopeList := SplitString(scopes)
 	scopeList = RemoveDuplicates(scopeList)
-	return JoinScopes(scopeList)
+	return JoinStrings(scopeList)
+}
+
+// NormalizeAudience normalizes a audience string by removing duplicates and sorting
+func NormalizeAudience(audiences string) string {
+	audienceList := SplitString(audiences)
+	audienceList = RemoveDuplicates(audienceList)
+	return JoinStrings(audienceList)
 }
 
 // FilterScopes filters requested scopes against allowed scopes

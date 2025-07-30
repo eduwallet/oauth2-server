@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"log"
+	"oauth2-server/internal/utils"
 	"sync"
 	"time"
 )
@@ -16,6 +18,7 @@ type Token struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Revoked   bool      `json:"revoked"`
 	CreatedAt time.Time `json:"created_at"`
+	Audience  []string  `json:"aud"`
 }
 
 // TokenInfo represents token information for validation
@@ -34,19 +37,31 @@ type TokenInfo struct {
 
 // TokenStore manages tokens
 type TokenStore struct {
-	tokens map[string]*Token
-	mutex  sync.RWMutex
+	tokens            map[string]*Token
+	mutex             sync.RWMutex
+	TokenExpiryConfig map[string]time.Duration // e.g. {"access_token": 1 * time.Hour, "refresh_token": 24 * time.Hour}
 }
 
 // NewTokenStore creates a new token store
-func NewTokenStore() *TokenStore {
+func NewTokenStore(expiryConfig map[string]time.Duration) *TokenStore {
 	return &TokenStore{
-		tokens: make(map[string]*Token),
+		tokens:            make(map[string]*Token),
+		TokenExpiryConfig: expiryConfig,
 	}
 }
 
 // StoreToken stores a token
-func (s *TokenStore) StoreToken(tokenString, tokenType, clientID, userID string, scopes []string, expiresAt time.Time) error {
+func (s *TokenStore) StoreToken(tokenString, tokenType, clientID, userID string, scopes []string, audience []string) error {
+	if !utils.Contains(audience, clientID) {
+		audience = append(audience, clientID)
+	}
+
+	expiry, ok := s.TokenExpiryConfig[tokenType]
+	if !ok {
+		return errors.New("unknown token type for expiry config")
+	}
+	expiresAt := time.Now().Add(expiry)
+
 	token := &Token{
 		Token:     tokenString,
 		TokenType: tokenType,
@@ -56,6 +71,7 @@ func (s *TokenStore) StoreToken(tokenString, tokenType, clientID, userID string,
 		ExpiresAt: expiresAt,
 		Revoked:   false,
 		CreatedAt: time.Now(),
+		Audience:  audience,
 	}
 
 	s.mutex.Lock()
@@ -82,9 +98,16 @@ func (s *TokenStore) ValidateToken(token string) (*TokenInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Validating token: %s", t.Token)
+	log.Printf("Token type: %s, Client ID: %s, User ID: %s", t.TokenType, t.ClientID, t.UserID)
+	log.Printf("Scopes: %v, Audience: %v", t.Scopes, t.Audience)
+	log.Printf("Expires at: %s, Created at: %s", t.ExpiresAt, t.CreatedAt)
+	log.Printf("Current time: %s", time.Now())
+
 	if t.Revoked {
 		return nil, errors.New("token has been revoked")
 	}
+
 	if time.Now().After(t.ExpiresAt) {
 		return nil, errors.New("token has expired")
 	}
@@ -95,10 +118,10 @@ func (s *TokenStore) ValidateToken(token string) (*TokenInfo, error) {
 		UserID:    t.UserID,
 		Scopes:    t.Scopes,
 		ExpiresAt: t.ExpiresAt,
-		Active:    true,
 		IssuedAt:  t.CreatedAt,
 		Issuer:    "oauth2-server",
-		Audience:  []string{"api"},
+		Audience:  t.Audience,
+		Active:    true,
 	}
 	return tokenInfo, nil
 }

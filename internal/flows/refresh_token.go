@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"oauth2-server/internal/auth"
 	"oauth2-server/internal/models"
@@ -87,9 +86,9 @@ func (f *RefreshTokenFlow) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify token belongs to the client
-	if tokenInfo.ClientID != clientID {
-		utils.WriteErrorResponse(w, "invalid_grant", "Refresh token does not belong to client")
+	// Verify token belongs to the client or client is in the audience
+	if tokenInfo.ClientID != clientID && !utils.Contains(tokenInfo.Audience, clientID) {
+		utils.WriteErrorResponse(w, "invalid_grant", "Refresh token does not belong to client or audience")
 		return
 	}
 
@@ -111,18 +110,14 @@ func (f *RefreshTokenFlow) Handle(w http.ResponseWriter, r *http.Request) {
 		newScopeSlice = tokenInfo.Scopes
 	}
 
-	// Generate new tokens using high-level functions (and store them)
-	accessTokenExpiry := time.Hour
-	refreshTokenExpiry := 24 * time.Hour
-
-	newAccessToken, err := auth.GenerateAccessToken(f.tokenStore, tokenInfo.UserID, clientID, newScopeSlice, accessTokenExpiry)
+	newAccessToken, err := auth.GenerateAccessToken(f.tokenStore, tokenInfo.UserID, clientID, newScopeSlice, tokenInfo.Audience)
 	if err != nil {
 		log.Printf("❌ Error generating access token: %v", err)
 		utils.WriteServerError(w, "Failed to generate access token")
 		return
 	}
 
-	newRefreshToken, err := auth.GenerateRefreshToken(f.tokenStore, tokenInfo.UserID, clientID, newScopeSlice, refreshTokenExpiry)
+	newRefreshToken, err := auth.GenerateRefreshToken(f.tokenStore, tokenInfo.UserID, clientID, newScopeSlice, tokenInfo.Audience)
 	if err != nil {
 		log.Printf("❌ Error generating refresh token: %v", err)
 		utils.WriteServerError(w, "Failed to generate refresh token")
@@ -143,6 +138,7 @@ func (f *RefreshTokenFlow) Handle(w http.ResponseWriter, r *http.Request) {
 		ExpiresIn:    int(f.config.Security.TokenExpirySeconds),
 		RefreshToken: newRefreshToken,
 		Scope:        newScope,
+		Audience:     tokenInfo.Audience,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -16,12 +16,6 @@ type ClientHandler struct {
 	config      *config.Config
 }
 
-// jsString safely escapes a Go string for JS argument passing
-func jsString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
-
 // escapeAndJoin safely joins a slice of strings for HTML output
 func escapeAndJoin(arr []string) string {
 	if len(arr) == 0 {

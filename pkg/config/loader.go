@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"oauth2-server/internal/utils"
 	"os"
-	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,24 +59,6 @@ func LoadFromFile(path string, cfg *Config) error {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
-	}
-	return defaultValue
-}
-
-func getEnvAsInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
-		}
-	}
-	return defaultValue
-}
-
-func getEnvAsBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolVal, err := strconv.ParseBool(value); err == nil {
-			return boolVal
-		}
 	}
 	return defaultValue
 }

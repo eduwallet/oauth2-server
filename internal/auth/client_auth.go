@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ory/fosite"
 	"oauth2-server/internal/store"
+
+	"github.com/ory/fosite"
 )
 
 // AuthenticateClient authenticates a client using client credentials
@@ -71,28 +72,6 @@ func ExtractClientCredentials(r *http.Request) (string, string, error) {
 	return clientID, clientSecret, nil
 }
 
-// extractBasicAuth extracts credentials from Basic authentication header
-func extractBasicAuth(authHeader string) (string, string, error) {
-	const prefix = "Basic "
-	if !strings.HasPrefix(authHeader, prefix) {
-		return "", "", errors.New("invalid basic auth header")
-	}
-
-	encoded := authHeader[len(prefix):]
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", "", errors.New("invalid base64 encoding")
-	}
-
-	credentials := string(decoded)
-	parts := strings.SplitN(credentials, ":", 2)
-	if len(parts) != 2 {
-		return "", "", errors.New("invalid basic auth format")
-	}
-
-	return parts[0], parts[1], nil
-}
-
 // ClientHasGrantType checks if client is authorized for a specific grant type
 func ClientHasGrantType(client fosite.Client, grantType string) bool {
 	for _, gt := range client.GetGrantTypes() {
@@ -125,4 +104,19 @@ func ClientHasScope(client fosite.Client, scope string) bool {
 		}
 	}
 	return true
+}
+
+// Validate Audience checks if the client is authorized for a specific audience
+func ClientHasAudience(client fosite.Client, audience string) bool {
+	if audience == "" {
+		return true
+	}
+
+	clientAudiences := client.GetAudience()
+	for _, aud := range clientAudiences {
+		if aud == audience {
+			return true
+		}
+	}
+	return false
 }

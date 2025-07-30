@@ -13,6 +13,7 @@ security:
   token_expiry_seconds: 3600
   refresh_token_expiry_seconds: 86400
   device_code_expiry_seconds: 600
+  authorization_code"_expiry_seconds: 300
   enable_pkce: true
   require_https: false
 

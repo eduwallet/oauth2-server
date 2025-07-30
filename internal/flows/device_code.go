@@ -56,6 +56,7 @@ func (f *DeviceCodeFlow) HandleAuthorization(w http.ResponseWriter, r *http.Requ
 
 	clientID := r.FormValue("client_id")
 	scope := r.FormValue("scope")
+	audience := r.FormValue("audience")
 
 	if clientID == "" {
 		utils.WriteErrorResponse(w, "invalid_request", "client_id is required")
@@ -90,10 +91,13 @@ func (f *DeviceCodeFlow) HandleAuthorization(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Parse and validate scopes
-	requestedScopes := utils.SplitScopes(scope)
+	requestedScopes := utils.SplitString(scope)
 	if len(requestedScopes) == 0 {
-		requestedScopes = []string{"openid"} // Default scope
+		requestedScopes = []string{"openid"}
 	}
+
+	// Parse and validate audiences (optional)
+	requestedAudiences := utils.SplitString(audience)
 
 	// Store device authorization
 	expiresAt := time.Now().Add(time.Duration(f.config.Security.DeviceCodeExpirySeconds) * time.Second)
@@ -102,6 +106,7 @@ func (f *DeviceCodeFlow) HandleAuthorization(w http.ResponseWriter, r *http.Requ
 		UserCode:   userCode,
 		ClientID:   clientID,
 		Scopes:     requestedScopes,
+		Audiences:  requestedAudiences,
 		ExpiresAt:  expiresAt,
 		IssuedAt:   time.Now(),
 		Authorized: false,
@@ -185,7 +190,7 @@ func (f *DeviceCodeFlow) HandleToken(w http.ResponseWriter, r *http.Request) {
 	f.mutex.RUnlock()
 
 	if !exists {
-		utils.WriteInvalidGrantError(w, "Invalid device code")
+		utils.WriteInvalidRequestError(w, "Invalid device code")
 		return
 	}
 
@@ -195,7 +200,7 @@ func (f *DeviceCodeFlow) HandleToken(w http.ResponseWriter, r *http.Request) {
 		delete(f.deviceAuths, deviceCode)
 		delete(f.userCodeToDevice, deviceAuth.UserCode)
 		f.mutex.Unlock()
-		utils.WriteInvalidGrantError(w, "Device code has expired")
+		utils.WriteInvalidRequestError(w, "Device code has expired")
 		return
 	}
 
@@ -208,23 +213,25 @@ func (f *DeviceCodeFlow) HandleToken(w http.ResponseWriter, r *http.Request) {
 
 	if !deviceAuth.CanIssueToken() {
 		if deviceAuth.Used {
-			utils.WriteInvalidGrantError(w, "Device code already used")
+			utils.WriteInvalidRequestError(w, "Device code already used")
 		} else {
-			utils.WriteInvalidGrantError(w, "Device not authorized")
+			utils.WriteInvalidRequestError(w, "Device not authorized")
 		}
 		return
 	}
 
+	log.Printf("🔑 Device code %s authorized for user %s", deviceCode, deviceAuth.UserID)
+	log.Printf("🔑 Client ID: %s, Scopes: %v, Audiences: %v", deviceAuth.ClientID, deviceAuth.Scopes, deviceAuth.Audiences)
+
 	// Generate access token using high-level function (and store it)
-	expiresIn := time.Duration(f.config.Security.TokenExpirySeconds) * time.Second
-	accessToken, err := auth.GenerateAccessToken(f.tokenStore, deviceAuth.UserID, deviceAuth.ClientID, deviceAuth.Scopes, expiresIn)
+	accessToken, err := auth.GenerateAccessToken(f.tokenStore, deviceAuth.UserID, deviceAuth.ClientID, deviceAuth.Scopes, deviceAuth.Audiences)
 	if err != nil {
 		log.Printf("❌ Error generating access token: %v", err)
 		utils.WriteServerError(w, "Failed to generate access token")
 		return
 	}
 
-	refreshToken, err := auth.GenerateRefreshToken(f.tokenStore, deviceAuth.UserID, deviceAuth.ClientID, deviceAuth.Scopes, expiresIn)
+	refreshToken, err := auth.GenerateRefreshToken(f.tokenStore, deviceAuth.UserID, deviceAuth.ClientID, deviceAuth.Scopes, deviceAuth.Audiences)
 	if err != nil {
 		log.Printf("❌ Error generating refresh token: %v", err)
 		utils.WriteServerError(w, "Failed to generate refresh token")
@@ -232,12 +239,13 @@ func (f *DeviceCodeFlow) HandleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create token response
-	tokenResponse := map[string]interface{}{
-		"access_token":  accessToken,
-		"token_type":    "Bearer",
-		"expires_in":    expiresIn,
-		"refresh_token": refreshToken,
-		"scope":         utils.JoinScopes(deviceAuth.Scopes),
+	tokenResponse := models.TokenResponse{
+		AccessToken:  accessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    f.config.Security.TokenExpirySeconds,
+		RefreshToken: refreshToken,
+		Scope:        utils.JoinStrings(deviceAuth.Scopes),
+		Audience:     deviceAuth.Audiences,
 	}
 
 	// Mark device as used
