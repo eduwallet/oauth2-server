@@ -48,14 +48,14 @@ func (f *AuthorizationCodeFlow) HandleAuthorization(w http.ResponseWriter, r *ht
 	log.Printf("🔍 Query parameters: %+v", r.URL.Query())
 
 	// If state is missing, generate one and redirect to the same URL with state set
-	if r.URL.Query().Get("state") == "" {
-		q := r.URL.Query()
-		q.Set("state", generateRandomState())
-		r.URL.RawQuery = q.Encode()
-		http.Redirect(w, r, r.URL.String(), http.StatusFound)
-		return
-	}
-
+	/* 	if r.URL.Query().Get("state") == "" {
+	   		q := r.URL.Query()
+	   		q.Set("state", generateRandomState())
+	   		r.URL.RawQuery = q.Encode()
+	   		http.Redirect(w, r, r.URL.String(), http.StatusFound)
+	   		return
+	   	}
+	*/
 	// Create a new authorization request object and catch any errors
 	ar, err := f.oauth2Provider.NewAuthorizeRequest(ctx, r)
 	if err != nil {

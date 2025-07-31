@@ -538,8 +538,6 @@ func (h *TokenHandlers) HandleTokenStats(w http.ResponseWriter, r *http.Request)
 	log.Printf("📊 Token statistics sent for client: %s", clientID)
 }
 
-// Helper functions
-
 // clientSupportsGrantType checks if a client supports a specific grant type
 func (h *TokenHandlers) clientSupportsGrantType(client interface{}, grantType string) bool {
 	// Try fosite.Arguments first (our client store)
