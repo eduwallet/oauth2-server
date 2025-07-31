@@ -2,7 +2,6 @@ package store
 
 import (
 	"errors"
-	"log"
 	"oauth2-server/internal/utils"
 	"sync"
 	"time"
@@ -39,12 +38,14 @@ type TokenInfo struct {
 type TokenStore struct {
 	tokens            map[string]*Token
 	mutex             sync.RWMutex
+	Issuer            string
 	TokenExpiryConfig map[string]time.Duration // e.g. {"access_token": 1 * time.Hour, "refresh_token": 24 * time.Hour}
 }
 
 // NewTokenStore creates a new token store
-func NewTokenStore(expiryConfig map[string]time.Duration) *TokenStore {
+func NewTokenStore(issuer string, expiryConfig map[string]time.Duration) *TokenStore {
 	return &TokenStore{
+		Issuer:            issuer,
 		tokens:            make(map[string]*Token),
 		TokenExpiryConfig: expiryConfig,
 	}
@@ -98,11 +99,6 @@ func (s *TokenStore) ValidateToken(token string) (*TokenInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Validating token: %s", t.Token)
-	log.Printf("Token type: %s, Client ID: %s, User ID: %s", t.TokenType, t.ClientID, t.UserID)
-	log.Printf("Scopes: %v, Audience: %v", t.Scopes, t.Audience)
-	log.Printf("Expires at: %s, Created at: %s", t.ExpiresAt, t.CreatedAt)
-	log.Printf("Current time: %s", time.Now())
 
 	if t.Revoked {
 		return nil, errors.New("token has been revoked")
@@ -119,7 +115,7 @@ func (s *TokenStore) ValidateToken(token string) (*TokenInfo, error) {
 		Scopes:    t.Scopes,
 		ExpiresAt: t.ExpiresAt,
 		IssuedAt:  t.CreatedAt,
-		Issuer:    "oauth2-server",
+		Issuer:    s.Issuer,
 		Audience:  t.Audience,
 		Active:    true,
 	}

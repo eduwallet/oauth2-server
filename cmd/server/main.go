@@ -150,7 +150,7 @@ func initializeStores() {
 		"refresh_token":      time.Duration(cfg.Security.RefreshTokenExpirySeconds) * time.Second,
 		"authorization_code": time.Duration(cfg.Security.AuthorizationCodeExpirySeconds) * time.Second,
 	}
-	tokenStore = store.NewTokenStore(expiryConfig)
+	tokenStore = store.NewTokenStore(cfg.Server.BaseURL, expiryConfig)
 }
 
 func initializeOAuth2Provider() error {

@@ -108,13 +108,12 @@ See `values.yaml` and `docker-compose.yml` for configuration options.
 
 | Endpoint | Method | Description | RFC |
 |----------|--------|-------------|-----|
-| `/oauth2/auth` | GET | Authorization endpoint | RFC 6749 |
-| `/oauth2/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
-| `/oauth2/device` | POST | Device authorization | RFC 8628 |
+| `/auth` | GET | Authorization endpoint | RFC 6749 |
+| `/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
+| `/device` | POST | Device authorization | RFC 8628 |
 | `/device` | GET/POST | Device verification UI | RFC 8628 |
-| `/oauth2/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
-| `/oauth2/userinfo` | GET | UserInfo endpoint | OIDC Core |
-| `/token/stats` | GET | Token statistics endpoint | Custom |
+| `/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
+| `/userinfo` | GET | UserInfo endpoint | OIDC Core |
 | `/register` | POST | Dynamic client registration (with audience) |
 
 ### Discovery & Health
@@ -148,7 +147,7 @@ curl -X POST http://localhost:8080/register \
 ### Token Exchange for Refresh Token
 
 ```bash
-curl -X POST http://localhost:8080/oauth2/token \
+curl -X POST http://localhost:8080/token \
   -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
   -d "subject_token=<refresh_token>" \
   -d "subject_token_type=urn:ietf:params:oauth:token-type:refresh_token" \
@@ -159,7 +158,7 @@ curl -X POST http://localhost:8080/oauth2/token \
 ### Introspect a Token
 
 ```bash
-curl -X POST http://localhost:8080/oauth2/introspect \
+curl -X POST http://localhost:8080/introspect \
   -d "token=<access_or_refresh_token>"
 ```
 
