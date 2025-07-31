@@ -376,7 +376,7 @@ func showDeviceVerificationForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	html += `
-	<form method="post">
+	<form method="POST">
 		<div class="form-group">
 			<label for="user_code">User Code:</label>
 			<input type="text" id="user_code" name="user_code" value="` + userCode + `" placeholder="Enter user code" required>
