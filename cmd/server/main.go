@@ -44,9 +44,6 @@ var (
 	tokenExchangeFlow *flows.TokenExchangeFlow
 	deviceCodeFlow    *flows.DeviceCodeFlow
 
-	// Documentation handler
-	docsHandler *handlers.DocsHandler
-
 	// Token handlers
 	tokenHandlers *handlers.TokenHandlers
 
@@ -222,9 +219,6 @@ func initializeFlows() {
 	// Start cleanup timer for expired device codes
 	deviceCodeFlow.StartCleanupTimer()
 
-	// Initialize documentation handler
-	docsHandler = handlers.NewDocsHandler(cfg, clientStore)
-
 	// Initialize registration handlers
 	registrationHandlers = handlers.NewRegistrationHandlers(clientStore, cfg)
 
@@ -251,45 +245,12 @@ func setupRoutes() {
 	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler))
 	http.HandleFunc("/register/", proxyAwareMiddleware(registrationConfigHandler))
 
-	// Testing endpoints
-	http.HandleFunc("/client1/auth", proxyAwareMiddleware(client1AuthHandler))
-	http.HandleFunc("/client1/callback", proxyAwareMiddleware(callbackHandler))
-
-	// Health and utility endpoints
+	// Token management endpointsf Health and utility endpoints
 	http.HandleFunc("/health", proxyAwareMiddleware(healthHandler))
 	http.HandleFunc("/", proxyAwareMiddleware(homeHandler))
 
-	// Client management API endpoints (must come before general /api/ route)
-	http.HandleFunc("/api/clients", proxyAwareMiddleware(clientManagementHandler))
-	http.HandleFunc("/api/clients/", proxyAwareMiddleware(clientManagementHandler))
-
 	// General API endpoints (protected with authentication)
 	http.HandleFunc("/api/", proxyAwareMiddleware(apiHandler))
-
-	// Documentation endpoints
-	log.Printf("📚 Registering /docs and /docs/ endpoints")
-	http.HandleFunc("/docs", proxyAwareMiddleware(docsWrapperHandler))
-	http.HandleFunc("/docs/", proxyAwareMiddleware(docsWrapperHandler))
-
-	// Add admin endpoints
-	if cfg != nil {
-		clientHandler := handlers.NewClientHandler(clientStore, cfg)
-		if clientHandler != nil {
-			http.HandleFunc("/admin/clients", clientHandler.HandleClients)
-			http.HandleFunc("/admin/client", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == "POST" {
-					clientHandler.HandleClientUpdate(w, r)
-				} else {
-					clientHandler.HandleClient(w, r)
-				}
-			})
-			http.HandleFunc("/admin/client/edit", clientHandler.HandleEditClient)
-			http.HandleFunc("/admin/config", clientHandler.HandleClientConfig)
-			log.Printf("🔧 Client endpoints enabled at /admin/*")
-		} else {
-			log.Printf("⚠️ Failed to create client handler")
-		}
-	}
 
 	// Use the existing tokenHandlers instance initialized in initializeFlows()
 	http.HandleFunc("/token/stats", proxyAwareMiddleware(tokenHandlers.HandleTokenStats))
@@ -324,22 +285,6 @@ func registrationHandler(w http.ResponseWriter, r *http.Request) {
 
 func registrationConfigHandler(w http.ResponseWriter, r *http.Request) {
 	registrationHandlers.HandleClientConfiguration(w, r)
-}
-
-func docsWrapperHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("📚 /docs endpoint hit: %s", r.URL.Path)
-	docsHandler.ServeHTTP(w, r)
-}
-
-func clientManagementHandler(w http.ResponseWriter, r *http.Request) {
-	// Route client management API calls to the docs handler
-	if r.URL.Path == "/api/clients" {
-		docsHandler.HandleClientsAPI(w, r)
-	} else if len(r.URL.Path) > 13 && r.URL.Path[:13] == "/api/clients/" {
-		docsHandler.HandleClientAPI(w, r)
-	} else {
-		http.NotFound(w, r)
-	}
 }
 
 // Token handler that routes to appropriate flow
@@ -711,10 +656,8 @@ func wellKnownHandler(w http.ResponseWriter, r *http.Request) {
 			"urn:ietf:params:oauth:grant-type:token-exchange",
 		},
 
-		// Custom extensions with proxy-aware URLs
-		"service_documentation": baseURL + "/docs",
-		"op_policy_uri":         baseURL + "/policy",
-		"op_tos_uri":            baseURL + "/terms",
+		"op_policy_uri": baseURL + "/policy",
+		"op_tos_uri":    baseURL + "/terms",
 	}
 
 	json.NewEncoder(w).Encode(wellKnown)
@@ -818,26 +761,13 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		</div>
 
 		<div class="section">
-			%s
-		</div>
-
-		<div class="section">
-			%s
-		</div>
-		
-		<div class="section">
-			<h3>🔗 Quick Test Links</h3>
-			<a href="/docs" class="btn">Operations...</a>
-			<a href="/.well-known/oauth-authorization-server" class="btn">Discovery Document</a>
-			<a href="/health" class="btn">Health Check</a>
-		</div>
-		
-		<div class="section">
 			<h3>📚 API Endpoints</h3>
 			<ul>
 				<li><span class="endpoint">GET /.well-known/oauth-authorization-server</span> - OAuth2 Discovery</li>
 				<li><span class="endpoint">GET /.well-known/openid-configuration</span> - OIDC Discovery</li>
 				<li><span class="endpoint">GET /.well-known/jwks.json</span> - JWKS</li>
+				<li><span class="endpoint">GET /health</span> - Health</li>
+				<li><span class="endpoint">GET /stats</span> - Server Stats</li>
 			</ul>
 		</div>
 
@@ -914,37 +844,11 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		</script>
 	</div>
 </body>
-</html>`, cfg.Server.BaseURL, userListHTML.String(), clientListHTML.String())
+</html>`, cfg.Server.BaseURL)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(homeHTML))
-}
-
-// Client 1 auth handler
-func client1AuthHandler(w http.ResponseWriter, r *http.Request) {
-	// Find the first client from configuration or use default
-	var clientID string
-	var redirectURI string
-
-	if len(cfg.Clients) > 0 {
-		client := cfg.Clients[0]
-		clientID = client.ID
-		if len(client.RedirectURIs) > 0 {
-			redirectURI = client.RedirectURIs[0]
-		} else {
-			redirectURI = cfg.Server.BaseURL + "/client1/callback"
-		}
-	} else {
-		// Fallback to default values
-		clientID = "frontend-app"
-		redirectURI = cfg.Server.BaseURL + "/client1/callback"
-	}
-
-	authURL := fmt.Sprintf("%s/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=openid+profile+email&state=random-state",
-		cfg.Server.BaseURL, clientID, redirectURI)
-
-	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 // API handler with authentication
@@ -1039,19 +943,4 @@ func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 
 		handler(w, r)
 	}
-}
-
-// Add a helper function to get the current request's base URL
-func getRequestBaseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-
-	host := r.Host
-	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
-		host = forwardedHost
-	}
-
-	return scheme + "://" + host
 }
