@@ -17,15 +17,17 @@ import (
 
 // TokenHandlers handles token-related endpoints
 type TokenHandlers struct {
+	provider    fosite.OAuth2Provider
 	clientStore *store.ClientStore
-	tokenStore  *store.TokenStore
+	tokenStore  *store.TokenStore // use your own TokenStore type
 	config      *config.Config
 }
 
 // NewTokenHandlers creates a new token handlers instance
-func NewTokenHandlers(clientStore *store.ClientStore, tokenStore *store.TokenStore, cfg *config.Config) *TokenHandlers {
+func NewTokenHandlers(provider fosite.OAuth2Provider, clients *store.ClientStore, tokenStore *store.TokenStore, cfg *config.Config) *TokenHandlers {
 	return &TokenHandlers{
-		clientStore: clientStore,
+		provider:    provider,
+		clientStore: clients,
 		tokenStore:  tokenStore,
 		config:      cfg,
 	}
@@ -629,4 +631,43 @@ func (h *TokenHandlers) isScopeSubset(requestedScope, originalScope string) bool
 		}
 	}
 	return true
+}
+
+func (h *TokenHandlers) HandleAuthorizationCode(w http.ResponseWriter, r *http.Request) {
+	// Handle authorization code grant type
+	log.Printf("🔄 Processing authorization code request")
+
+	if err := r.ParseForm(); err != nil {
+		log.Printf("❌ Error parsing form: %v", err)
+	} else {
+		for key, values := range r.Form {
+			log.Printf("Form value: %s = %v", key, values)
+		}
+	}
+	log.Printf("[POST] 🔄 Form values: %+v", r.Form)
+
+	h.HandleStandardTokenRequest(w, r)
+}
+
+// HandleStandardTokenRequest processes standard grant types with Fosite
+func (h *TokenHandlers) HandleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	accessRequest, err := h.provider.NewAccessRequest(ctx, r, &auth.UserSession{})
+	if err != nil {
+		log.Printf("❌ Error creating access request: %v", err)
+		h.provider.WriteAccessError(ctx, w, accessRequest, err)
+		return
+	}
+
+	response, err := h.provider.NewAccessResponse(ctx, accessRequest)
+	if err != nil {
+		log.Printf("❌ Error creating access response: %v", err)
+		h.provider.WriteAccessError(ctx, w, accessRequest, err)
+		return
+	}
+
+	log.Printf("✅ Access response created successfully for request: %+v", accessRequest)
+	log.Printf("✅ Access response : %+v", response)
+
+	h.provider.WriteAccessResponse(ctx, w, accessRequest, response)
 }

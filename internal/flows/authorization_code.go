@@ -56,6 +56,7 @@ func (f *AuthorizationCodeFlow) HandleAuthorization(w http.ResponseWriter, r *ht
 	   		return
 	   	}
 	*/
+
 	// Create a new authorization request object and catch any errors
 	ar, err := f.oauth2Provider.NewAuthorizeRequest(ctx, r)
 	if err != nil {
@@ -80,6 +81,8 @@ func (f *AuthorizationCodeFlow) HandleAuthorization(w http.ResponseWriter, r *ht
 		if user := f.authenticateUser(username, password); user != nil {
 			userID = user.ID
 		}
+	} else {
+		userID = r.FormValue("user_id")
 	}
 
 	// If no user authenticated, show login form
@@ -347,6 +350,8 @@ func (f *AuthorizationCodeFlow) handleConsent(w http.ResponseWriter, r *http.Req
 		Username: username,
 		Subject:  userID,
 	}
+	log.Printf("Client %s grant_types: %v, response_types: %v", ar.GetClient().GetID(), ar.GetClient().GetGrantTypes(), ar.GetClient().GetResponseTypes())
+	log.Printf("Authorize request response_type: %v", ar.GetResponseTypes())
 
 	// Generate the authorization code response
 	response, err := f.oauth2Provider.NewAuthorizeResponse(ctx, ar, mySessionData)

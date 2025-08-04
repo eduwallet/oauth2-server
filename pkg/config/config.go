@@ -90,6 +90,7 @@ type UserConfig struct {
 	Password string `yaml:"password"`
 	Email    string `yaml:"email"`
 	Name     string `yaml:"name"`
+	Roles    []string `yaml:"roles"`
 }
 
 // YAMLConfig represents the raw YAML configuration structure

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -13,8 +12,7 @@ import (
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
-	"github.com/ory/fosite/storage"
-	"github.com/sirupsen/logrus" // Add this import
+	"github.com/sirupsen/logrus"
 
 	"oauth2-server/internal/auth"
 	"oauth2-server/internal/flows"
@@ -31,11 +29,11 @@ var (
 	// Application configuration
 	cfg *config.Config
 
-	// OAuth2 provider and stores
+	// memory store for clients and tokens
+	memoryStore *store.CompositeStore
+
+	// OAuth2 provider
 	oauth2Provider fosite.OAuth2Provider
-	clientStore    *store.ClientStore
-	authCodeStore  *store.AuthCodeStore
-	tokenStore     *store.TokenStore
 
 	// OAuth2 flows
 	authCodeFlow      *flows.AuthorizationCodeFlow
@@ -51,15 +49,36 @@ var (
 	registrationHandlers *handlers.RegistrationHandlers
 )
 
-// CompositeStore combines our custom ClientStore with Fosite's MemoryStore
-type CompositeStore struct {
-	*store.ClientStore
-	*storage.MemoryStore
-}
+// LoadClientsFromConfig loads clients from configuration into the store
+func LoadClientsFromConfig(clients []config.ClientConfig) error {
+	for _, clientConfig := range clients {
+		// Hash the client secret if it exists
+		var hashedSecret []byte
+		if clientConfig.Secret != "" {
+			// In production, use proper password hashing (bcrypt, argon2, etc.)
+			hashedSecret = []byte(clientConfig.Secret) // Simplified for now
+		}
 
-// GetClient implements fosite.ClientManager
-func (c *CompositeStore) GetClient(ctx context.Context, id string) (fosite.Client, error) {
-	return c.ClientStore.GetClient(ctx, id)
+//		client := &fosite.DefaultClient{
+		client := &store.Client{
+			ID:            clientConfig.ID,
+			Secret:        hashedSecret,
+			RedirectURIs:  clientConfig.RedirectURIs,
+			GrantTypes:    clientConfig.GrantTypes,
+			ResponseTypes: clientConfig.ResponseTypes,
+			Scopes:        clientConfig.Scopes,
+			Audience:      clientConfig.Audience,
+			Public:        clientConfig.Public,
+		}
+
+//		memoryStore.Clients[client.ID] = client
+		memoryStore.ClientStore.StoreClient(client)
+
+		log.Printf("✅ Loaded client from config: %s Redirect URIs: %v, Secret: %s", client.ID, client.RedirectURIs, client.Secret)
+	}
+
+	log.Printf("📦 Loaded %d clients from configuration", len(clients))
+	return nil
 }
 
 func main() {
@@ -108,17 +127,14 @@ func main() {
 	log.Printf("✅ Configuration loaded successfully")
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
 
-	// Initialize stores
-	initializeStores()
-
-	// Load clients from configuration
-	if err := clientStore.LoadClientsFromConfig(cfg.Clients); err != nil {
-		log.Fatalf("❌ Failed to load clients from config: %v", err)
-	}
-
 	// Initialize OAuth2 provider
 	if err := initializeOAuth2Provider(); err != nil {
 		log.Fatalf("❌ Failed to initialize OAuth2 provider: %v", err)
+	}
+
+	// Load clients from configuration
+	if err := LoadClientsFromConfig(cfg.Clients); err != nil {
+		log.Fatalf("❌ Failed to load clients from config: %v", err)
 	}
 
 	// Initialize flows
@@ -140,19 +156,6 @@ func main() {
 	}
 }
 
-func initializeStores() {
-	clientStore = store.NewClientStore()
-	authCodeStore = store.NewAuthCodeStore()
-
-	// Token store with configurable expiry
-	expiryConfig := map[string]time.Duration{
-		"access_token":       time.Duration(cfg.Security.TokenExpirySeconds) * time.Second,
-		"refresh_token":      time.Duration(cfg.Security.RefreshTokenExpirySeconds) * time.Second,
-		"authorization_code": time.Duration(cfg.Security.AuthorizationCodeExpirySeconds) * time.Second,
-	}
-	tokenStore = store.NewTokenStore(cfg.Server.BaseURL, expiryConfig)
-}
-
 func initializeOAuth2Provider() error {
 	// Generate RSA key for JWT signing
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -160,14 +163,18 @@ func initializeOAuth2Provider() error {
 		return fmt.Errorf("failed to generate RSA key: %w", err)
 	}
 
-	// Create memory store for non-client data (sessions, codes, etc.)
-	memoryStore := storage.NewMemoryStore()
+	// Setup expiry configuration
+	// This should match your security settings in the config
+	expiryConfig := map[string]time.Duration{
+		"access_token":       time.Duration(cfg.Security.TokenExpirySeconds) * time.Second,
+		"refresh_token":      time.Duration(cfg.Security.RefreshTokenExpirySeconds) * time.Second,
+		"authorization_code": time.Duration(cfg.Security.AuthorizationCodeExpirySeconds) * time.Second,
+	}
 
-	// Create a composite store that uses our clientStore for clients
-	// and memoryStore for everything else
-	compositeStore := &CompositeStore{
-		ClientStore: clientStore,
-		MemoryStore: memoryStore,
+	// Initialize memory store
+	memoryStore = &store.CompositeStore{
+		ClientStore: store.NewClientStore(),
+		TokenStore:  store.NewTokenStore(cfg.BaseURL, expiryConfig),
 	}
 
 	// Configure OAuth2 provider
@@ -181,25 +188,10 @@ func initializeOAuth2Provider() error {
 		AudienceMatchingStrategy: fosite.DefaultAudienceMatchingStrategy,
 	}
 
-	// Build OAuth2 provider with all grant types
-	oauth2Provider = compose.Compose(
+	oauth2Provider = compose.ComposeAllEnabled(
 		config,
-		compositeStore,
-		&compose.CommonStrategy{
-			CoreStrategy: compose.NewOAuth2HMACStrategy(config),
-			OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(
-				func(ctx context.Context) (interface{}, error) {
-					return privateKey, nil
-				},
-				config,
-			),
-		},
-		compose.OAuth2AuthorizeExplicitFactory,
-		compose.OAuth2ClientCredentialsGrantFactory,
-		compose.OAuth2RefreshTokenGrantFactory,
-		compose.OpenIDConnectExplicitFactory,
-		compose.OAuth2TokenIntrospectionFactory,
-		compose.OAuth2TokenRevocationFactory,
+		memoryStore,
+		privateKey,
 	)
 
 	return nil
@@ -207,20 +199,20 @@ func initializeOAuth2Provider() error {
 
 func initializeFlows() {
 	// Initialize token handlers
-	tokenHandlers = handlers.NewTokenHandlers(clientStore, tokenStore, cfg)
+	tokenHandlers = handlers.NewTokenHandlers(oauth2Provider, memoryStore.ClientStore, memoryStore.TokenStore, cfg)
 
 	authCodeFlow = flows.NewAuthorizationCodeFlow(oauth2Provider, cfg)
 
-	clientCredsFlow = flows.NewClientCredentialsFlow(clientStore, tokenStore, cfg)
-	refreshTokenFlow = flows.NewRefreshTokenFlow(clientStore, tokenStore, cfg)
-	tokenExchangeFlow = flows.NewTokenExchangeFlow(clientStore, tokenStore, cfg)
-	deviceCodeFlow = flows.NewDeviceCodeFlow(clientStore, tokenStore, cfg)
+	clientCredsFlow = flows.NewClientCredentialsFlow(memoryStore.ClientStore, memoryStore.TokenStore, cfg)
+	refreshTokenFlow = flows.NewRefreshTokenFlow(memoryStore.ClientStore, memoryStore.TokenStore, cfg)
+	tokenExchangeFlow = flows.NewTokenExchangeFlow(memoryStore.ClientStore, memoryStore.TokenStore, cfg)
+	deviceCodeFlow = flows.NewDeviceCodeFlow(memoryStore.ClientStore, memoryStore.TokenStore, cfg)
 
 	// Start cleanup timer for expired device codes
 	deviceCodeFlow.StartCleanupTimer()
 
 	// Initialize registration handlers
-	registrationHandlers = handlers.NewRegistrationHandlers(clientStore, cfg)
+	registrationHandlers = handlers.NewRegistrationHandlers(memoryStore.ClientStore, cfg)
 
 	log.Printf("✅ OAuth2 flows initialized")
 }
@@ -257,9 +249,7 @@ func setupRoutes() {
 
 	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		statsHandler := handlers.StatsHandler{
-			TokenStore:  tokenStore,
-			ClientStore: clientStore,
-			Config:      cfg,
+			Config: cfg,
 		}
 		statsHandler.ServeHTTP(w, r)
 	}))
@@ -300,6 +290,8 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 	switch grantType {
 	case "client_credentials":
 		tokenHandlers.HandleClientCredentials(w, r)
+	case "authorization_code":
+		tokenHandlers.HandleAuthorizationCode(w, r)
 	case "refresh_token":
 		tokenHandlers.HandleRefreshToken(w, r)
 	case "urn:ietf:params:oauth:grant-type:token-exchange":
@@ -308,27 +300,8 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 		deviceCodeFlow.HandleToken(w, r)
 	default:
 		// Handle standard grant types with Fosite
-		handleStandardTokenRequest(w, r)
+		tokenHandlers.HandleStandardTokenRequest(w, r)
 	}
-}
-
-func handleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	accessRequest, err := oauth2Provider.NewAccessRequest(ctx, r, &fosite.DefaultSession{})
-	if err != nil {
-		log.Printf("❌ Error creating access request: %v", err)
-		oauth2Provider.WriteAccessError(ctx, w, accessRequest, err)
-		return
-	}
-
-	response, err := oauth2Provider.NewAccessResponse(ctx, accessRequest)
-	if err != nil {
-		log.Printf("❌ Error creating access response: %v", err)
-		oauth2Provider.WriteAccessError(ctx, w, accessRequest, err)
-		return
-	}
-
-	oauth2Provider.WriteAccessResponse(ctx, w, accessRequest, response)
 }
 
 // Device handler for user verification
@@ -480,6 +453,7 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 	// Extract bearer token
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
+		log.Printf("[ERRPR] Missing authorization header")
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
 		return
@@ -487,6 +461,8 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
+		log.Printf("[ERROR] Invalid authorization header format: %s", authHeader)
+		// Set WWW-Authenticate header for proper error response
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
 		return
@@ -494,12 +470,13 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 
 	token := parts[1]
 
+	log.Printf("🔍 User info requested for token: %s", token)
 	// Validate the access token (simplified version)
-	if err := auth.ValidateAccessToken(token); err != nil {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		return
-	}
+	// if err := auth.ValidateAccessToken(token); err != nil {
+	// 	w.Header().Set("WWW-Authenticate", "Bearer")
+	// 	http.Error(w, "Invalid access token", http.StatusUnauthorized)
+	// 	return
+	// }
 
 	// For now, return the first user's info or a default user
 	// In a real implementation, you'd extract user ID from the token
@@ -511,6 +488,7 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 			"name":     user.Name,
 			"email":    user.Email,
 			"username": user.Username,
+			"roles":    user.Roles,
 		}
 	} else {
 		// Fallback if no users configured
@@ -520,6 +498,9 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 			"email": "default@example.com",
 		}
 	}
+
+	fmt.Printf("🔍 User info requested for token: %s\n", token)
+	fmt.Printf("👤 User info: %+v\n", userInfo)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(userInfo)
@@ -693,7 +674,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now().Unix(),
 		"version":   "1.0.0",
 		"base_url":  cfg.Server.BaseURL,
-		"clients":   len(clientStore.ListClients()),
 	}
 
 	json.NewEncoder(w).Encode(response)
@@ -775,70 +755,70 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		<div class="stats-section" style="margin-top:30px;">
 		  <h2 style="text-align:center;">🚦 Server Stats</h2>
 		  <div id="stats-cards" style="display:flex; gap:24px; justify-content:center; flex-wrap:wrap; margin-top:20px;">
-		    <div class="stat-card" id="stat-tokens">
-		      <div class="stat-icon">🔑</div>
-		      <div class="stat-label">Tokens</div>
-		      <div class="stat-value" id="stats-tokens-value">...</div>
-		    </div>
-		    <div class="stat-card" id="stat-clients">
-		      <div class="stat-icon">🧩</div>
-		      <div class="stat-label">Clients</div>
-		      <div class="stat-value" id="stats-clients-value">...</div>
-		    </div>
-		    <div class="stat-card" id="stat-users">
-		      <div class="stat-icon">👤</div>
-		      <div class="stat-label">Users</div>
-		      <div class="stat-value" id="stats-users-value">...</div>
-		    </div>
+			<div class="stat-card" id="stat-tokens">
+			  <div class="stat-icon">🔑</div>
+			  <div class="stat-label">Tokens</div>
+			  <div class="stat-value" id="stats-tokens-value">...</div>
+			</div>
+			<div class="stat-card" id="stat-clients">
+			  <div class="stat-icon">🧩</div>
+			  <div class="stat-label">Clients</div>
+			  <div class="stat-value" id="stats-clients-value">...</div>
+			</div>
+			<div class="stat-card" id="stat-users">
+			  <div class="stat-icon">👤</div>
+			  <div class="stat-label">Users</div>
+			  <div class="stat-value" id="stats-users-value">...</div>
+			</div>
 		  </div>
 		</div>
 		<style>
 		  .stat-card {
-		    background: #fff;
-		    border-radius: 12px;
-		    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-		    padding: 24px 32px;
-		    min-width: 140px;
-		    text-align: center;
-		    transition: box-shadow 0.2s;
+			background: #fff;
+			border-radius: 12px;
+			box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+			padding: 24px 32px;
+			min-width: 140px;
+			text-align: center;
+			transition: box-shadow 0.2s;
 		  }
 		  .stat-card:hover {
-		    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+			box-shadow: 0 4px 16px rgba(0,0,0,0.13);
 		  }
 		  .stat-icon {
-		    font-size: 2.2em;
-		    margin-bottom: 8px;
+			font-size: 2.2em;
+			margin-bottom: 8px;
 		  }
 		  .stat-label {
-		    font-size: 1.1em;
-		    color: #555;
-		    margin-bottom: 6px;
-		    font-weight: 500;
+			font-size: 1.1em;
+			color: #555;
+			margin-bottom: 6px;
+			font-weight: 500;
 		  }
 		  .stat-value {
-		    font-size: 2em;
-		    font-weight: bold;
-		    color: #007bff;
+			font-size: 2em;
+			font-weight: bold;
+			color: #007bff;
 		  }
 		</style>
 		<script>
 		function loadStats() {
 		  fetch('/stats')
-		    .then(r => r.json())
-		    .then(stats => {
-		      // Use the correct attribute for tokens
-		      document.getElementById('stats-tokens-value').innerText =
-		        stats.tokens?.tokens?.total ?? (typeof stats.tokens.tokens.total === "number" ? stats.tokens.tokens.total : "—");
-		      document.getElementById('stats-clients-value').innerText =
-		        stats.clients?.total ?? (typeof stats.clients === "number" ? stats.clients : "—");
-		      document.getElementById('stats-users-value').innerText =
-		        stats.users?.total ?? (typeof stats.users === "number" ? stats.users : stats.users ?? "—");
-		    })
-		    .catch(() => {
-		      document.getElementById('stats-tokens-value').innerText = '—';
-		      document.getElementById('stats-clients-value').innerText = '—';
-		      document.getElementById('stats-users-value').innerText = '—';
-		    });
+			.then(r => r.json())
+			.then(stats => {
+			  // Use the correct attribute for tokens
+			  document.getElementById('stats-tokens-value').innerText =
+				stats.tokens?.tokens?.total ?? (typeof stats.tokens.tokens.total === "number" ? stats.tokens.tokens.total : "—");
+			  document.getElementById('stats-clients-value').innerText =
+				stats.clients?.total ?? (typeof stats.clients === "number" ? stats.clients : "—");
+			  document.getElementById('stats-users-value').innerText =
+				stats.users?.total ?? (typeof stats.users === "number" ? stats.users : stats.users ?? "—");
+			})
+			.catch(() => {
+			  document.getElementById('stats-tokens-value').innerText = '—';
+			  document.getElementById('stats-clients-value').innerText = '—';
+			  document.getElementById('stats-users-value').innerText = '—';
+			});
 		}
 		document.addEventListener('DOMContentLoaded', loadStats);
 		</script>
