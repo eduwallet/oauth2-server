@@ -25,7 +25,6 @@ oauth2-demo/
 ├── fosite/                       # local Fosite fork with RFC 8693
 ├── config.yaml                   # Server configuration
 ├── go.mod                        # Go module file
-├── test-endpoints.sh            # Testing script
 ├── oauth2-server                # Compiled binary
 └── README.md                    # Documentation
 ```
