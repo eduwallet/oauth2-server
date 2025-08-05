@@ -3,7 +3,7 @@ package storage
 import (
 	"time"
 
-	"oauth2-demo/internal/config"
+	"oauth2-server/internal/config"
 )
 
 // Storage interface defines the methods for persisting OAuth2 data
@@ -40,6 +40,11 @@ type Storage interface {
 	DeleteTokensByClientID(clientID string) error
 	DeleteTokensByUserID(userID string) error
 
+	// Sessions
+	StoreSession(sessionID, userID string) error
+	GetSession(sessionID string) (*Session, error)
+	DeleteSession(sessionID string) error
+
 	// Cleanup expired entries
 	CleanupExpired() error
 
@@ -49,15 +54,17 @@ type Storage interface {
 
 // AuthorizeRequest represents an OAuth2 authorization request
 type AuthorizeRequest struct {
-	ClientID            string    `json:"client_id"`
-	ResponseType        string    `json:"response_type"`
-	RedirectURI         string    `json:"redirect_uri"`
-	Scope               string    `json:"scope"`
-	State               string    `json:"state"`
-	CodeChallenge       string    `json:"code_challenge,omitempty"`
-	CodeChallengeMethod string    `json:"code_challenge_method,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	ExpiresAt           time.Time `json:"expires_at"`
+	ClientID            string                 `json:"client_id"`
+	ResponseType        string                 `json:"response_type"`
+	RedirectURI         string                 `json:"redirect_uri"`
+	Scopes              []string               `json:"scope"`
+	State               string                 `json:"state"`
+	CodeChallenge       string                 `json:"code_challenge,omitempty"`
+	CodeChallengeMethod string                 `json:"code_challenge_method,omitempty"`
+	CreatedAt           time.Time              `json:"created_at"`
+	ExpiresAt           time.Time              `json:"expires_at"`
+	UserID              string                 `json:"user_id,omitempty"` // Set when user authorizes the request
+	Extra               map[string]interface{} `json:"extra,omitempty"`   // Additional parameters
 }
 
 // DeviceCodeResponse represents the response for device authorization
@@ -65,30 +72,34 @@ type DeviceCodeResponse struct {
 	DeviceCode              string `json:"device_code"`
 	UserCode                string `json:"user_code"`
 	VerificationURI         string `json:"verification_uri"`
-	VerificationURIComplete string `json:"verification_uri_complete"`
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
 	ExpiresIn               int    `json:"expires_in"`
 	Interval                int    `json:"interval"`
 }
 
 // DeviceCodeState represents the internal state of a device authorization
 type DeviceCodeState struct {
-	*DeviceCodeResponse
+	DeviceCode  string    `json:"device_code"`
+	UserCode    string    `json:"user_code"`
 	ClientID    string    `json:"client_id"`
-	Scope       string    `json:"scope"`
-	CreatedAt   time.Time `json:"created_at"`
+	UserID      string    `json:"user_id,omitempty"`
+	Scopes      []string  `json:"scopes"`
+	ExpiresIn   int       `json:"expires_in"`
 	ExpiresAt   time.Time `json:"expires_at"`
+	Interval    int       `json:"interval"`
+	CreatedAt   time.Time `json:"created_at"`
 	Authorized  bool      `json:"authorized"`
-	UserID      string    `json:"user_id"`      // Set when user authorizes the device
-	AccessToken string    `json:"access_token"` // Set when authorization is complete
+	AccessToken string    `json:"access_token,omitempty"`
 }
 
 // TokenInfo represents stored token information
 type TokenInfo struct {
+	Issuer    string                 `json:"issuer"` // TO DO - add issuer field
 	Token     string                 `json:"token"`
 	TokenType string                 `json:"token_type"` // "access", "refresh", "id"
 	ClientID  string                 `json:"client_id"`
 	UserID    string                 `json:"user_id,omitempty"`
-	Scope     string                 `json:"scope,omitempty"`
+	Scopes    []string               `json:"scope,omitempty"`
 	Audience  []string               `json:"audience,omitempty"`
 	Subject   string                 `json:"subject,omitempty"`
 	IssuedAt  time.Time              `json:"issued_at"`
@@ -107,4 +118,14 @@ type TokenInfo struct {
 	// Metadata
 	GrantType string    `json:"grant_type,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Session represents a user session
+type Session struct {
+	SessionID string                 `json:"session_id"`
+	UserID    string                 `json:"user_id"`
+	CreatedAt time.Time              `json:"created_at"`
+	ExpiresAt time.Time              `json:"expires_at"`
+	Active    bool                   `json:"active"`
+	Extra     map[string]interface{} `json:"extra,omitempty"`
 }

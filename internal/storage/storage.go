@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"oauth2-demo/internal/config"
+	"oauth2-server/internal/config"
 )
 
 // CustomStorage provides storage for OAuth2 data

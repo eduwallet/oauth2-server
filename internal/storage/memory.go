@@ -1,10 +1,11 @@
 package storage
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
-	"oauth2-demo/internal/config"
+	"oauth2-server/internal/config"
 )
 
 // MemoryStorage implements the Storage interface using in-memory maps
@@ -15,6 +16,7 @@ type MemoryStorage struct {
 	dynamicClients     map[string]*config.ClientConfig
 	registrationTokens map[string]string     // token -> client_id mapping
 	tokens             map[string]*TokenInfo // OAuth2 tokens
+	sessions           map[string]*Session
 }
 
 // NewMemoryStorage creates a new in-memory storage instance
@@ -25,6 +27,7 @@ func NewMemoryStorage() *MemoryStorage {
 		dynamicClients:     make(map[string]*config.ClientConfig),
 		registrationTokens: make(map[string]string),
 		tokens:             make(map[string]*TokenInfo),
+		sessions:           make(map[string]*Session),
 	}
 }
 
@@ -159,8 +162,11 @@ func (m *MemoryStorage) GetToken(token string) (*TokenInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	tokenInfo, exists := m.tokens[token]
-	if !exists {
-		return nil, nil
+	if !exists || tokenInfo == nil {
+		return nil, fmt.Errorf("token not found")
+	}
+	if !tokenInfo.Active || time.Now().After(tokenInfo.ExpiresAt) {
+		return nil, fmt.Errorf("token expired or inactive")
 	}
 	return tokenInfo, nil
 }
@@ -260,10 +266,63 @@ func (m *MemoryStorage) CleanupExpired() error {
 		}
 	}
 
+	// Clean expired sessions
+	for sessionID, session := range m.sessions {
+		if now.After(session.ExpiresAt) || !session.Active {
+			delete(m.sessions, sessionID)
+		}
+	}
+
 	return nil
 }
 
 // Close is a no-op for memory storage
 func (m *MemoryStorage) Close() error {
+	return nil
+}
+
+// Add these methods to your internal/storage/memory.go file
+
+// StoreSession stores a user session
+func (m *MemoryStorage) StoreSession(sessionID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session := &Session{
+		SessionID: sessionID,
+		UserID:    userID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(1 * time.Hour), // 1 hour expiry
+		Active:    true,
+	}
+
+	m.sessions[sessionID] = session
+	return nil
+}
+
+// GetSession retrieves a session by session ID
+func (m *MemoryStorage) GetSession(sessionID string) (*Session, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists {
+		return nil, fmt.Errorf("session not found")
+	}
+
+	// Check if session is expired
+	if time.Now().After(session.ExpiresAt) || !session.Active {
+		return nil, fmt.Errorf("session expired or inactive")
+	}
+
+	return session, nil
+}
+
+// DeleteSession removes a session
+func (m *MemoryStorage) DeleteSession(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.sessions, sessionID)
 	return nil
 }

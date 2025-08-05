@@ -92,22 +92,33 @@ type ClientConfig struct {
 	GrantTypes              []string `yaml:"grant_types"`
 	ResponseTypes           []string `yaml:"response_types"`
 	Scopes                  []string `yaml:"scopes"`
-	Audience                []string `yaml:"audience"`
 	TokenEndpointAuthMethod string   `yaml:"token_endpoint_auth_method"`
 	Public                  bool     `yaml:"public"`
-	EnabledFlows            []string `yaml:"enabled_flows"`
+
+	// RFC 8693 Token Exchange fields
+	AllowTokenExchange bool     `yaml:"allow_token_exchange"`
+	AllowedAudiences   []string `yaml:"allowed_audiences"`
+
+	// Additional fields you might have
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // UserConfig represents a user configuration
 type UserConfig struct {
-	ID       string   `yaml:"id"`
-	Username string   `yaml:"username"`
-	Password string   `yaml:"password"`
-	Name     string   `yaml:"name"`
-	Email    string   `yaml:"email"`
-	Enabled  bool     `yaml:"enabled"`
-	Roles    []string `yaml:"roles"`
-	Scopes   []string `yaml:"scopes"`
+	ID            string   `yaml:"id"`
+	Username      string   `yaml:"username"`
+	Password      string   `yaml:"password"`
+	Name          string   `yaml:"name"`
+	GivenName     string   `yaml:"given_name"`
+	FamilyName    string   `yaml:"family_name"`
+	Nickname      string   `yaml:"nickname"`
+	Email         string   `yaml:"email"`
+	EmailVerified bool     `yaml:"email_verified"`
+	Picture       string   `yaml:"picture"`
+	Website       string   `yaml:"website"`
+	Enabled       bool     `yaml:"enabled"`
+	Roles         []string `yaml:"roles"`
+	Scopes        []string `yaml:"scopes"`
 }
 
 // LoadConfig loads configuration from a YAML file
@@ -159,6 +170,45 @@ func setDefaults(config *Config) {
 	}
 	if config.Logging.Level == "" {
 		config.Logging.Level = "info"
+	}
+
+	// Set defaults for clients
+	for i := range config.Clients {
+		client := &config.Clients[i]
+
+		// Set default grant types if not specified
+		if len(client.GrantTypes) == 0 {
+			client.GrantTypes = []string{"authorization_code", "refresh_token"}
+		}
+
+		// Set default response types if not specified
+		if len(client.ResponseTypes) == 0 {
+			client.ResponseTypes = []string{"code"}
+		}
+
+		// Set default token endpoint auth method
+		if client.TokenEndpointAuthMethod == "" {
+			if client.Public {
+				client.TokenEndpointAuthMethod = "none"
+			} else {
+				client.TokenEndpointAuthMethod = "client_secret_basic"
+			}
+		}
+	}
+
+	// Set defaults for users
+	for i := range config.Users {
+		user := &config.Users[i]
+
+		// Enable user by default
+		if !user.Enabled {
+			user.Enabled = true
+		}
+
+		// Set default email verification
+		if user.Email != "" && !user.EmailVerified {
+			user.EmailVerified = true // Default to verified for config-based users
+		}
 	}
 }
 

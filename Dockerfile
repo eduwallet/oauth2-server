@@ -38,6 +38,7 @@ FROM gcr.io/distroless/static:nonroot
 
 # Copy binary from builder stage
 COPY --from=builder /app/oauth2-server /app/oauth2-server
+COPY --from=builder /app/templates /app/templates
 
 # Copy configuration files
 COPY --from=builder /app/config.yaml /app/config.yaml

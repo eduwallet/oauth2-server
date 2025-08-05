@@ -1,4 +1,4 @@
-module oauth2-demo
+module oauth2-server
 
 go 1.21
 

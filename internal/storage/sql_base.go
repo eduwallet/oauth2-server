@@ -4,9 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
-	"oauth2-demo/internal/config"
+	"oauth2-server/internal/config"
 )
 
 // SQLDialect defines the interface for SQL-specific operations
@@ -66,7 +67,7 @@ func (s *BaseSQLStorage) migrate() error {
 // Authorization codes methods
 func (s *BaseSQLStorage) StoreAuthCode(code string, authReq *AuthorizeRequest) error {
 	query := fmt.Sprintf(`INSERT INTO auth_codes 
-		(code, client_id, response_type, redirect_uri, scope, state, code_challenge, code_challenge_method, created_at, expires_at)
+		(code, client_id, response_type, redirect_uri, scopes, state, code_challenge, code_challenge_method, created_at, expires_at)
 		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
 		s.dialect.Placeholder(1), s.dialect.Placeholder(2), s.dialect.Placeholder(3),
 		s.dialect.Placeholder(4), s.dialect.Placeholder(5), s.dialect.Placeholder(6),
@@ -78,7 +79,7 @@ func (s *BaseSQLStorage) StoreAuthCode(code string, authReq *AuthorizeRequest) e
 		authReq.ClientID,
 		authReq.ResponseType,
 		authReq.RedirectURI,
-		authReq.Scope,
+		authReq.Scopes,
 		authReq.State,
 		authReq.CodeChallenge,
 		authReq.CodeChallengeMethod,
@@ -89,7 +90,7 @@ func (s *BaseSQLStorage) StoreAuthCode(code string, authReq *AuthorizeRequest) e
 }
 
 func (s *BaseSQLStorage) GetAuthCode(code string) (*AuthorizeRequest, error) {
-	query := fmt.Sprintf(`SELECT client_id, response_type, redirect_uri, scope, state, code_challenge, code_challenge_method, created_at, expires_at
+	query := fmt.Sprintf(`SELECT client_id, response_type, redirect_uri, scopes, state, code_challenge, code_challenge_method, created_at, expires_at
 		FROM auth_codes WHERE code = %s`, s.dialect.Placeholder(1))
 
 	row := s.db.QueryRow(query, code)
@@ -99,7 +100,7 @@ func (s *BaseSQLStorage) GetAuthCode(code string) (*AuthorizeRequest, error) {
 		&authReq.ClientID,
 		&authReq.ResponseType,
 		&authReq.RedirectURI,
-		&authReq.Scope,
+		&authReq.Scopes,
 		&authReq.State,
 		&authReq.CodeChallenge,
 		&authReq.CodeChallengeMethod,
@@ -125,27 +126,30 @@ func (s *BaseSQLStorage) DeleteAuthCode(code string) error {
 
 // Device codes methods
 func (s *BaseSQLStorage) StoreDeviceCode(deviceCode string, state *DeviceCodeState) error {
+	// Convert scopes slice to space-separated string for storage
+	scopesStr := strings.Join(state.Scopes, " ")
+
+	// Calculate expires_at from Interval (rename this field usage)
+	expiresAt := state.CreatedAt.Add(time.Duration(state.ExpiresIn) * time.Second)
+
 	query := fmt.Sprintf(`INSERT INTO device_codes 
-		(device_code, user_code, client_id, scope, verification_uri, verification_uri_complete, 
-		 expires_in, interval, created_at, expires_at, authorized, user_id, access_token)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		(device_code, user_code, client_id, scopes, expires_in, interval_seconds, 
+		 created_at, expires_at, authorized, user_id, access_token)
+		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
 		s.dialect.Placeholder(1), s.dialect.Placeholder(2), s.dialect.Placeholder(3),
 		s.dialect.Placeholder(4), s.dialect.Placeholder(5), s.dialect.Placeholder(6),
 		s.dialect.Placeholder(7), s.dialect.Placeholder(8), s.dialect.Placeholder(9),
-		s.dialect.Placeholder(10), s.dialect.Placeholder(11), s.dialect.Placeholder(12),
-		s.dialect.Placeholder(13))
+		s.dialect.Placeholder(10), s.dialect.Placeholder(11))
 
 	_, err := s.db.Exec(query,
 		deviceCode,
 		state.UserCode,
 		state.ClientID,
-		state.Scope,
-		state.VerificationURI,
-		state.VerificationURIComplete,
-		state.ExpiresIn,
-		state.Interval,
+		scopesStr,
+		state.ExpiresIn, // This field exists in the struct
+		state.Interval,  // This field exists in the struct
 		state.CreatedAt,
-		state.ExpiresAt,
+		expiresAt,
 		state.Authorized,
 		state.UserID,
 		state.AccessToken,
@@ -154,80 +158,97 @@ func (s *BaseSQLStorage) StoreDeviceCode(deviceCode string, state *DeviceCodeSta
 }
 
 func (s *BaseSQLStorage) GetDeviceCode(deviceCode string) (*DeviceCodeState, error) {
-	query := fmt.Sprintf(`SELECT user_code, client_id, scope, verification_uri, verification_uri_complete,
-		expires_in, interval, created_at, expires_at, authorized, user_id, access_token
+	query := fmt.Sprintf(`SELECT user_code, client_id, scopes, expires_in, interval_seconds,
+		created_at, expires_at, authorized, user_id, access_token
 		FROM device_codes WHERE device_code = %s`, s.dialect.Placeholder(1))
 
 	row := s.db.QueryRow(query, deviceCode)
 
+	var scopesStr string
+	var userID, accessToken sql.NullString
+	var expiresAt time.Time
+
 	state := &DeviceCodeState{
-		DeviceCodeResponse: &DeviceCodeResponse{
-			DeviceCode: deviceCode,
-		},
+		DeviceCode: deviceCode,
 	}
 
 	err := row.Scan(
 		&state.UserCode,
 		&state.ClientID,
-		&state.Scope,
-		&state.VerificationURI,
-		&state.VerificationURIComplete,
-		&state.ExpiresIn,
-		&state.Interval,
+		&scopesStr,
+		&state.ExpiresIn, // Map to correct struct field
+		&state.Interval,  // Map to correct struct field
 		&state.CreatedAt,
-		&state.ExpiresAt,
+		&expiresAt,
 		&state.Authorized,
-		&state.UserID,
-		&state.AccessToken,
+		&userID,
+		&accessToken,
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, fmt.Errorf("device code not found")
 	}
 	if err != nil {
 		return nil, err
 	}
 
+	// Convert space-separated scopes back to slice
+	if scopesStr != "" {
+		state.Scopes = strings.Fields(scopesStr)
+	}
+
+	// Set nullable fields
+	state.UserID = userID.String
+	state.AccessToken = accessToken.String
+
 	return state, nil
 }
 
 func (s *BaseSQLStorage) GetDeviceCodeByUserCode(userCode string) (*DeviceCodeState, string, error) {
-	query := fmt.Sprintf(`SELECT device_code, client_id, scope, verification_uri, verification_uri_complete,
-		expires_in, interval, created_at, expires_at, authorized, user_id, access_token
+	query := fmt.Sprintf(`SELECT device_code, client_id, scopes, expires_in, interval_seconds,
+		created_at, expires_at, authorized, user_id, access_token
 		FROM device_codes WHERE user_code = %s`, s.dialect.Placeholder(1))
 
 	row := s.db.QueryRow(query, userCode)
 
-	var deviceCode string
+	var deviceCode, scopesStr string
+	var userID, accessToken sql.NullString
+	var expiresAt time.Time
+
 	state := &DeviceCodeState{
-		DeviceCodeResponse: &DeviceCodeResponse{
-			UserCode: userCode,
-		},
+		UserCode: userCode,
 	}
 
 	err := row.Scan(
 		&deviceCode,
 		&state.ClientID,
-		&state.Scope,
-		&state.VerificationURI,
-		&state.VerificationURIComplete,
-		&state.ExpiresIn,
-		&state.Interval,
+		&scopesStr,
+		&state.ExpiresIn, // Map to correct struct field
+		&state.Interval,  // Map to correct struct field
 		&state.CreatedAt,
-		&state.ExpiresAt,
+		&expiresAt,
 		&state.Authorized,
-		&state.UserID,
-		&state.AccessToken,
+		&userID,
+		&accessToken,
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, "", nil
+		return nil, "", fmt.Errorf("device code not found for user code")
 	}
 	if err != nil {
 		return nil, "", err
 	}
 
+	// Set the device code and convert scopes
 	state.DeviceCode = deviceCode
+	if scopesStr != "" {
+		state.Scopes = strings.Fields(scopesStr)
+	}
+
+	// Set nullable fields
+	state.UserID = userID.String
+	state.AccessToken = accessToken.String
+
 	return state, deviceCode, nil
 }
 
@@ -255,39 +276,58 @@ func (s *BaseSQLStorage) StoreDynamicClient(clientID string, client *config.Clie
 	grantTypes, _ := json.Marshal(client.GrantTypes)
 	responseTypes, _ := json.Marshal(client.ResponseTypes)
 	scopes, _ := json.Marshal(client.Scopes)
-	audience, _ := json.Marshal(client.Audience)
-	enabledFlows, _ := json.Marshal(client.EnabledFlows)
+	allowedAudiences, _ := json.Marshal(client.AllowedAudiences)
+	allowedOrigins, _ := json.Marshal(client.AllowedOrigins)
 
 	query := fmt.Sprintf(`INSERT INTO dynamic_clients 
 		(client_id, client_secret, client_name, description, redirect_uris, grant_types, response_types, 
-		 scope, audience, token_endpoint_auth_method, public, enabled_flows, software_id, software_version, 
+		 scopes, token_endpoint_auth_method, public, allowed_audiences, 
+		 allow_token_exchange, allowed_origins, software_id, software_version, 
 		 client_id_issued_at, client_secret_expires_at, created_at, updated_at)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
 		s.dialect.Placeholder(1), s.dialect.Placeholder(2), s.dialect.Placeholder(3),
 		s.dialect.Placeholder(4), s.dialect.Placeholder(5), s.dialect.Placeholder(6),
 		s.dialect.Placeholder(7), s.dialect.Placeholder(8), s.dialect.Placeholder(9),
 		s.dialect.Placeholder(10), s.dialect.Placeholder(11), s.dialect.Placeholder(12),
 		s.dialect.Placeholder(13), s.dialect.Placeholder(14), s.dialect.Placeholder(15),
-		s.dialect.Placeholder(16), s.dialect.Placeholder(17), s.dialect.Placeholder(18))
+		s.dialect.Placeholder(16), s.dialect.Placeholder(17), s.dialect.Placeholder(18),
+		s.dialect.Placeholder(19))
 
 	now := time.Now()
-	_, err := s.db.Exec(query, clientID, client.Secret, client.Name, client.Description,
-		string(redirectURIs), string(grantTypes), string(responseTypes), string(scopes),
-		string(audience), client.TokenEndpointAuthMethod, client.Public, string(enabledFlows),
-		"", "", &now, nil, &now, &now) // software_id, software_version, issued_at, expires_at, created_at, updated_at
+	_, err := s.db.Exec(query,
+		clientID,
+		client.Secret,
+		client.Name,
+		client.Description,
+		string(redirectURIs),
+		string(grantTypes),
+		string(responseTypes),
+		string(scopes),
+		client.TokenEndpointAuthMethod,
+		client.Public,
+		string(allowedAudiences),
+		client.AllowTokenExchange,
+		string(allowedOrigins),
+		"",   // software_id
+		"",   // software_version
+		&now, // client_id_issued_at
+		nil,  // client_secret_expires_at
+		&now, // created_at
+		&now) // updated_at
 	return err
 }
 
 func (s *BaseSQLStorage) GetDynamicClient(clientID string) (*config.ClientConfig, error) {
 	query := fmt.Sprintf(`SELECT client_secret, client_name, description, redirect_uris, grant_types, response_types,
-		scope, audience, token_endpoint_auth_method, public, enabled_flows
-		FROM dynamic_clients WHERE client_id = %s`, s.dialect.Placeholder(1))
+        scopes, token_endpoint_auth_method, public, allowed_audiences, allow_token_exchange, allowed_origins
+        FROM dynamic_clients WHERE client_id = %s`, s.dialect.Placeholder(1))
 
 	row := s.db.QueryRow(query, clientID)
 
-	var redirectURIsJSON, grantTypesJSON, responseTypesJSON, scopesJSON, audienceJSON, enabledFlowsJSON string
+	var redirectURIsJSON, grantTypesJSON, responseTypesJSON, scopesJSON string
+	var allowedAudiencesJSON, allowedOriginsJSON string
 	var clientSecret, name, description, authMethod sql.NullString
-	var public sql.NullBool
+	var public, allowTokenExchange sql.NullBool
 	client := &config.ClientConfig{ID: clientID}
 
 	err := row.Scan(
@@ -298,10 +338,11 @@ func (s *BaseSQLStorage) GetDynamicClient(clientID string) (*config.ClientConfig
 		&grantTypesJSON,
 		&responseTypesJSON,
 		&scopesJSON,
-		&audienceJSON,
 		&authMethod,
 		&public,
-		&enabledFlowsJSON,
+		&allowedAudiencesJSON,
+		&allowTokenExchange,
+		&allowedOriginsJSON,
 	)
 
 	if err == sql.ErrNoRows {
@@ -311,19 +352,33 @@ func (s *BaseSQLStorage) GetDynamicClient(clientID string) (*config.ClientConfig
 		return nil, err
 	}
 
+	// Set basic fields
 	client.Secret = clientSecret.String
 	client.Name = name.String
 	client.Description = description.String
 	client.TokenEndpointAuthMethod = authMethod.String
 	client.Public = public.Bool
+	client.AllowTokenExchange = allowTokenExchange.Bool
 
 	// Parse JSON arrays
-	json.Unmarshal([]byte(redirectURIsJSON), &client.RedirectURIs)
-	json.Unmarshal([]byte(grantTypesJSON), &client.GrantTypes)
-	json.Unmarshal([]byte(responseTypesJSON), &client.ResponseTypes)
-	json.Unmarshal([]byte(scopesJSON), &client.Scopes)
-	json.Unmarshal([]byte(audienceJSON), &client.Audience)
-	json.Unmarshal([]byte(enabledFlowsJSON), &client.EnabledFlows)
+	if redirectURIsJSON != "" {
+		json.Unmarshal([]byte(redirectURIsJSON), &client.RedirectURIs)
+	}
+	if grantTypesJSON != "" {
+		json.Unmarshal([]byte(grantTypesJSON), &client.GrantTypes)
+	}
+	if responseTypesJSON != "" {
+		json.Unmarshal([]byte(responseTypesJSON), &client.ResponseTypes)
+	}
+	if scopesJSON != "" {
+		json.Unmarshal([]byte(scopesJSON), &client.Scopes)
+	}
+	if allowedAudiencesJSON != "" {
+		json.Unmarshal([]byte(allowedAudiencesJSON), &client.AllowedAudiences)
+	}
+	if allowedOriginsJSON != "" {
+		json.Unmarshal([]byte(allowedOriginsJSON), &client.AllowedOrigins)
+	}
 
 	return client, nil
 }
@@ -375,7 +430,7 @@ func (s *BaseSQLStorage) StoreToken(tokenInfo *TokenInfo) error {
 	extraJSON, _ := json.Marshal(tokenInfo.Extra)
 
 	query := fmt.Sprintf(`INSERT INTO tokens 
-		(token, token_type, client_id, user_id, scope, audience, subject, issued_at, expires_at, 
+		(token, token_type, client_id, user_id, scopes, audience, subject, issued_at, expires_at, 
 		 not_before, active, extra, parent_access_token, nonce, auth_time, grant_type, created_at)
 		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
 		s.dialect.Placeholder(1), s.dialect.Placeholder(2), s.dialect.Placeholder(3),
@@ -390,7 +445,7 @@ func (s *BaseSQLStorage) StoreToken(tokenInfo *TokenInfo) error {
 		tokenInfo.TokenType,
 		tokenInfo.ClientID,
 		tokenInfo.UserID,
-		tokenInfo.Scope,
+		tokenInfo.Scopes,
 		string(audienceJSON),
 		tokenInfo.Subject,
 		tokenInfo.IssuedAt,
@@ -408,59 +463,40 @@ func (s *BaseSQLStorage) StoreToken(tokenInfo *TokenInfo) error {
 }
 
 func (s *BaseSQLStorage) GetToken(token string) (*TokenInfo, error) {
-	query := fmt.Sprintf(`SELECT token_type, client_id, user_id, scope, audience, subject, issued_at, expires_at,
-		not_before, active, extra, parent_access_token, nonce, auth_time, grant_type, created_at
-		FROM tokens WHERE token = %s`, s.dialect.Placeholder(1))
+	query := fmt.Sprintf(`SELECT token_type, client_id, user_id, scopes, audience, 
+        issued_at, expires_at, active, extra FROM tokens WHERE token = %s`,
+		s.dialect.Placeholder(1))
 
 	row := s.db.QueryRow(query, token)
 
-	var audienceJSON, extraJSON string
-	var userID, scope, subject, parentAccessToken, nonce, grantType sql.NullString
-	var notBefore, authTime sql.NullTime
-	tokenInfo := &TokenInfo{Token: token}
+	var tokenInfo TokenInfo
+	var scopesJSON, audienceJSON, extraJSON string
+	var issuedAt, expiresAt time.Time
 
 	err := row.Scan(
 		&tokenInfo.TokenType,
 		&tokenInfo.ClientID,
-		&userID,
-		&scope,
+		&tokenInfo.UserID,
+		&scopesJSON,
 		&audienceJSON,
-		&subject,
-		&tokenInfo.IssuedAt,
-		&tokenInfo.ExpiresAt,
-		&notBefore,
+		&issuedAt,
+		&expiresAt,
 		&tokenInfo.Active,
 		&extraJSON,
-		&parentAccessToken,
-		&nonce,
-		&authTime,
-		&grantType,
-		&tokenInfo.CreatedAt,
 	)
 
+	// This is the critical part - return proper errors!
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, fmt.Errorf("token not found") // Return error, not (nil, nil)
 	}
 	if err != nil {
-		return nil, err
-	}
-
-	// Set nullable fields
-	tokenInfo.UserID = userID.String
-	tokenInfo.Scope = scope.String
-	tokenInfo.Subject = subject.String
-	tokenInfo.ParentAccessToken = parentAccessToken.String
-	tokenInfo.Nonce = nonce.String
-	tokenInfo.GrantType = grantType.String
-
-	if notBefore.Valid {
-		tokenInfo.NotBefore = notBefore.Time
-	}
-	if authTime.Valid {
-		tokenInfo.AuthTime = &authTime.Time
+		return nil, fmt.Errorf("database error: %w", err)
 	}
 
 	// Parse JSON fields
+	if scopesJSON != "" {
+		json.Unmarshal([]byte(scopesJSON), &tokenInfo.Scopes)
+	}
 	if audienceJSON != "" {
 		json.Unmarshal([]byte(audienceJSON), &tokenInfo.Audience)
 	}
@@ -468,11 +504,15 @@ func (s *BaseSQLStorage) GetToken(token string) (*TokenInfo, error) {
 		json.Unmarshal([]byte(extraJSON), &tokenInfo.Extra)
 	}
 
-	return tokenInfo, nil
+	tokenInfo.Token = token
+	tokenInfo.IssuedAt = issuedAt
+	tokenInfo.ExpiresAt = expiresAt
+
+	return &tokenInfo, nil // Return valid token info with no error
 }
 
 func (s *BaseSQLStorage) GetTokensByClientID(clientID string) ([]*TokenInfo, error) {
-	query := fmt.Sprintf(`SELECT token, token_type, user_id, scope, audience, subject, issued_at, expires_at,
+	query := fmt.Sprintf(`SELECT token, token_type, user_id, scopes, audience, subject, issued_at, expires_at,
 		not_before, active, extra, parent_access_token, nonce, auth_time, grant_type, created_at
 		FROM tokens WHERE client_id = %s AND active = TRUE ORDER BY created_at DESC`, s.dialect.Placeholder(1))
 
@@ -480,7 +520,7 @@ func (s *BaseSQLStorage) GetTokensByClientID(clientID string) ([]*TokenInfo, err
 }
 
 func (s *BaseSQLStorage) GetTokensByUserID(userID string) ([]*TokenInfo, error) {
-	query := fmt.Sprintf(`SELECT token, token_type, client_id, scope, audience, subject, issued_at, expires_at,
+	query := fmt.Sprintf(`SELECT token, token_type, client_id, scopes, audience, subject, issued_at, expires_at,
 		not_before, active, extra, parent_access_token, nonce, auth_time, grant_type, created_at
 		FROM tokens WHERE user_id = %s AND active = TRUE ORDER BY created_at DESC`, s.dialect.Placeholder(1))
 
@@ -497,7 +537,7 @@ func (s *BaseSQLStorage) getTokensFromQuery(query string, param interface{}) ([]
 	var tokens []*TokenInfo
 	for rows.Next() {
 		var audienceJSON, extraJSON string
-		var userID, clientID, scope, subject, parentAccessToken, nonce, grantType sql.NullString
+		var userID, clientID, scopes, subject, parentAccessToken, nonce, grantType sql.NullString
 		var notBefore, authTime sql.NullTime
 		tokenInfo := &TokenInfo{}
 
@@ -505,7 +545,7 @@ func (s *BaseSQLStorage) getTokensFromQuery(query string, param interface{}) ([]
 			&tokenInfo.Token,
 			&tokenInfo.TokenType,
 			&clientID, // Could be userID depending on query
-			&scope,
+			&scopes,
 			&audienceJSON,
 			&subject,
 			&tokenInfo.IssuedAt,
@@ -526,7 +566,7 @@ func (s *BaseSQLStorage) getTokensFromQuery(query string, param interface{}) ([]
 		// Set fields (logic depends on which query was called)
 		tokenInfo.ClientID = clientID.String
 		tokenInfo.UserID = userID.String
-		tokenInfo.Scope = scope.String
+		tokenInfo.Scopes = strings.Fields(scopes.String)
 		tokenInfo.Subject = subject.String
 		tokenInfo.ParentAccessToken = parentAccessToken.String
 		tokenInfo.Nonce = nonce.String
@@ -605,4 +645,21 @@ func (s *BaseSQLStorage) Close() error {
 		return s.db.Close()
 	}
 	return nil
+}
+
+// In your SQL storage implementation, add these no-op methods:
+
+func (s *BaseSQLStorage) StoreSession(sessionID, userID string) error {
+	// Sessions are not persisted in SQL - this is a no-op
+	return fmt.Errorf("sessions not supported in SQL storage")
+}
+
+func (s *BaseSQLStorage) GetSession(sessionID string) (*Session, error) {
+	// Sessions are not persisted in SQL - this is a no-op
+	return nil, fmt.Errorf("sessions not supported in SQL storage")
+}
+
+func (s *BaseSQLStorage) DeleteSession(sessionID string) error {
+	// Sessions are not persisted in SQL - this is a no-op
+	return fmt.Errorf("sessions not supported in SQL storage")
 }

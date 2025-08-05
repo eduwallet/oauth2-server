@@ -3,91 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OAuth2 Server - Device Verification</title>
+    <title>Device Verification - OAuth2 Server</title>
     <style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            margin: 0;
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 50px auto;
             padding: 20px;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            background-color: #f5f5f5;
         }
         .container {
             background: white;
-            border-radius: 10px;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
-            padding: 40px;
-            width: 100%;
-            max-width: 400px;
-        }
-        .logo {
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             text-align: center;
-            margin-bottom: 30px;
         }
-        .logo h1 {
-            color: #333;
-            margin: 0;
-            font-size: 28px;
-            font-weight: 300;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            color: #333;
-            font-weight: 500;
-        }
-        input[type="text"] {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e1e1e1;
+        .user-code-input {
+            font-size: 24px;
+            text-align: center;
+            padding: 15px;
+            border: 2px solid #007bff;
             border-radius: 6px;
-            font-size: 16px;
-            box-sizing: border-box;
-            transition: border-color 0.3s ease;
-            text-align: center;
-            font-family: 'Courier New', monospace;
-            letter-spacing: 2px;
+            width: 200px;
+            margin: 20px auto;
+            display: block;
             text-transform: uppercase;
-        }
-        input[type="text"]:focus {
-            outline: none;
-            border-color: #667eea;
+            letter-spacing: 2px;
         }
         .btn {
-            width: 100%;
-            padding: 12px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background-color: #007bff;
             color: white;
+            padding: 12px 30px;
             border: none;
             border-radius: 6px;
             font-size: 16px;
-            font-weight: 500;
             cursor: pointer;
-            transition: transform 0.2s ease;
+            margin-top: 20px;
         }
         .btn:hover {
-            transform: translateY(-2px);
-        }
-        .error {
-            background: #fee;
-            color: #c33;
-            padding: 10px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            border: 1px solid #fcc;
+            background-color: #0056b3;
         }
         .instructions {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            border-left: 4px solid #667eea;
+            margin: 20px 0;
             color: #666;
             line-height: 1.6;
         }
@@ -95,34 +53,36 @@
 </head>
 <body>
     <div class="container">
-        <div class="logo">
-            <h1>📱 Device Verification</h1>
+        <h1>Device Verification</h1>
+        <div class="instructions">
+            <p>Enter the code displayed on your device to continue with authorization.</p>
         </div>
+
+        <form method="post" action="/device/verify">
+            <input 
+                type="text" 
+                name="user_code" 
+                class="user-code-input" 
+                placeholder="XXXX-XXXX"
+                value="{{.UserCode}}"
+                maxlength="9"
+                pattern="[A-Z0-9]{4}-[A-Z0-9]{4}"
+                required
+                autocomplete="off"
+            >
+            <br>
+            <button type="submit" class="btn">Verify Code</button>
+        </form>
 
         <div class="instructions">
-            Enter the user code displayed on your device to authorize access.
+            <p><small>The code should be in the format: XXXX-XXXX</small></p>
         </div>
-
-        {{if .Error}}
-        <div class="error">
-            {{.Error}}
-        </div>
-        {{end}}
-
-        <form method="POST" action="/device/verify">
-            <div class="form-group">
-                <label for="user_code">User Code</label>
-                <input type="text" id="user_code" name="user_code" placeholder="XXXX-XXXX" maxlength="9" required>
-            </div>
-
-            <button type="submit" class="btn">Verify Device</button>
-        </form>
     </div>
 
     <script>
-        // Auto-format user code input
-        document.getElementById('user_code').addEventListener('input', function(e) {
-            let value = e.target.value.replace(/[^A-Z0-9]/g, '');
+        // Auto-format the user code input
+        document.querySelector('.user-code-input').addEventListener('input', function(e) {
+            let value = e.target.value.replace(/[^A-Z0-9]/g, '').toUpperCase();
             if (value.length > 4) {
                 value = value.slice(0, 4) + '-' + value.slice(4, 8);
             }

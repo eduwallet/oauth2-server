@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"oauth2-demo/internal/config"
+	"oauth2-server/internal/config"
 )
 
 func TestSQLiteStorage(t *testing.T) {
@@ -24,7 +24,7 @@ func TestSQLiteStorage(t *testing.T) {
 		ClientID:     "test-client",
 		ResponseType: "code",
 		RedirectURI:  "http://localhost:8080/callback",
-		Scope:        "read write",
+		Scopes:       []string{"read", "write"},
 		State:        "test-state",
 		CreatedAt:    time.Now(),
 		ExpiresAt:    time.Now().Add(10 * time.Minute),
@@ -48,8 +48,8 @@ func TestSQLiteStorage(t *testing.T) {
 		t.Errorf("Expected ClientID %s, got %s", authReq.ClientID, retrieved.ClientID)
 	}
 
-	if retrieved.Scope != authReq.Scope {
-		t.Errorf("Expected Scope %s, got %s", authReq.Scope, retrieved.Scope)
+	if !equalStringSlices(retrieved.Scopes, authReq.Scopes) {
+		t.Errorf("Expected Scopes %v, got %v", authReq.Scopes, retrieved.Scopes)
 	}
 
 	// Test dynamic client storage

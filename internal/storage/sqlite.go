@@ -28,12 +28,10 @@ func (d *SQLiteDialect) GetCreateTableStatements() []string {
 		`CREATE TABLE IF NOT EXISTS device_codes (
 			device_code TEXT PRIMARY KEY,
 			user_code TEXT UNIQUE NOT NULL,
-			verification_uri TEXT NOT NULL,
-			verification_uri_complete TEXT,
 			expires_in INTEGER NOT NULL,
 			interval INTEGER NOT NULL,
 			client_id TEXT NOT NULL,
-			scope TEXT,
+			scopes TEXT,
 			created_at DATETIME NOT NULL,
 			expires_at DATETIME NOT NULL,
 			authorized BOOLEAN DEFAULT FALSE,
@@ -45,20 +43,21 @@ func (d *SQLiteDialect) GetCreateTableStatements() []string {
 			client_secret TEXT,
 			client_name TEXT,
 			description TEXT,
-			redirect_uris TEXT,
-			grant_types TEXT,
-			response_types TEXT,
-			scope TEXT,
-			audience TEXT,
+			redirect_uris TEXT, -- JSON array
+			grant_types TEXT, -- JSON array
+			response_types TEXT, -- JSON array
+			scopes TEXT, -- JSON array
 			token_endpoint_auth_method TEXT,
 			public BOOLEAN DEFAULT FALSE,
-			enabled_flows TEXT,
+			allowed_audiences TEXT, -- JSON array
+			allow_token_exchange BOOLEAN DEFAULT FALSE,
+			allowed_origins TEXT, -- JSON array
 			software_id TEXT,
 			software_version TEXT,
-			client_id_issued_at DATETIME NOT NULL,
+			client_id_issued_at DATETIME,
 			client_secret_expires_at DATETIME,
-			created_at DATETIME NOT NULL,
-			updated_at DATETIME NOT NULL
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS registration_tokens (
 			token TEXT PRIMARY KEY,

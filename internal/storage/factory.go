@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"oauth2-demo/internal/config"
+	"oauth2-server/internal/config"
 )
 
 // NewStorage creates a new storage instance based on the configuration

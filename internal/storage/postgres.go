@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"oauth2-demo/internal/config"
+	"oauth2-server/internal/config"
 
 	_ "github.com/lib/pq"
 )
@@ -30,12 +30,10 @@ func (d *PostgreSQLDialect) GetCreateTableStatements() []string {
 		`CREATE TABLE IF NOT EXISTS device_codes (
 			device_code VARCHAR(255) PRIMARY KEY,
 			user_code VARCHAR(50) UNIQUE NOT NULL,
-			verification_uri TEXT NOT NULL,
-			verification_uri_complete TEXT,
-			expires_in INTEGER NOT NULL,
-			interval INTEGER NOT NULL,
 			client_id VARCHAR(255) NOT NULL,
-			scope TEXT,
+			scopes TEXT,
+			expires_in INTEGER NOT NULL,
+			interval_seconds INTEGER NOT NULL,
 			created_at TIMESTAMP NOT NULL,
 			expires_at TIMESTAMP NOT NULL,
 			authorized BOOLEAN DEFAULT FALSE,
@@ -44,23 +42,24 @@ func (d *PostgreSQLDialect) GetCreateTableStatements() []string {
 		)`,
 		`CREATE TABLE IF NOT EXISTS dynamic_clients (
 			client_id VARCHAR(255) PRIMARY KEY,
-			client_secret TEXT,
+			client_secret VARCHAR(255),
 			client_name VARCHAR(255),
 			description TEXT,
-			redirect_uris TEXT,
-			grant_types TEXT,
-			response_types TEXT,
-			scope TEXT,
-			audience TEXT,
-			token_endpoint_auth_method VARCHAR(50),
+			redirect_uris JSONB, -- JSON array
+			grant_types JSONB, -- JSON array
+			response_types JSONB, -- JSON array
+			scopes JSONB, -- JSON array
+			token_endpoint_auth_method VARCHAR(100),
 			public BOOLEAN DEFAULT FALSE,
-			enabled_flows TEXT,
+			allowed_audiences JSONB, -- JSON array
+			allow_token_exchange BOOLEAN DEFAULT FALSE,
+			allowed_origins JSONB, -- JSON array
 			software_id VARCHAR(255),
-			software_version VARCHAR(50),
-			client_id_issued_at TIMESTAMP NOT NULL,
+			software_version VARCHAR(255),
+			client_id_issued_at TIMESTAMP,
 			client_secret_expires_at TIMESTAMP,
-			created_at TIMESTAMP NOT NULL,
-			updated_at TIMESTAMP NOT NULL
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS registration_tokens (
 			token VARCHAR(255) PRIMARY KEY,

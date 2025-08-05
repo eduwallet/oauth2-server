@@ -9,7 +9,7 @@ server:
   shutdown_timeout: 5
 
 database:
-  type: "sqlite" # "memory", "sqlite", or "postgres"
+  type: "memory" # "memory", "sqlite", or "postgres"
   sqlite_path: "oauth2.db" # Path to SQLite database file
   # PostgreSQL configuration (used when type is "postgres")
   postgres_host: "postgres" # Use service name in docker-compose
@@ -49,6 +49,10 @@ security:
     - "offline_access"
     require_redirect_uri: false
     client_secret_expiry_seconds: 0 # 0 means never expires
+
+  # Token introspection settings
+  restrict_introspection: false  # If true, only allow clients to introspect their own tokens
+  include_custom_claims: true    # Include user info in introspection response
 
 proxy:
   trust_headers: true
@@ -90,6 +94,10 @@ clients:
   enabled_flows:
   - "authorization_code"
   - "refresh_token"
+  is_resource_server: false
+  allowed_audiences:
+      - "api.example.com"
+      - "grafana.example.com"
 
 # Backend Service Client
 - id: "backend-client"
