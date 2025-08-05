@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth2 Server - Login</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            color: #333;
+            margin: 0;
+            font-size: 28px;
+            font-weight: 300;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e1e1;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+            transition: border-color 0.3s ease;
+        }
+        input[type="text"]:focus, input[type="password"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border: 1px solid #fcc;
+        }
+        .client-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+        .client-info h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 16px;
+        }
+        .client-info p {
+            margin: 5px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        .scopes {
+            margin-top: 10px;
+        }
+        .scope-tag {
+            display: inline-block;
+            background: #e9ecef;
+            color: #495057;
+            padding: 4px 8px;
+            margin: 2px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>🔐 OAuth2 Server</h1>
+        </div>
+
+        {{if .Error}}
+        <div class="error">
+            {{.Error}}
+        </div>
+        {{end}}
+
+        {{if .IsDeviceFlow}}
+        <div class="client-info">
+            <h3>🖥️ Device Authorization</h3>
+            <p><strong>Application:</strong> {{.ClientName}}</p>
+            <p><strong>User Code:</strong> <code>{{.UserCode}}</code></p>
+            {{if .Scope}}
+            <div class="scopes">
+                <strong>Requested Permissions:</strong><br>
+                {{range .Scopes}}
+                <span class="scope-tag">{{.}}</span>
+                {{end}}
+            </div>
+            {{end}}
+        </div>
+        {{else if .Client}}
+        <div class="client-info">
+            <h3>{{.Client.Name}}</h3>
+            <p><strong>Client ID:</strong> {{.Client.ID}}</p>
+            {{if .Client.Description}}
+            <p><strong>Description:</strong> {{.Client.Description}}</p>
+            {{end}}
+            {{if .Scopes}}
+            <div class="scopes">
+                <strong>Requested Permissions:</strong><br>
+                {{range .Scopes}}
+                <span class="scope-tag">{{.}}</span>
+                {{end}}
+            </div>
+            {{end}}
+        </div>
+        {{end}}
+
+        <form method="POST" action="/login">
+            {{if .CSRFToken}}
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            {{end}}
+            {{if .State}}
+            <input type="hidden" name="state" value="{{.State}}">
+            {{end}}
+            {{if .ClientID}}
+            <input type="hidden" name="client_id" value="{{.ClientID}}">
+            {{end}}
+            {{if .RedirectURI}}
+            <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+            {{end}}
+            {{if .Scope}}
+            <input type="hidden" name="scope" value="{{.Scope}}">
+            {{end}}
+            {{if .ResponseType}}
+            <input type="hidden" name="response_type" value="{{.ResponseType}}">
+            {{end}}
+            {{if .CodeChallenge}}
+            <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
+            {{end}}
+            {{if .CodeChallengeMethod}}
+            <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
+            {{end}}
+            {{if .UserCode}}
+            <input type="hidden" name="user_code" value="{{.UserCode}}">
+            {{end}}
+            {{if .DeviceCode}}
+            <input type="hidden" name="device_code" value="{{.DeviceCode}}">
+            {{end}}
+
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+
+            <button type="submit" class="btn">Sign In</button>
+        </form>
+    </div>
+</body>
+</html>

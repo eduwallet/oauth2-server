@@ -1,0 +1,151 @@
+# OAuth2 Server Configuration - PostgreSQL Version
+
+server:
+  base_url: "http://localhost:8080"
+  port: 8080
+  host: "localhost"
+  read_timeout: 30
+  write_timeout: 30
+  shutdown_timeout: 5
+
+database:
+  type: "postgres"
+  # PostgreSQL configuration
+  postgres_host: "postgres"
+  postgres_port: 5432
+  postgres_db: "oauth2"
+  postgres_user: "oauth2_user"
+  postgres_password: "oauth2_password"
+  postgres_sslmode: "disable"
+  cleanup_interval: 60 # Cleanup interval in minutes
+
+security:
+  jwt_signing_key: "your-secret-key-here"
+  token_expiry_seconds: 3600
+  refresh_token_expiry_seconds: 86400
+  device_code_expiry_seconds: 600
+  authorization_code_expiry_seconds: 300
+  enable_pkce: true
+  require_https: false
+  dynamic_registration:
+    enabled: true
+    require_initial_access_token: false
+    initial_access_token: "demo-initial-access-token"
+    default_token_lifetime: 3600
+    allowed_grant_types:
+    - "authorization_code"
+    - "client_credentials"
+    - "refresh_token"
+    - "urn:ietf:params:oauth:grant-type:device_code"
+    - "urn:ietf:params:oauth:grant-type:token-exchange"
+    allowed_response_types:
+    - "code"
+    - "token"
+    allowed_scopes:
+    - "openid"
+    - "profile"
+    - "email"
+    - "offline_access"
+    require_redirect_uri: false
+    client_secret_expiry_seconds: 0 # 0 means never expires
+
+proxy:
+  trust_headers: true
+  public_base_url: "" # Leave empty to auto-detect
+  force_https: false
+  trusted_proxies:
+  - "127.0.0.1"
+  - "::1"
+
+logging:
+  level: "info" # debug, info, warn, error
+  format: "json" # text or json
+
+# OAuth2 Clients
+clients:
+- id: "test-client"
+  secret: "test-secret"
+  name: "Test Client"
+  redirect_uris:
+  - "http://localhost:3000/callback"
+  - "http://localhost:8080/callback"
+  grant_types:
+  - "authorization_code"
+  - "client_credentials"
+  - "refresh_token"
+  - "urn:ietf:params:oauth:grant-type:device_code"
+  - "urn:ietf:params:oauth:grant-type:token-exchange"
+  response_types:
+  - "code"
+  - "token"
+  scope: "openid profile email offline_access"
+  token_endpoint_auth_method: "client_secret_basic"
+
+- id: "public-client"
+  name: "Public Client (Mobile/SPA)"
+  redirect_uris:
+  - "com.example.app://oauth/callback"
+  - "http://localhost:3000/callback"
+  grant_types:
+  - "authorization_code"
+  - "urn:ietf:params:oauth:grant-type:device_code"
+  - "urn:ietf:params:oauth:grant-type:token-exchange"
+  response_types:
+  - "code"
+  scope: "openid profile email"
+  token_endpoint_auth_method: "none" # Public client
+
+- id: "device-client"
+  secret: "device-secret"
+  name: "Device Client (Smart TV, IoT)"
+  grant_types:
+  - "urn:ietf:params:oauth:grant-type:device_code"
+  - "client_credentials"
+  - "urn:ietf:params:oauth:grant-type:token-exchange"
+  scope: "device:read device:write"
+  token_endpoint_auth_method: "client_secret_basic"
+
+- id: "service-client"
+  secret: "service-secret"
+  name: "Service Client (M2M)"
+  grant_types:
+  - "client_credentials"
+  - "urn:ietf:params:oauth:grant-type:token-exchange"
+  scope: "api:read api:write admin:read"
+  token_endpoint_auth_method: "client_secret_basic"
+
+# User store (for demo purposes)
+users:
+- id: "admin"
+  username: "admin"
+  password: "admin123"
+  email: "admin@example.com"
+  name: "Administrator"
+  roles:
+  - "admin"
+  - "user"
+
+- id: "user1"
+  username: "alice"
+  password: "alice123"
+  email: "alice@example.com"
+  name: "Alice Smith"
+  roles:
+  - "user"
+
+- id: "user2"
+  username: "bob"
+  password: "bob123"
+  email: "bob@example.com"
+  name: "Bob Johnson"
+  roles:
+  - "user"
+
+- id: "device_user"
+  username: "device"
+  password: "device123"
+  email: "device@example.com"
+  name: "Device User"
+  roles:
+  - "device"
+  - "user"

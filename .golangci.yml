@@ -1,0 +1,192 @@
+# golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+  skip-dirs:
+  - vendor
+  - tmp
+  - testdata
+  - fosite # Skip the local fosite fork
+  skip-files: []
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  uniq-by-line: true
+  sort-results: true
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  govet:
+    enable-all: true
+    disable:
+    - fieldalignment # Too strict for this project
+
+  gocyclo:
+    min-complexity: 15
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+
+  misspell:
+    locale: US
+
+  lll:
+    line-length: 120
+
+  goimports:
+    local-prefixes: oauth2-demo
+
+  gocritic:
+    enabled-tags:
+    - performance
+    - style
+    - experimental
+    disabled-checks:
+    - wrapperFunc
+    - hugeParam
+
+  nolintlint:
+    allow-leading-space: false
+    allow-unused: false
+    require-explanation: true
+    require-specific: true
+
+linters:
+  enable:
+  - errcheck
+  - gosimple
+  - govet
+  - ineffassign
+  - staticcheck
+  - typecheck
+  - unused
+  - asasalint
+  - asciicheck
+  - bidichk
+  - bodyclose
+  - containedctx
+  - contextcheck
+  - decorder
+  - dogsled
+  - dupl
+  - durationcheck
+  - errname
+  - errorlint
+  - exhaustive
+  - exportloopref
+  - forbidigo
+  - funlen
+  - gocheckcompilerdirectives
+  - gochecknoglobals
+  - gochecknoinits
+  - gocognit
+  - goconst
+  - gocritic
+  - gocyclo
+  - godot
+  - gofmt
+  - gofumpt
+  - goheader
+  - goimports
+  - gomnd
+  - gomoddirectives
+  - gomodguard
+  - goprintffuncname
+  - gosec
+  - grouper
+  - importas
+  - interfacebloat
+  - ireturn
+  - lll
+  - loggercheck
+  - makezero
+  - misspell
+  - nakedret
+  - nestif
+  - nilerr
+  - nilnil
+  - noctx
+  - nolintlint
+  - nonamedreturns
+  - nosprintfhostport
+  - predeclared
+  - promlinter
+  - reassign
+  - revive
+  - rowserrcheck
+  - sqlclosecheck
+  - stylecheck
+  - tenv
+  - testableexamples
+  - thelper
+  - tparallel
+  - unconvert
+  - unparam
+  - usestdlibvars
+  - wastedassign
+  - whitespace
+  - wrapcheck
+
+  disable:
+  - deadcode # deprecated
+  - exhaustivestruct # deprecated
+  - golint # deprecated
+  - ifshort # deprecated
+  - interfacer # deprecated
+  - maligned # deprecated
+  - nosnakecase # deprecated
+  - scopelint # deprecated
+  - structcheck # deprecated
+  - varcheck # deprecated
+
+issues:
+  exclude-rules:
+  # Exclude some linters from running on tests files
+  - path: _test\.go
+    linters:
+    - gomnd
+    - gocyclo
+    - errcheck
+    - dupl
+    - gosec
+    - funlen
+    - lll
+
+  # Exclude known linter issues
+  - text: "Use of weak random number generator"
+    linters:
+    - gosec
+
+  # Exclude shadow check for err variables in tests
+  - path: _test\.go
+    text: "shadows declaration"
+    linters:
+    - govet
+
+  # Exclude some staticcheck messages
+  - linters:
+    - staticcheck
+    text: "SA9003:"
+
+  # Allow long lines in comments
+  - source: "^\\s*//.*$"
+    linters:
+    - lll
+
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false
+
+severity:
+  default-severity: error
+  case-sensitive: false

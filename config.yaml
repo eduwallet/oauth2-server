@@ -8,14 +8,47 @@ server:
   write_timeout: 30
   shutdown_timeout: 5
 
+database:
+  type: "sqlite" # "memory", "sqlite", or "postgres"
+  sqlite_path: "oauth2.db" # Path to SQLite database file
+  # PostgreSQL configuration (used when type is "postgres")
+  postgres_host: "postgres" # Use service name in docker-compose
+  postgres_port: 5432
+  postgres_db: "oauth2"
+  postgres_user: "oauth2_user"
+  postgres_password: "oauth2_password"
+  postgres_sslmode: "disable" # disable, require, verify-ca, verify-full
+  cleanup_interval: 60 # Cleanup interval in minutes
+
 security:
   jwt_signing_key: "your-secret-key-here"
   token_expiry_seconds: 3600
   refresh_token_expiry_seconds: 86400
   device_code_expiry_seconds: 600
-  authorization_code"_expiry_seconds: 300
+  authorization_code_expiry_seconds: 300
   enable_pkce: true
   require_https: false
+  dynamic_registration:
+    enabled: true
+    require_initial_access_token: false
+    initial_access_token: "demo-initial-access-token"
+    default_token_lifetime: 3600
+    allowed_grant_types:
+    - "authorization_code"
+    - "client_credentials"
+    - "refresh_token"
+    - "urn:ietf:params:oauth:grant-type:device_code"
+    - "urn:ietf:params:oauth:grant-type:token-exchange"
+    allowed_response_types:
+    - "code"
+    - "token"
+    allowed_scopes:
+    - "openid"
+    - "profile"
+    - "email"
+    - "offline_access"
+    require_redirect_uri: false
+    client_secret_expiry_seconds: 0 # 0 means never expires
 
 proxy:
   trust_headers: true

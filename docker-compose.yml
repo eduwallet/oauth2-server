@@ -1,34 +1,80 @@
 version: '3.8'
 
 services:
+  # PostgreSQL database service
+  postgres:
+    image: postgres:15-alpine
+    container_name: oauth2-postgres
+    environment:
+      POSTGRES_DB: oauth2
+      POSTGRES_USER: oauth2_user
+      POSTGRES_PASSWORD: oauth2_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oauth2_user -d oauth2"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
   oauth2-server:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT_SHA: ${COMMIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-$(date -u '+%Y-%m-%d_%H:%M:%S')}
+        GO_VERSION: ${GO_VERSION:-$(go version | cut -d' ' -f3)}
+    container_name: oauth2-server
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
-      - PUBLIC_BASE_URL=http://localhost:8080
-      - PORT=8080
-      - TEST_USER_USERNAME=john.doe
-      - TEST_USER_PASSWORD=password123
-    depends_on:
-      - redis
-      - postgres
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_DB=oauth2_server
-      - POSTGRES_USER=oauth2_user
-      - POSTGRES_PASSWORD=your-db-password
-    ports:
-      - "5432:5432"
+      - LOG_LEVEL=debug
+      # Database configuration via environment variables
+      - DB_TYPE=${DB_TYPE:-sqlite}  # Can be overridden: sqlite, postgres, memory
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./config.yaml:/app/config.yaml:ro
+      - ./templates:/app/templates:ro
+      # SQLite data persistence (when using SQLite)
+      - oauth2_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Optional: Add a simple reverse proxy for HTTPS in development
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: oauth2-nginx
+  #   ports:
+  #     - "443:443"
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./certs:/etc/nginx/certs:ro
+  #   depends_on:
+  #     - oauth2-server
+  #   restart: unless-stopped
 
 volumes:
   postgres_data:
+    driver: local
+  oauth2_data:
+    driver: local
+
+networks:
+  default:
+    name: oauth2-network

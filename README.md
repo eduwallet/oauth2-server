@@ -1,208 +1,189 @@
-# OAuth2 Server
+# OAuth2 Demo Server
 
-A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, supporting multiple flows, dynamic client registration, token exchange, audience management, and introspection.
-
-## Key Features
-
-### 📱 Device Code Flow (RFC 8628)
-- User initiates flow on device
-- Device displays user code and verification URL
-- User visits URL on another device to authorize
-- Device polls for token completion
-
-### 🔄 Token Exchange (RFC 8693)
-- Secure service-to-service token delegation
-- Supports audience-specific tokens
-- **Supports `requested_token_type`**: Request a `refresh_token` or `access_token` as the result of a token exchange
-
-### 🔧 Dynamic Client Registration (RFC 7591)
-- Programmatic client registration at runtime via API
-- Specify `audience` during registration
-
-### ♻️ Refresh Tokens
-- Configurable token lifespans per token type
-- Secure token rotation
-
-### 🎯 Audience Support
-- Specify `audience` during client registration and token requests
-- Tokens include an `aud` claim (array of strings) in both the token and introspection response
-- Audience is validated on token issuance and refresh
-
-### OAuth2 Grant Types
-- ✅ Authorization Code
-- ✅ Client Credentials
-- ✅ Device Code
-- ✅ Token Exchange
-- ✅ Refresh Token
-
-### RFC Compliance
-- ✅ **RFC 6749** - OAuth 2.0 Authorization Framework
-- ✅ **RFC 8628** - Device Authorization Grant
-- ✅ **RFC 8693** - Token Exchange
-- ✅ **RFC 7591** - Dynamic Client Registration
-- ✅ **RFC 8414** - Authorization Server Metadata
-- ✅ **OpenID Connect Core 1.0**
-
-### Production Features
-- ✅ Kubernetes native
-- ✅ Security hardening
-- ✅ Horizontal scaling
-- ✅ Health checks
-- ✅ Monitoring ready
-- ✅ Ingress support
-
-## Project Structure
-
-- **cmd/server/main.go**: Entry point of the application. Initializes the server and sets up routes and middleware.
-- **internal/auth/**: Authentication and authorization logic for OAuth2 flows.
-- **internal/flows/**: Implements various OAuth2 flows.
-- **internal/handlers/**: Defines HTTP handlers for API endpoints.
-- **internal/models/**: Data models used in the application.
-- **internal/store/**: Storage and retrieval of data.
-- **internal/utils/**: Utility functions.
-- **pkg/config/**: Configuration management.
-- **helm/oauth2-server/**: Kubernetes Helm chart for deployment.
-- **static/**: Static web assets (minimal, if any).
-- **docker-compose.yml**: Docker Compose configuration for local development.
-- **Dockerfile**: Container image definition.
-- **Makefile**: Build and development automation.
-- **go.mod** / **go.sum**: Go module dependencies.
+A comprehensive OAuth2 authorization server built with Go, using a local fork of Fosite that includes RFC 8693 Token Exchange support.
 
 ## Features
 
-- **OAuth2 Authorization Flows**: Authorization Code, Client Credentials, Device Authorization, Refresh Token, Token Exchange
-- **Security**: JWT-based tokens, PKCE, HTTPS, proxy-aware, rate limiting, CORS
-- **Management**: Dynamic client registration via API (with audience support)
-- **Token Introspection**: `/introspect` endpoint returns all standard fields, including `aud` as a JSON array
-- **Token Statistics**: `/token/stats` endpoint provides statistics about issued, active, revoked, and expired tokens
+- 🔐 **OAuth2 Authorization Server** with full spec compliance
+- 🔄 **RFC 8693 Token Exchange** support
+- 📱 **RFC 8628 Device Authorization Grant** (Device Flow)
+- 🌐 **HTML Authentication Interface** with responsive design
+- ⚙️ **YAML Configuration** for easy setup
+- 🔧 **Multiple Grant Types**:
+  - Authorization Code Flow
+  - Client Credentials Flow
+  - Refresh Token Flow
+  - Device Authorization Flow
+  - Token Exchange Flow
 
-## Setup Instructions
+## Project Structure
 
-### Local Development
-
-```bash
-git clone <repository-url>
-cd oauth2-server
-go mod tidy
-docker-compose up
-# or
-make run
-# or
-go run cmd/server/main.go
 ```
-
-### Kubernetes Deployment
-
-```bash
-kubectl create namespace oauth2-server
-helm install oauth2-server ./helm/oauth2-server -n oauth2-server --set config.server.baseUrl="https://your-domain.com" --set config.jwt.secret="your-jwt-secret"
+oauth2-demo/
+├── cmd/server/main.go          # Main application entry point
+├── internal/
+│   ├── config/config.go        # Configuration management
+│   └── storage/storage.go      # Custom storage implementation
+├── templates/                  # HTML templates
+│   ├── login.html             # Login form
+│   ├── device.html            # Device authorization display
+│   └── device_verify.html     # Device verification form
+├── fosite/                    # Local Fosite fork with RFC 8693 support
+├── config.yaml               # Application configuration
+├── test-endpoints.sh         # Test script for endpoints
+└── README.md                 # This file
 ```
 
 ## Configuration
 
-See `values.yaml` and `docker-compose.yml` for configuration options.
+The server is configured via `config.yaml`. Key sections include:
 
-## API Endpoints
+### Server Configuration
+```yaml
+server:
+  base_url: "http://localhost:8080"
+  port: 8080
+  host: "localhost"
+```
 
-### OAuth2/OIDC Endpoints
+### Security Settings
+```yaml
+security:
+  jwt_signing_key: "your-secret-key-here"
+  token_expiry_seconds: 3600
+  refresh_token_expiry_seconds: 86400
+  enable_pkce: true
+```
 
-| Endpoint | Method | Description | RFC |
-|----------|--------|-------------|-----|
-| `/auth` | GET | Authorization endpoint | RFC 6749 |
-| `/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
-| `/device` | POST | Device authorization | RFC 8628 |
-| `/device` | GET/POST | Device verification UI | RFC 8628 |
-| `/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
-| `/userinfo` | GET | UserInfo endpoint | OIDC Core |
-| `/register` | POST | Dynamic client registration (with audience) |
+### OAuth2 Clients
+Configure multiple clients with different grant types:
+```yaml
+clients:
+- id: "frontend-app"
+  secret: "frontend-secret"
+  grant_types: ["authorization_code", "refresh_token"]
+  # ... more configuration
+```
 
-### Discovery & Health
+### Test Users
+Pre-configured users for development:
+```yaml
+users:
+- username: "john.doe"
+  password: "password123"
+  # ... more user data
+```
+
+## Running the Server
+
+1. **Build and run**:
+   ```bash
+   go run cmd/server/main.go
+   ```
+
+2. **Access the server**:
+   - Main page: http://localhost:8080
+   - Login: http://localhost:8080/login
+   - Device verification: http://localhost:8080/device/verify
+
+## OAuth2 Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/.well-known/oauth-authorization-server` | GET | OAuth2 server metadata |
-| `/.well-known/openid_configuration` | GET | OIDC configuration |
-| `/jwks` | GET | JSON Web Key Set |
-| `/health` | GET | Health check |
-| `/stats` | GET | Server statistics |
-| `/` | GET | Minimal server info and stats (no docs UI) |
+| `/oauth2/auth` | GET | Authorization endpoint |
+| `/oauth2/token` | POST | Token endpoint |
+| `/oauth2/introspect` | POST | Token introspection |
+| `/device/code` | POST | Device authorization |
+| `/device/verify` | GET/POST | Device verification |
+| `/device/poll` | POST | Device polling |
+| `/login` | GET/POST | User authentication |
 
-## Usage Guidelines
+## Testing
 
-### Client Registration
-
-Use the `/register` endpoint to register OAuth2 clients:
-
+Use the provided test script:
 ```bash
-curl -X POST http://localhost:8080/register \
+./test-endpoints.sh
+```
+
+### Manual Testing Examples
+
+#### 1. Authorization Code Flow
+```bash
+# Visit in browser:
+http://localhost:8080/oauth2/auth?response_type=code&client_id=frontend-app&redirect_uri=/callback&scope=openid+profile&state=random-state
+```
+
+#### 2. Client Credentials Flow
+```bash
+curl -X POST http://localhost:8080/oauth2/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "backend-client:backend-client-secret" \
+  -d "grant_type=client_credentials&scope=api:read api:write"
+```
+
+#### 3. Device Authorization Flow
+```bash
+# Step 1: Get device code
+curl -X POST http://localhost:8080/device/code \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id=frontend-client&scope=openid profile"
+
+# Step 2: Visit verification URL with user code
+# Step 3: Poll for tokens
+curl -X POST http://localhost:8080/device/poll \
   -H "Content-Type: application/json" \
-  -d '{
-    "redirect_uris": ["https://myapp.com/callback"],
-    "grant_types": ["authorization_code", "refresh_token"],
-    "audience": ["client_id_of_backend"],
-    "scope": "openid profile email"
-  }'
+  -d '{"device_code":"DEVICE_CODE_FROM_STEP_1"}'
 ```
 
-### Token Exchange for Refresh Token
-
+#### 4. Token Exchange (RFC 8693)
 ```bash
-curl -X POST http://localhost:8080/token \
-  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
-  -d "subject_token=<refresh_token>" \
-  -d "subject_token_type=urn:ietf:params:oauth:token-type:refresh_token" \
-  -d "requested_token_type=urn:ietf:params:oauth:token-type:refresh_token" \
-  -d "audience=<target_audience>"
+# Exchange an access token for another token
+curl -X POST http://localhost:8080/oauth2/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "backend-client:backend-client-secret" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=ACCESS_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:access_token&requested_token_type=urn:ietf:params:oauth:token-type:access_token"
 ```
 
-### Introspect a Token
+## Development
 
-```bash
-curl -X POST http://localhost:8080/introspect \
-  -d "token=<access_or_refresh_token>"
+### Using Local Fosite Fork
+
+This project uses a local fork of Fosite located in the `./fosite` directory. The fork includes:
+- RFC 8693 Token Exchange implementation
+- Enhanced device flow support
+- Custom storage interfaces
+
+The go.mod file includes:
+```go
+replace github.com/ory/fosite => ./fosite
 ```
 
-**Response:**
-```json
-{
-  "active": true,
-  "client_id": "client_xyz",
-  "scope": "openid offline_access",
-  "token_type": "access_token",
-  "exp": 1753869233,
-  "iat": 1753865633,
-  "aud": ["client_abc", "client_xyz"],
-  "iss": "http://localhost:8080",
-  "sub": "user-001"
-}
-```
+### Adding New Features
 
-### Token Statistics
+1. **Custom Grant Types**: Extend the Fosite compose factories
+2. **Storage Backends**: Implement the storage interfaces
+3. **Authentication**: Modify the user authentication logic
+4. **Templates**: Update HTML templates in the `templates/` directory
 
-```bash
-curl http://localhost:8080/token/stats
-```
+## Security Considerations
 
-**Response:**
-```json
-{
-  "active_tokens": 5,
-  "expired_tokens": 2,
-  "revoked_tokens": 1,
-  "total_tokens": 8,
-  "by_type": {
-    "access_token": { "active": 3, "expired": 1, "revoked": 0, "total": 4 },
-    "refresh_token": { "active": 2, "expired": 1, "revoked": 1, "total": 4 }
-  },
-  "request_time": "2025-07-30T12:00:00Z"
-}
-```
+⚠️ **This is a demo server. For production use:**
 
-## Minimal Root Page
+- Use proper password hashing (bcrypt, scrypt, etc.)
+- Implement secure session management
+- Use HTTPS in production
+- Validate all inputs
+- Implement rate limiting
+- Use proper secret management
+- Enable proper logging and monitoring
 
-The root endpoint `/` now returns only server information and statistics in JSON format.  
-There is **no documentation UI** or client management UI.
+## Dependencies
 
----
+- **Fosite**: OAuth2 framework (local fork)
+- **Logrus**: Structured logging
+- **YAML**: Configuration parsing
+- **Go standard library**: HTTP server, templates, etc.
 
-**Built with ❤️ using [Fosite](https://github.com/ory/fosite) - The security first OAuth2 & OpenID Connect framework
+## License
+
+This project is for demonstration purposes. Check the Fosite license for the underlying OAuth2 implementation.

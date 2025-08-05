@@ -1,0 +1,3 @@
+[submodule "fosite"]
+	path = fosite
+	url = https://github.com/HarryKodden/fosite.git
