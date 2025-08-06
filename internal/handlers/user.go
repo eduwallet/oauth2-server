@@ -2,7 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	//	"fmt"
 	"net/http"
+	"net/url"
+
+	"oauth2-server/internal/storage"
 	"strings"
 	"time"
 )
@@ -91,7 +95,8 @@ func (h *Handlers) HandleUserInfo(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		data := map[string]interface{}{
-			"Error": r.URL.Query().Get("error"),
+			"Error":       r.URL.Query().Get("error"),
+			"RedirectURL": r.URL.Query().Get("redirect_url"),
 		}
 
 		if err := h.Templates.ExecuteTemplate(w, "login.html", data); err != nil {
@@ -109,6 +114,7 @@ func (h *Handlers) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 		username := r.FormValue("username")
 		password := r.FormValue("password")
+		redirectURL := r.FormValue("redirect_url")
 
 		if h.validateUser(username, password) {
 			sessionID := generateRandomString(32)
@@ -117,15 +123,25 @@ func (h *Handlers) HandleLogin(w http.ResponseWriter, r *http.Request) {
 				Value:    sessionID,
 				Path:     "/",
 				HttpOnly: true,
-				Secure:   true,
+				Secure:   false, // Set to true in production with HTTPS
 				MaxAge:   3600,
 			})
 
-			if err := h.Storage.StoreSession(sessionID, username); err != nil {
+			// Create SessionState struct instead of calling with separate parameters
+			sessionState := &storage.SessionState{
+				SessionID: sessionID,
+				UserID:    username,
+				CreatedAt: time.Now(),
+				ExpiresAt: time.Now().Add(24 * time.Hour), // 24 hour session
+				Active:    true,
+				Extra:     make(map[string]interface{}),
+			}
+
+			// Store using the new interface signature
+			if err := h.Storage.StoreSession(sessionState); err != nil {
 				h.Logger.WithError(err).Error("Failed to store session")
 			}
 
-			redirectURL := r.FormValue("redirect_url")
 			if redirectURL == "" {
 				redirectURL = "/"
 			}
@@ -133,8 +149,12 @@ func (h *Handlers) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			h.Logger.Debugf("User login successful: username=%s", username)
 			http.Redirect(w, r, redirectURL, http.StatusFound)
 		} else {
+			loginURL := "/login?error=invalid_credentials"
+			if redirectURL != "" {
+				loginURL += "&redirect_url=" + url.QueryEscape(redirectURL)
+			}
 			h.Logger.Debugf("User login failed: username=%s", username)
-			http.Redirect(w, r, "/login?error=invalid_credentials", http.StatusFound)
+			http.Redirect(w, r, loginURL, http.StatusFound)
 		}
 	}
 }

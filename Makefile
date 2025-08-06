@@ -21,10 +21,22 @@ BUILD_DIR := ./build
 DIST_DIR := ./dist
 CMD_DIR := ./cmd/server
 INTERNAL_DIR := ./internal
+TESTS_DIR := ./tests
+CGO_ENABLED ?= 1
 
 # Go build flags
 GO_BUILD_FLAGS := -trimpath -mod=readonly
-GO_TEST_FLAGS := -race -coverprofile=coverage.out
+
+# Conditional race flag based on CGO availability
+ifeq ($(CGO_ENABLED),0)
+	GO_TEST_FLAGS := -coverprofile=coverage.out
+	RACE_FLAG := 
+	RACE_NOTE := (race detection disabled - CGO_ENABLED=0)
+else
+	GO_TEST_FLAGS := -race -coverprofile=coverage.out
+	RACE_FLAG := -race
+	RACE_NOTE := (with race detection)
+endif
 
 # Default target
 all: clean fmt vet lint test build
@@ -106,27 +118,37 @@ staticcheck: install-staticcheck ## Run staticcheck
 
 ##@ Testing
 test: ## Run tests
-	@echo "🧪 Running tests..."
+	@echo "🧪 Running tests $(RACE_NOTE)..."
 	go test $(GO_TEST_FLAGS) ./...
 	@echo "✅ Tests passed"
 
 test-verbose: ## Run tests with verbose output
-	@echo "🧪 Running tests (verbose)..."
+	@echo "🧪 Running tests (verbose) $(RACE_NOTE)..."
 	go test -v $(GO_TEST_FLAGS) ./...
 
 test-coverage: ## Run tests with coverage report
-	@echo "🧪 Running tests with coverage..."
+	@echo "🧪 Running tests with coverage $(RACE_NOTE)..."
 	go test $(GO_TEST_FLAGS) ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Coverage report generated: coverage.html"
 
+test-race: ## Run tests with race detection (forces CGO_ENABLED=1)
+	@echo "🧪 Running tests with race detection..."
+	CGO_ENABLED=1 go test -race -coverprofile=coverage.out ./...
+	@echo "✅ Tests with race detection passed"
+
+test-no-race: ## Run tests without race detection
+	@echo "🧪 Running tests without race detection..."
+	go test -coverprofile=coverage.out ./...
+	@echo "✅ Tests passed"
+
 benchmark: ## Run benchmarks
 	@echo "⚡ Running benchmarks..."
-	go test -bench=. -benchmem ./...
+	go test -bench=. -benchmem $(RACE_FLAG) ./...
 
 test-discovery: build ## Test OAuth2 discovery endpoints
 	@echo "🧪 Testing OAuth2 discovery endpoints..."
-	@./oauth2-server & SERVER_PID=$$!; \
+	@./$(APP_NAME) & SERVER_PID=$$!; \
 	sleep 2; \
 	echo ""; \
 	echo "📋 Testing discovery endpoints:"; \
@@ -151,9 +173,14 @@ check-discovery: ## Check if discovery endpoints are accessible (requires runnin
 
 test-dynamic-registration: build ## Test dynamic client registration
 	@echo "🔄 Testing dynamic client registration..."
-	@./oauth2-server & SERVER_PID=$$!; \
+	@if [ ! -f $(TESTS_DIR)/test-dynamic-registration.sh ]; then \
+		echo "❌ Test script not found: $(TESTS_DIR)/test-dynamic-registration.sh"; \
+		exit 1; \
+	fi
+	@chmod +x $(TESTS_DIR)/test-dynamic-registration.sh
+	@./$(APP_NAME) & SERVER_PID=$$!; \
 	sleep 2; \
-	./test-dynamic-registration.sh; \
+	$(TESTS_DIR)/test-dynamic-registration.sh; \
 	kill $$SERVER_PID 2>/dev/null || true
 
 check-dynamic-registration: ## Check dynamic registration endpoint (requires running server)
@@ -162,17 +189,46 @@ check-dynamic-registration: ## Check dynamic registration endpoint (requires run
 
 test-redirect-uri-logic: build ## Test intelligent redirect URI validation logic
 	@echo "🧪 Testing redirect URI validation logic..."
-	@./oauth2-server & SERVER_PID=$$!; \
+	@if [ ! -f $(TESTS_DIR)/test-redirect-uri-logic.sh ]; then \
+		echo "❌ Test script not found: $(TESTS_DIR)/test-redirect-uri-logic.sh"; \
+		exit 1; \
+	fi
+	@chmod +x $(TESTS_DIR)/test-redirect-uri-logic.sh
+	@./$(APP_NAME) & SERVER_PID=$$!; \
 	sleep 2; \
-	./test-redirect-uri-logic.sh; \
+	$(TESTS_DIR)/test-redirect-uri-logic.sh; \
 	kill $$SERVER_PID 2>/dev/null || true
 
 test-backend-client: build ## Test backend service client registration (no redirect URIs)
 	@echo "🧪 Testing backend service client registration..."
-	@./oauth2-server & SERVER_PID=$$!; \
+	@if [ ! -f $(TESTS_DIR)/test-backend-client.sh ]; then \
+		echo "❌ Test script not found: $(TESTS_DIR)/test-backend-client.sh"; \
+		exit 1; \
+	fi
+	@chmod +x $(TESTS_DIR)/test-backend-client.sh
+	@./$(APP_NAME) & SERVER_PID=$$!; \
 	sleep 2; \
-	./test-backend-client.sh; \
+	$(TESTS_DIR)/test-backend-client.sh; \
 	kill $$SERVER_PID 2>/dev/null || true
+
+test-all-scripts: build ## Run all test scripts in the tests directory
+	@echo "🧪 Running all test scripts..."
+	@if [ ! -d $(TESTS_DIR) ]; then \
+		echo "❌ Tests directory not found: $(TESTS_DIR)"; \
+		exit 1; \
+	fi
+	@chmod +x $(TESTS_DIR)/*.sh 2>/dev/null || true
+	@./$(APP_NAME) & SERVER_PID=$$!; \
+	sleep 2; \
+	for script in $(TESTS_DIR)/*.sh; do \
+		if [ -f "$$script" ]; then \
+			echo "🧪 Running $$script..."; \
+			$$script || echo "❌ $$script failed"; \
+			echo ""; \
+		fi; \
+	done; \
+	kill $$SERVER_PID 2>/dev/null || true; \
+	echo "✅ All test scripts completed!"
 
 ##@ Dependencies
 deps: ## Download dependencies
@@ -275,10 +331,10 @@ config-validate: ## Validate configuration file
 
 endpoints: ## Test OAuth2 endpoints
 	@echo "🔗 Testing OAuth2 endpoints..."
-	@if [ -f test-endpoints.sh ]; then \
-		chmod +x test-endpoints.sh && ./test-endpoints.sh; \
+	@if [ -f $(TESTS_DIR)/test-endpoints.sh ]; then \
+		chmod +x $(TESTS_DIR)/test-endpoints.sh && $(TESTS_DIR)/test-endpoints.sh; \
 	else \
-		echo "❌ test-endpoints.sh not found"; \
+		echo "❌ $(TESTS_DIR)/test-endpoints.sh not found"; \
 	fi
 
 serve: build ## Serve the application (alias for run)
@@ -331,20 +387,21 @@ install-air:
 ##@ Information
 version: ## Show version information
 	@echo "📋 Version Information:"
-	@echo "  App Name:    $(APP_NAME)"
-	@echo "  Module:      $(MODULE)"
-	@echo "  Version:     $(VERSION)"
+	@echo "  App Name:	$(APP_NAME)"
+	@echo "  Module:	  $(MODULE)"
+	@echo "  Version:	 $(VERSION)"
 	@echo "  Git Commit:  $(GIT_COMMIT)"
 	@echo "  Build Time:  $(BUILD_TIME)"
 	@echo "  Go Version:  $$(go version)"
 
 status: ## Show project status
 	@echo "📊 Project Status:"
-	@echo "  Module:      $(MODULE)"
+	@echo "  Module:	  $(MODULE)"
 	@echo "  Go Version:  $$(go version | cut -d' ' -f3)"
-	@echo "  Files:       $$(find . -name '*.go' | wc -l) Go files"
-	@echo "  Tests:       $$(find . -name '*_test.go' | wc -l) test files"
-	@echo "  Docker:      $$(if command -v docker > /dev/null; then echo "available"; else echo "not available"; fi)"
+	@echo "  Files:	   $$(find . -name '*.go' | wc -l) Go files"
+	@echo "  Tests:	   $$(find . -name '*_test.go' | wc -l) test files"
+	@echo "  Test Scripts: $$(find $(TESTS_DIR) -name '*.sh' 2>/dev/null | wc -l) shell scripts"
+	@echo "  Docker:	  $$(if command -v docker > /dev/null; then echo "available"; else echo "not available"; fi)"
 	@echo "  Git Branch:  $$(git branch --show-current 2>/dev/null || echo "not in git repo")"
 	@echo "  Git Status:  $$(git status --porcelain 2>/dev/null | wc -l) changed files"
 

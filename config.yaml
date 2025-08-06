@@ -12,11 +12,11 @@ database:
   type: "memory" # "memory", "sqlite", or "postgres"
   sqlite_path: "oauth2.db" # Path to SQLite database file
   # PostgreSQL configuration (used when type is "postgres")
-  postgres_host: "postgres" # Use service name in docker-compose
+  postgres_host: "postgres-labs" # Use service name in docker-compose
   postgres_port: 5432
-  postgres_db: "oauth2"
-  postgres_user: "oauth2_user"
-  postgres_password: "oauth2_password"
+  postgres_db: "postgres"
+  postgres_user: "postgres"
+  postgres_password: "postgres"
   postgres_sslmode: "disable" # disable, require, verify-ca, verify-full
   cleanup_interval: 60 # Cleanup interval in minutes
 

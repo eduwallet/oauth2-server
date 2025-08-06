@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"oauth2-server/internal/config"
+	"oauth2-server/internal/storage"
 	"strings"
 	"time"
 )
@@ -108,7 +109,29 @@ func (h *Handlers) HandleClientRegistration(w http.ResponseWriter, r *http.Reque
 		AllowedOrigins:          req.AllowedOrigins,
 	}
 
-	if err := h.Storage.StoreDynamicClient(clientID, clientConfig); err != nil {
+	// Convert config.ClientConfig to storage.DynamicClient
+	dynamicClient := &storage.DynamicClient{
+		ClientID:                clientConfig.ID,
+		ClientSecret:            clientConfig.Secret,
+		ClientName:              clientConfig.Name,
+		Description:             clientConfig.Description,
+		RedirectURIs:            clientConfig.RedirectURIs,
+		GrantTypes:              clientConfig.GrantTypes,
+		ResponseTypes:           clientConfig.ResponseTypes,
+		Scopes:                  clientConfig.Scopes,
+		TokenEndpointAuthMethod: clientConfig.TokenEndpointAuthMethod,
+		Public:                  clientConfig.Public,
+		AllowedAudiences:        clientConfig.AllowedAudiences,
+		AllowTokenExchange:      clientConfig.AllowTokenExchange,
+		AllowedOrigins:          clientConfig.AllowedOrigins,
+		ClientIDIssuedAt:        time.Now(),
+		ClientSecretExpiresAt:   time.Time{}, // Set to zero time if no expiry
+		CreatedAt:               time.Now(),
+		UpdatedAt:               time.Now(),
+	}
+
+	// Store using the new interface signature
+	if err := h.Storage.StoreDynamicClient(dynamicClient); err != nil {
 		h.Logger.WithError(err).Error("Failed to store client")
 		h.writeError(w, "server_error", "Failed to register client", http.StatusInternalServerError)
 		return

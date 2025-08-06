@@ -170,7 +170,7 @@ func (h *Handlers) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !client.Public && client.Secret != clientSecret {
+	if !client.Public && client.ClientSecret != clientSecret {
 		h.writeError(w, "invalid_client", "Invalid client credentials", http.StatusUnauthorized)
 		return
 	}
@@ -384,7 +384,7 @@ func (h *Handlers) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !client.Public && client.Secret != clientSecret {
+	if !client.Public && client.ClientSecret != clientSecret {
 		h.writeError(w, "invalid_client", "Invalid client credentials", http.StatusUnauthorized)
 		return
 	}
@@ -434,7 +434,7 @@ func (h *Handlers) HandleIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !client.Public && client.Secret != clientSecret {
+	if !client.Public && client.ClientSecret != clientSecret {
 		h.writeError(w, "invalid_client", "Invalid client credentials", http.StatusUnauthorized)
 		return
 	}
@@ -531,7 +531,7 @@ func (h *Handlers) HandleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !client.Public && client.Secret != clientSecret {
+	if !client.Public && client.ClientSecret != clientSecret {
 		h.writeError(w, "invalid_client", "Invalid client credentials", http.StatusUnauthorized)
 		return
 	}

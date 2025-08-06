@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url" // Add this import
 	"oauth2-server/internal/storage"
 	"strings"
 	"time"
@@ -53,7 +54,7 @@ func (h *Handlers) HandleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		Authorized: false,
 	}
 
-	if err := h.Storage.StoreDeviceCode(deviceCode, deviceState); err != nil {
+	if err := h.Storage.StoreDeviceCode(deviceState); err != nil {
 		h.Logger.WithError(err).Error("Failed to store device code")
 		h.writeError(w, "server_error", "Failed to generate device code", http.StatusInternalServerError)
 		return
@@ -75,132 +76,124 @@ func (h *Handlers) HandleDeviceCode(w http.ResponseWriter, r *http.Request) {
 
 // HandleDeviceVerify handles device verification page
 func (h *Handlers) HandleDeviceVerify(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		userCode := r.URL.Query().Get("user_code")
-		data := map[string]interface{}{
-			"UserCode": userCode,
-		}
-
-		if err := h.Templates.ExecuteTemplate(w, "device_verify.html", data); err != nil {
-			h.Logger.WithError(err).Error("Failed to render device verify template")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-		}
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		h.writeError(w, "invalid_request", "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if r.Method == http.MethodPost {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "Invalid form data", http.StatusBadRequest)
-			return
-		}
+	// Check if user is authenticated
+	if !h.isUserAuthenticated(r) {
+		// Redirect to login with the current URL as redirect target
+		currentURL := r.URL.String()
+		loginURL := fmt.Sprintf("/login?redirect_url=%s", url.QueryEscape(currentURL))
+		http.Redirect(w, r, loginURL, http.StatusFound)
+		return
+	}
 
-		userCode := r.FormValue("user_code")
-		if userCode == "" {
-			http.Error(w, "Missing user code", http.StatusBadRequest)
-			return
-		}
+	userCode := r.URL.Query().Get("user_code")
 
-		deviceState, _, err := h.Storage.GetDeviceCodeByUserCode(userCode)
-		if err != nil || deviceState == nil {
-			http.Error(w, "Invalid user code", http.StatusBadRequest)
-			return
-		}
+	data := map[string]interface{}{
+		"UserCode": userCode,
+		"Error":    r.URL.Query().Get("error"),
+	}
 
-		if time.Since(deviceState.CreatedAt) > time.Duration(deviceState.ExpiresIn)*time.Second {
-			http.Error(w, "User code has expired", http.StatusBadRequest)
-			return
-		}
-
-		data := map[string]interface{}{
-			"DeviceCode": deviceState.DeviceCode,
-			"ClientID":   deviceState.ClientID,
-			"Scope":      strings.Join(deviceState.Scopes, " "),
-		}
-
-		if err := h.Templates.ExecuteTemplate(w, "device_authorize.html", data); err != nil {
-			h.Logger.WithError(err).Error("Failed to render device authorize template")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-		}
+	if err := h.Templates.ExecuteTemplate(w, "device_verify.html", data); err != nil {
+		h.Logger.WithError(err).Error("Failed to render device verification template")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
 
 // HandleDeviceAuthorize handles device authorization confirmation
 func (h *Handlers) HandleDeviceAuthorize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.writeError(w, "invalid_request", "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check if user is authenticated
+	if !h.isUserAuthenticated(r) {
+		// Redirect to login with the current URL as redirect target
+		loginURL := fmt.Sprintf("/login?redirect_url=%s", url.QueryEscape("/device/verify"))
+		http.Redirect(w, r, loginURL, http.StatusFound)
 		return
 	}
 
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		h.writeError(w, "invalid_request", "Invalid form data", http.StatusBadRequest)
 		return
 	}
 
-	deviceCode := r.FormValue("device_code")
-	action := r.FormValue("action")
+	userCode := r.FormValue("user_code")
+	action := r.FormValue("action") // "authorize" or "deny"
 
-	if deviceCode == "" {
-		http.Error(w, "Missing device code", http.StatusBadRequest)
+	if userCode == "" {
+		http.Redirect(w, r, "/device/verify?error=missing_user_code", http.StatusFound)
 		return
 	}
 
-	deviceState, err := h.Storage.GetDeviceCode(deviceCode)
-	if err != nil || deviceState == nil {
-		http.Error(w, "Invalid device code", http.StatusBadRequest)
+	// Get current authenticated user
+	userID := h.getCurrentUserID(r)
+	if userID == "" {
+		h.Logger.Error("Could not get user ID from session")
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	// Find device code by user code - now using the correct method signature
+	deviceState, err := h.Storage.GetDeviceCodeByUserCode(userCode)
+	if err != nil {
+		h.Logger.WithError(err).Debug("Device code lookup failed")
+		http.Redirect(w, r, "/device/verify?error=invalid_code", http.StatusFound)
+		return
+	}
+
+	if deviceState == nil {
+		http.Redirect(w, r, "/device/verify?error=invalid_code", http.StatusFound)
+		return
+	}
+
+	// Check if device code is expired
+	if time.Now().After(deviceState.CreatedAt.Add(time.Duration(deviceState.ExpiresIn) * time.Second)) {
+		http.Redirect(w, r, "/device/verify?error=expired_code", http.StatusFound)
 		return
 	}
 
 	if action == "authorize" {
-		accessToken := generateRandomString(64)
-		userID := h.getCurrentUserID(r)
-		if userID == "" {
-			userID = "device_user"
-		}
-
-		accessTokenInfo := &storage.TokenInfo{
-			Token:     accessToken,
-			TokenType: "access_token",
-			ClientID:  deviceState.ClientID,
-			UserID:    userID,
-			Scopes:    deviceState.Scopes,
-			Audience:  []string{},
-			IssuedAt:  time.Now(),
-			ExpiresAt: time.Now().Add(time.Duration(h.Config.Security.TokenExpirySeconds) * time.Second),
-			Active:    true,
-			Extra:     make(map[string]interface{}),
-		}
-
-		if err := h.Storage.StoreToken(accessTokenInfo); err != nil {
-			h.Logger.WithError(err).Error("Failed to store access token")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
+		// Mark device as authorized
 		deviceState.Authorized = true
-		deviceState.AccessToken = accessToken
 		deviceState.UserID = userID
+		//		deviceState.AuthorizedAt = time.Now()
 
-		if err := h.Storage.UpdateDeviceCode(deviceCode, deviceState); err != nil {
+		if err := h.Storage.StoreDeviceCode(deviceState); err != nil {
 			h.Logger.WithError(err).Error("Failed to update device code")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			http.Redirect(w, r, "/device/verify?error=server_error", http.StatusFound)
 			return
 		}
 
-		h.Logger.Debugf("Device authorization successful: user_code=%s, client=%s, user=%s", deviceState.UserCode, deviceState.ClientID, userID)
+		h.Logger.Debugf("Device authorization successful: user_code=%s, user=%s, client=%s",
+			userCode, userID, deviceState.ClientID)
 
-		if err := h.Templates.ExecuteTemplate(w, "device_success.html", nil); err != nil {
-			h.Logger.WithError(err).Error("Failed to render success template")
+		// Show success page
+		data := map[string]interface{}{
+			"Success": true,
+			"Message": "Device has been successfully authorized",
+		}
+
+		if err := h.Templates.ExecuteTemplate(w, "device_success.html", data); err != nil {
+			h.Logger.WithError(err).Error("Failed to render device success template")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
 	} else {
-		if err := h.Storage.DeleteDeviceCode(deviceCode); err != nil {
-			h.Logger.WithError(err).Error("Failed to delete device code")
+		// User denied authorization
+		h.Logger.Debugf("Device authorization denied: user_code=%s, user=%s", userCode, userID)
+
+		data := map[string]interface{}{
+			"Denied":  true,
+			"Message": "Device authorization was denied",
 		}
 
-		h.Logger.Debugf("Device authorization denied: user_code=%s, client=%s", deviceState.UserCode, deviceState.ClientID)
-
-		if err := h.Templates.ExecuteTemplate(w, "device_denied.html", nil); err != nil {
-			h.Logger.WithError(err).Error("Failed to render denied template")
+		if err := h.Templates.ExecuteTemplate(w, "device_success.html", data); err != nil {
+			h.Logger.WithError(err).Error("Failed to render device success template")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
 	}

@@ -2,47 +2,42 @@ package storage
 
 import (
 	"time"
-
-	"oauth2-server/internal/config"
 )
 
 // Storage interface defines the methods for persisting OAuth2 data
 type Storage interface {
 	// Authorization codes
-	StoreAuthCode(code string, authReq *AuthorizeRequest) error
-	GetAuthCode(code string) (*AuthorizeRequest, error)
+	StoreAuthCode(code *AuthCodeState) error
+	GetAuthCode(code string) (*AuthCodeState, error)
 	DeleteAuthCode(code string) error
 
 	// Device codes
-	StoreDeviceCode(deviceCode string, state *DeviceCodeState) error
+	StoreDeviceCode(deviceCode *DeviceCodeState) error
 	GetDeviceCode(deviceCode string) (*DeviceCodeState, error)
-	GetDeviceCodeByUserCode(userCode string) (*DeviceCodeState, string, error)
-	UpdateDeviceCode(deviceCode string, state *DeviceCodeState) error
+	GetDeviceCodeByUserCode(userCode string) (*DeviceCodeState, error)
+	UpdateDeviceCode(deviceCode *DeviceCodeState) error
 	DeleteDeviceCode(deviceCode string) error
 
 	// Dynamic clients
-	StoreDynamicClient(clientID string, client *config.ClientConfig) error
-	GetDynamicClient(clientID string) (*config.ClientConfig, error)
+	StoreDynamicClient(client *DynamicClient) error
+	GetDynamicClient(clientID string) (*DynamicClient, error)
+	UpdateDynamicClient(client *DynamicClient) error
 	DeleteDynamicClient(clientID string) error
 
 	// Registration tokens
-	StoreRegistrationToken(token, clientID string) error
-	GetClientIDByRegistrationToken(token string) (string, error)
+	StoreRegistrationToken(token *RegistrationToken) error
+	GetRegistrationToken(token string) (*RegistrationToken, error)
 	DeleteRegistrationToken(token string) error
 
 	// OAuth2 Tokens (Access, Refresh, ID tokens)
-	StoreToken(tokenInfo *TokenInfo) error
-	GetToken(token string) (*TokenInfo, error)
-	GetTokensByClientID(clientID string) ([]*TokenInfo, error)
-	GetTokensByUserID(userID string) ([]*TokenInfo, error)
-	UpdateTokenStatus(token string, active bool) error
+	StoreToken(token *TokenState) error
+	GetToken(token string) (*TokenState, error)
+	UpdateToken(token *TokenState) error
 	DeleteToken(token string) error
-	DeleteTokensByClientID(clientID string) error
-	DeleteTokensByUserID(userID string) error
 
 	// Sessions
-	StoreSession(sessionID, userID string) error
-	GetSession(sessionID string) (*Session, error)
+	StoreSession(session *SessionState) error
+	GetSession(sessionID string) (*SessionState, error)
 	DeleteSession(sessionID string) error
 
 	// Cleanup expired entries
@@ -52,19 +47,20 @@ type Storage interface {
 	Close() error
 }
 
-// AuthorizeRequest represents an OAuth2 authorization request
-type AuthorizeRequest struct {
+// AuthCodeState represents an OAuth2 authorization code state
+type AuthCodeState struct {
+	Code                string                 `json:"code"`
 	ClientID            string                 `json:"client_id"`
-	ResponseType        string                 `json:"response_type"`
+	UserID              string                 `json:"user_id"`
 	RedirectURI         string                 `json:"redirect_uri"`
-	Scopes              []string               `json:"scope"`
+	ResponseType        string                 `json:"response_type"` // Added missing field
+	Scopes              []string               `json:"scopes"`
 	State               string                 `json:"state"`
 	CodeChallenge       string                 `json:"code_challenge,omitempty"`
 	CodeChallengeMethod string                 `json:"code_challenge_method,omitempty"`
 	CreatedAt           time.Time              `json:"created_at"`
 	ExpiresAt           time.Time              `json:"expires_at"`
-	UserID              string                 `json:"user_id,omitempty"` // Set when user authorizes the request
-	Extra               map[string]interface{} `json:"extra,omitempty"`   // Additional parameters
+	Extra               map[string]interface{} `json:"extra,omitempty"`
 }
 
 // DeviceCodeResponse represents the response for device authorization
@@ -92,36 +88,61 @@ type DeviceCodeState struct {
 	AccessToken string    `json:"access_token,omitempty"`
 }
 
-// TokenInfo represents stored token information
-type TokenInfo struct {
-	Issuer    string                 `json:"issuer"` // TO DO - add issuer field
-	Token     string                 `json:"token"`
-	TokenType string                 `json:"token_type"` // "access", "refresh", "id"
-	ClientID  string                 `json:"client_id"`
-	UserID    string                 `json:"user_id,omitempty"`
-	Scopes    []string               `json:"scope,omitempty"`
-	Audience  []string               `json:"audience,omitempty"`
-	Subject   string                 `json:"subject,omitempty"`
-	IssuedAt  time.Time              `json:"issued_at"`
-	ExpiresAt time.Time              `json:"expires_at"`
-	NotBefore time.Time              `json:"not_before,omitempty"`
-	Active    bool                   `json:"active"`
-	Extra     map[string]interface{} `json:"extra,omitempty"`
+// DynamicClient represents a dynamically registered OAuth2 client
+type DynamicClient struct {
+	ClientID                string    `json:"client_id"`
+	ClientSecret            string    `json:"client_secret,omitempty"`
+	ClientName              string    `json:"client_name,omitempty"`
+	Description             string    `json:"description,omitempty"`
+	RedirectURIs            []string  `json:"redirect_uris,omitempty"`
+	GrantTypes              []string  `json:"grant_types,omitempty"`
+	ResponseTypes           []string  `json:"response_types,omitempty"`
+	Scopes                  []string  `json:"scopes,omitempty"`
+	TokenEndpointAuthMethod string    `json:"token_endpoint_auth_method,omitempty"`
+	Public                  bool      `json:"public"`
+	AllowedAudiences        []string  `json:"allowed_audiences,omitempty"`
+	AllowTokenExchange      bool      `json:"allow_token_exchange"`
+	AllowedOrigins          []string  `json:"allowed_origins,omitempty"`
+	SoftwareID              string    `json:"software_id,omitempty"`
+	SoftwareVersion         string    `json:"software_version,omitempty"`
+	ClientIDIssuedAt        time.Time `json:"client_id_issued_at"`
+	ClientSecretExpiresAt   time.Time `json:"client_secret_expires_at,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+}
 
-	// For refresh tokens
-	ParentAccessToken string `json:"parent_access_token,omitempty"`
-
-	// For ID tokens
-	Nonce    string     `json:"nonce,omitempty"`
-	AuthTime *time.Time `json:"auth_time,omitempty"`
-
-	// Metadata
-	GrantType string    `json:"grant_type,omitempty"`
+// RegistrationToken represents a client registration token
+type RegistrationToken struct {
+	Token     string    `json:"token"`
+	ClientID  string    `json:"client_id"`
+	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Session represents a user session
-type Session struct {
+// TokenState represents stored token information
+type TokenState struct {
+	Token             string                 `json:"token"`
+	TokenType         string                 `json:"token_type"` // "access", "refresh", "id"
+	ClientID          string                 `json:"client_id"`
+	UserID            string                 `json:"user_id,omitempty"`
+	Scopes            []string               `json:"scopes,omitempty"`
+	Audience          []string               `json:"audience,omitempty"`
+	Subject           string                 `json:"subject,omitempty"`
+	Issuer            string                 `json:"issuer,omitempty"` // Added missing field
+	IssuedAt          time.Time              `json:"issued_at"`
+	ExpiresAt         time.Time              `json:"expires_at"`
+	NotBefore         time.Time              `json:"not_before,omitempty"`
+	Active            bool                   `json:"active"`
+	Extra             map[string]interface{} `json:"extra,omitempty"`
+	ParentAccessToken string                 `json:"parent_access_token,omitempty"`
+	Nonce             string                 `json:"nonce,omitempty"`
+	AuthTime          *time.Time             `json:"auth_time,omitempty"`
+	GrantType         string                 `json:"grant_type,omitempty"`
+	CreatedAt         time.Time              `json:"created_at"`
+}
+
+// SessionState represents a user session
+type SessionState struct {
 	SessionID string                 `json:"session_id"`
 	UserID    string                 `json:"user_id"`
 	CreatedAt time.Time              `json:"created_at"`
@@ -129,3 +150,8 @@ type Session struct {
 	Active    bool                   `json:"active"`
 	Extra     map[string]interface{} `json:"extra,omitempty"`
 }
+
+// Legacy types for backward compatibility (deprecated - use the State types above)
+type AuthorizeRequest = AuthCodeState
+type TokenInfo = TokenState
+type Session = SessionState

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -65,7 +66,9 @@ func (s *BaseSQLStorage) migrate() error {
 }
 
 // Authorization codes methods
-func (s *BaseSQLStorage) StoreAuthCode(code string, authReq *AuthorizeRequest) error {
+func (s *BaseSQLStorage) StoreAuthCode(authReq *AuthCodeState) error {
+	log.Printf("BaseSQLStorage: Storing auth code: %s", authReq.Code)
+
 	query := fmt.Sprintf(`INSERT INTO auth_codes 
 		(code, client_id, response_type, redirect_uri, scopes, state, code_challenge, code_challenge_method, created_at, expires_at)
 		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
@@ -74,33 +77,46 @@ func (s *BaseSQLStorage) StoreAuthCode(code string, authReq *AuthorizeRequest) e
 		s.dialect.Placeholder(7), s.dialect.Placeholder(8), s.dialect.Placeholder(9),
 		s.dialect.Placeholder(10))
 
+	scopesJSON, _ := json.Marshal(authReq.Scopes)
+
 	_, err := s.db.Exec(query,
-		code,
+		authReq.Code,
 		authReq.ClientID,
-		authReq.ResponseType,
+		authReq.ResponseType, // Now using the correct field
 		authReq.RedirectURI,
-		authReq.Scopes,
+		string(scopesJSON),
 		authReq.State,
 		authReq.CodeChallenge,
 		authReq.CodeChallengeMethod,
 		authReq.CreatedAt,
 		authReq.ExpiresAt,
 	)
-	return err
+
+	if err != nil {
+		log.Printf("BaseSQLStorage: Failed to store auth code: %v", err)
+		return fmt.Errorf("failed to store auth code: %w", err)
+	}
+
+	log.Printf("BaseSQLStorage: Auth code stored successfully: %s", authReq.Code)
+	return nil
 }
 
-func (s *BaseSQLStorage) GetAuthCode(code string) (*AuthorizeRequest, error) {
+func (s *BaseSQLStorage) GetAuthCode(code string) (*AuthCodeState, error) {
+	log.Printf("BaseSQLStorage: Retrieving auth code: %s", code)
+
 	query := fmt.Sprintf(`SELECT client_id, response_type, redirect_uri, scopes, state, code_challenge, code_challenge_method, created_at, expires_at
 		FROM auth_codes WHERE code = %s`, s.dialect.Placeholder(1))
 
 	row := s.db.QueryRow(query, code)
 
-	authReq := &AuthorizeRequest{}
+	authReq := &AuthCodeState{Code: code}
+	var scopesJSON string
+
 	err := row.Scan(
 		&authReq.ClientID,
-		&authReq.ResponseType,
+		&authReq.ResponseType, // Now using the correct field
 		&authReq.RedirectURI,
-		&authReq.Scopes,
+		&scopesJSON,
 		&authReq.State,
 		&authReq.CodeChallenge,
 		&authReq.CodeChallengeMethod,
@@ -109,12 +125,19 @@ func (s *BaseSQLStorage) GetAuthCode(code string) (*AuthorizeRequest, error) {
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, nil
+		log.Printf("BaseSQLStorage: Auth code not found: %s", code)
+		return nil, fmt.Errorf("auth code not found: %s", code)
 	}
 	if err != nil {
-		return nil, err
+		log.Printf("BaseSQLStorage: Database error retrieving auth code: %v", err)
+		return nil, fmt.Errorf("database error: %w", err)
 	}
 
+	if scopesJSON != "" {
+		json.Unmarshal([]byte(scopesJSON), &authReq.Scopes)
+	}
+
+	log.Printf("BaseSQLStorage: Auth code retrieved successfully: %s", code)
 	return authReq, nil
 }
 
@@ -124,12 +147,14 @@ func (s *BaseSQLStorage) DeleteAuthCode(code string) error {
 	return err
 }
 
-// Device codes methods
-func (s *BaseSQLStorage) StoreDeviceCode(deviceCode string, state *DeviceCodeState) error {
+// Device codes methods - Fixed method signature
+func (s *BaseSQLStorage) StoreDeviceCode(state *DeviceCodeState) error {
+	log.Printf("BaseSQLStorage: Storing device code: %s", state.DeviceCode)
+
 	// Convert scopes slice to space-separated string for storage
 	scopesStr := strings.Join(state.Scopes, " ")
 
-	// Calculate expires_at from Interval (rename this field usage)
+	// Calculate expires_at from ExpiresIn
 	expiresAt := state.CreatedAt.Add(time.Duration(state.ExpiresIn) * time.Second)
 
 	query := fmt.Sprintf(`INSERT INTO device_codes 
@@ -142,19 +167,26 @@ func (s *BaseSQLStorage) StoreDeviceCode(deviceCode string, state *DeviceCodeSta
 		s.dialect.Placeholder(10), s.dialect.Placeholder(11))
 
 	_, err := s.db.Exec(query,
-		deviceCode,
+		state.DeviceCode,
 		state.UserCode,
 		state.ClientID,
 		scopesStr,
-		state.ExpiresIn, // This field exists in the struct
-		state.Interval,  // This field exists in the struct
+		state.ExpiresIn,
+		state.Interval,
 		state.CreatedAt,
 		expiresAt,
 		state.Authorized,
 		state.UserID,
 		state.AccessToken,
 	)
-	return err
+
+	if err != nil {
+		log.Printf("BaseSQLStorage: Failed to store device code: %v", err)
+		return fmt.Errorf("failed to store device code: %w", err)
+	}
+
+	log.Printf("BaseSQLStorage: Device code stored successfully: %s", state.DeviceCode)
+	return nil
 }
 
 func (s *BaseSQLStorage) GetDeviceCode(deviceCode string) (*DeviceCodeState, error) {
@@ -423,9 +455,12 @@ func (s *BaseSQLStorage) DeleteRegistrationToken(token string) error {
 	return err
 }
 
-// OAuth2 Tokens methods
-func (s *BaseSQLStorage) StoreToken(tokenInfo *TokenInfo) error {
+// OAuth2 Tokens methods - Fixed to use all TokenState fields
+func (s *BaseSQLStorage) StoreToken(tokenInfo *TokenState) error {
+	log.Printf("BaseSQLStorage: Storing token: %s", tokenInfo.TokenType)
+
 	// Convert arrays and maps to JSON
+	scopesJSON, _ := json.Marshal(tokenInfo.Scopes)
 	audienceJSON, _ := json.Marshal(tokenInfo.Audience)
 	extraJSON, _ := json.Marshal(tokenInfo.Extra)
 
@@ -445,21 +480,28 @@ func (s *BaseSQLStorage) StoreToken(tokenInfo *TokenInfo) error {
 		tokenInfo.TokenType,
 		tokenInfo.ClientID,
 		tokenInfo.UserID,
-		tokenInfo.Scopes,
+		string(scopesJSON),
 		string(audienceJSON),
-		tokenInfo.Subject,
+		tokenInfo.Subject, // Now available
 		tokenInfo.IssuedAt,
 		tokenInfo.ExpiresAt,
-		tokenInfo.NotBefore,
+		tokenInfo.NotBefore, // Now available
 		tokenInfo.Active,
 		string(extraJSON),
-		tokenInfo.ParentAccessToken,
-		tokenInfo.Nonce,
-		tokenInfo.AuthTime,
-		tokenInfo.GrantType,
+		tokenInfo.ParentAccessToken, // Now available
+		tokenInfo.Nonce,             // Now available
+		tokenInfo.AuthTime,          // Now available
+		tokenInfo.GrantType,         // Now available
 		tokenInfo.CreatedAt,
 	)
-	return err
+
+	if err != nil {
+		log.Printf("BaseSQLStorage: Failed to store token: %v", err)
+		return fmt.Errorf("failed to store token: %w", err)
+	}
+
+	log.Printf("BaseSQLStorage: Token stored successfully: %s", tokenInfo.TokenType)
+	return nil
 }
 
 func (s *BaseSQLStorage) GetToken(token string) (*TokenInfo, error) {

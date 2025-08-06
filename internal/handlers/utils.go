@@ -43,15 +43,14 @@ func generateUserCode() string {
 	return string(code[:4]) + "-" + string(code[4:])
 }
 
-func (h *Handlers) findClient(clientID string) *config.ClientConfig {
+func (h *Handlers) findClient(clientID string) *storage.DynamicClient {
 	// Try dynamic clients first
 	dynamicClient, err := h.Storage.GetDynamicClient(clientID)
 	if err == nil && dynamicClient != nil {
 		return dynamicClient
 	}
 
-	// Fallback to static clients from config
-	return findClientByID(clientID, h.Config)
+	return nil
 }
 
 func (h *Handlers) isUserAuthenticated(r *http.Request) bool {

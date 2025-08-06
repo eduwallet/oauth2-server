@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"oauth2-server/internal/storage"
 	"strings"
+	"time" // Add missing time import
 )
 
 // HandleAuthorize handles OAuth2 authorization endpoint
@@ -46,28 +47,34 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	// Get the authenticated user from the session
 	userID := h.getCurrentUserID(r)
 
-	// Create a new AuthorizeRequest with UserID
-	authReq := &storage.AuthorizeRequest{
+	// Generate authorization code
+	authCode := generateRandomString(32)
+
+	// Create AuthCodeState struct with all required fields
+	authCodeState := &storage.AuthCodeState{
+		Code:                authCode,
 		ClientID:            req.ClientID,
-		ResponseType:        req.ResponseType,
+		UserID:              userID,
 		RedirectURI:         req.RedirectURI,
+		ResponseType:        req.ResponseType,
 		Scopes:              req.Scopes,
 		State:               req.State,
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
-		UserID:              userID,
+		CreatedAt:           time.Now(),
+		ExpiresAt:           time.Now().Add(10 * time.Minute), // 10 minute expiry
+		Extra:               make(map[string]interface{}),
 	}
 
-	// Generate authorization code
-	code := generateRandomString(32)
-	if err := h.Storage.StoreAuthCode(code, authReq); err != nil {
+	// Store using the new interface signature (single parameter)
+	if err := h.Storage.StoreAuthCode(authCodeState); err != nil {
 		h.Logger.WithError(err).Error("Failed to store authorization code")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	// Redirect with authorization code
-	redirectURI := req.RedirectURI + "?code=" + code
+	redirectURI := req.RedirectURI + "?code=" + authCode
 	if req.State != "" {
 		redirectURI += "&state=" + req.State
 	}
