@@ -94,7 +94,6 @@ func (h *Handlers) HandleJWKS(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(jwks)
 }
 
-
 // HandleRoot handles the root endpoint
 func (h *Handlers) HandleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -221,4 +220,5 @@ func (h *Handlers) HandleRoot(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(homeHTML))}
+	w.Write([]byte(homeHTML))
+}

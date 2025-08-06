@@ -1,114 +1,105 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
-	"oauth2-server/internal/storage"
 	"strings"
-	"time" // Add missing time import
+
+	"github.com/ory/fosite"
 )
 
-// HandleAuthorize handles OAuth2 authorization endpoint
+// HandleAuthorize handles OAuth2 authorization endpoint using Fosite
 func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		h.writeError(w, "invalid_request", "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	ctx := context.Background()
 
-	// Parse authorization request
-	req := &AuthorizeRequest{
-		ClientID:            r.URL.Query().Get("client_id"),
-		ResponseType:        r.URL.Query().Get("response_type"),
-		RedirectURI:         r.URL.Query().Get("redirect_uri"),
-		Scopes:              strings.Split(r.URL.Query().Get("scope"), " "),
-		State:               r.URL.Query().Get("state"),
-		CodeChallenge:       r.URL.Query().Get("code_challenge"),
-		CodeChallengeMethod: r.URL.Query().Get("code_challenge_method"),
-	}
-
-	// Basic validation
-	if req.ClientID == "" || req.ResponseType == "" {
-		h.writeError(w, "invalid_request", "Missing required parameters", http.StatusBadRequest)
-		return
-	}
-
-	// Validate client
-	client := h.findClient(req.ClientID)
-	if client == nil {
-		h.writeError(w, "invalid_client", "Unknown client", http.StatusBadRequest)
+	// Let Fosite parse and validate the request
+	authRequest, err := h.OAuth2Provider.NewAuthorizeRequest(ctx, r)
+	if err != nil {
+		h.Logger.WithError(err).Error("Invalid authorization request")
+		h.OAuth2Provider.WriteAuthorizeError(ctx, w, authRequest, err)
 		return
 	}
 
 	// Check if user is authenticated
 	if !h.isUserAuthenticated(r) {
-		h.showLoginForm(w, r, req)
+		// Store the request for when the user returns after login
+		// This depends on your session mechanism
+		h.storeAuthRequestInSession(w, r, authRequest)
+
+		// Show login form with client info from the request
+		h.showLoginForm(w, r, &AuthorizeRequest{
+			ClientID:     authRequest.GetClient().GetID(),
+			RedirectURI:  authRequest.GetRedirectURI(),
+			Scopes:       authRequest.GetRequestedScopes(),
+			State:        authRequest.GetState(),
+			ResponseType: authRequest.GetResponseTypes()[0],
+		})
 		return
 	}
 
-	// Get the authenticated user from the session
+	// Get user ID from the session
 	userID := h.getCurrentUserID(r)
 
-	// Generate authorization code
-	authCode := generateRandomString(32)
-
-	// Create AuthCodeState struct with all required fields
-	authCodeState := &storage.AuthCodeState{
-		Code:                authCode,
-		ClientID:            req.ClientID,
-		UserID:              userID,
-		RedirectURI:         req.RedirectURI,
-		ResponseType:        req.ResponseType,
-		Scopes:              req.Scopes,
-		State:               req.State,
-		CodeChallenge:       req.CodeChallenge,
-		CodeChallengeMethod: req.CodeChallengeMethod,
-		CreatedAt:           time.Now(),
-		ExpiresAt:           time.Now().Add(10 * time.Minute), // 10 minute expiry
-		Extra:               make(map[string]interface{}),
+	// Create a session that Fosite understands
+	session := &UserSession{
+		Subject: userID,
+		// Add other user information if needed
 	}
 
-	// Store using the new interface signature (single parameter)
-	if err := h.Storage.StoreAuthCode(authCodeState); err != nil {
-		h.Logger.WithError(err).Error("Failed to store authorization code")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Redirect with authorization code
-	redirectURI := req.RedirectURI + "?code=" + authCode
-	if req.State != "" {
-		redirectURI += "&state=" + req.State
-	}
-
-	http.Redirect(w, r, redirectURI, http.StatusFound)
+	// Let Fosite handle the response (generate auth code, handle redirect, etc.)
+	h.OAuth2Provider.WriteAuthorizeResponse(ctx, w, authRequest, session)
 }
 
-// HandleConsent handles the consent page
-func (h *Handlers) HandleConsent(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		clientID := r.URL.Query().Get("client_id")
-		scope := r.URL.Query().Get("scope")
+// UserSession implements fosite.Session
+type UserSession struct {
+	Subject string
+	// Add other fields as needed
+}
 
-		data := map[string]interface{}{
-			"ClientID": clientID,
-			"Scope":    scope,
-		}
+// GetSubject returns the subject (user ID)
+func (s *UserSession) GetSubject() string {
+	return s.Subject
+}
 
-		if err := h.Templates.ExecuteTemplate(w, "consent.html", data); err != nil {
-			h.Logger.WithError(err).Error("Failed to render consent template")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-		}
+// Clone creates a deep copy of the session
+func (s *UserSession) Clone() fosite.Session {
+	return &UserSession{
+		Subject: s.Subject,
 	}
 }
 
-func (h *Handlers) showLoginForm(w http.ResponseWriter, r *http.Request, authReq *AuthorizeRequest) {
-	data := map[string]interface{}{
-		"ClientID":    authReq.ClientID,
-		"Scope":       authReq.Scopes,
-		"RedirectURL": r.URL.String(),
-	}
+// storeAuthRequestInSession stores the auth request in the user's session
+func (h *Handlers) storeAuthRequestInSession(w http.ResponseWriter, r *http.Request, authRequest fosite.AuthorizeRequester) {
+	// This depends on your session mechanism
+	// For example, if using Gorilla sessions:
+	session, _ := h.SessionStore.Get(r, "auth-session")
 
-	if err := h.Templates.ExecuteTemplate(w, "login.html", data); err != nil {
-		h.Logger.WithError(err).Error("Failed to render login template")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	// Store the minimal info needed to reconstruct the request
+	session.Values["auth_request_client_id"] = authRequest.GetClient().GetID()
+	session.Values["auth_request_redirect_uri"] = authRequest.GetRedirectURI()
+	session.Values["auth_request_scopes"] = strings.Join(authRequest.GetRequestedScopes(), " ")
+	session.Values["auth_request_state"] = authRequest.GetState()
+	session.Values["auth_request_response_type"] = authRequest.GetResponseTypes()[0]
+
+	session.Save(r, w)
+}
+
+// getCurrentUserID gets the user ID from the session
+func (h *Handlers) getCurrentUserID(r *http.Request) string {
+	// This depends on your session mechanism
+	// For example, if using Gorilla sessions:
+	session, _ := h.SessionStore.Get(r, "auth-session")
+	if userID, ok := session.Values["user_id"].(string); ok {
+		return userID
 	}
+	return ""
+}
+
+// isUserAuthenticated checks if the user is authenticated
+func (h *Handlers) isUserAuthenticated(r *http.Request) bool {
+	// This depends on your session mechanism
+	// For example, if using Gorilla sessions:
+	session, _ := h.SessionStore.Get(r, "auth-session")
+	_, ok := session.Values["user_id"].(string)
+	return ok
 }

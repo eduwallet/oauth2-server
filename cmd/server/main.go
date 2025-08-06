@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ory/fosite"
+	"github.com/ory/fosite/compose"
 	"github.com/sirupsen/logrus"
 
 	"oauth2-server/internal/config"
@@ -50,15 +52,18 @@ func main() {
 	// Initialize logger
 	initializeLogger()
 
+	// Initialize Fosite OAuth2 provider
+  oauth2Provider := NewOAuth2Provider(appConfig, store)
+
 	// Load templates
 	if err := loadTemplates(); err != nil {
 		log.Fatalf("❌ Failed to load templates: %v", err)
 	}
 
-	// Initialize handlers
-	h = handlers.NewHandlers(appConfig, store, templates, log)
+    // Initialize handlers with the Fosite provider
+    h = handlers.NewHandlers(appConfig, store, templates, log, oauth2Provider)
 
-	log.Info("✅ OAuth2 server initialized with persistent storage")
+		log.Info("✅ OAuth2 server initialized with persistent storage")
 
 	// Start cleanup routine
 	go startCleanupRoutine()
@@ -149,7 +154,7 @@ func setupRoutes() {
 	http.HandleFunc("/login", proxyAwareMiddleware(h.HandleLogin))
 	http.HandleFunc("/auth/consent", proxyAwareMiddleware(h.HandleConsent))
 
-	// Static files and 
+	// Static files and
 	http.HandleFunc("/health", proxyAwareMiddleware(healthHandler))
 	http.HandleFunc("/", proxyAwareMiddleware(h.HandleRoot))
 
@@ -200,12 +205,11 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now().Unix(),
 		"version":   "1.0.0",
 		"base_url":  appConfig.Server.BaseURL,
-//		"clients":   len(clientStore.ListClients()),
+		//		"clients":   len(clientStore.ListClients()),
 	}
 
 	json.NewEncoder(w).Encode(response)
 }
-
 
 // Middleware for proxy awareness
 func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
@@ -267,4 +271,47 @@ func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 
 		handler(w, r)
 	}
+}
+
+// In your initialization code
+func NewOAuth2Provider(appConfig *config.Config, storage *storage.Storage) fosite.OAuth2Provider {
+    // Set up a store that implements fosite's interfaces
+    fositeStore := storage.NewFositeStore(storage)
+    
+    // JWT strategy for signing tokens
+    privateKey := // load your private key for signing JWTs
+    
+    // Configure Fosite with the strategies you need
+    oauth2Provider := compose.Compose(
+        &compose.Config{
+            AccessTokenLifespan:   time.Duration(appConfig.OAuth2.AccessTokenLifespan) * time.Second,
+            RefreshTokenLifespan:  time.Duration(appConfig.OAuth2.RefreshTokenLifespan) * time.Second,
+            AuthorizeCodeLifespan: time.Duration(appConfig.OAuth2.AuthorizeCodeLifespan) * time.Second,
+            IDTokenLifespan:       time.Duration(appConfig.OAuth2.IDTokenLifespan) * time.Second,
+            
+            // Other important settings
+            TokenURL: appConfig.Server.BaseURL + "/oauth2/token",
+            AuthURL:  appConfig.Server.BaseURL + "/oauth2/auth",
+            
+            // For token signing
+            GlobalSecret: []byte(appConfig.OAuth2.GlobalSecret),
+            
+            // CORS settings if needed
+            AllowedPromptValues: []string{"none", "login", "consent", "select_account"},
+        },
+        fositeStore,
+        // Enable the features you need:
+        compose.OAuth2AuthorizeExplicitFactory,
+        compose.OAuth2TokenIntrospectionFactory,
+        compose.OAuth2RefreshTokenGrantFactory,
+        compose.OAuth2ClientCredentialsGrantFactory,
+        compose.OAuth2PKCEFactory,
+        compose.OpenIDConnectExplicitFactory,
+        compose.OAuth2TokenRevocationFactory,
+        
+        // For JWT Access Tokens (if you want them)
+        compose.OAuth2JWTBearerGrantFactory,
+    )
+    
+    return oauth2Provider
 }

@@ -1,28 +1,39 @@
 package handlers
 
 import (
-	"github.com/sirupsen/logrus"
 	"html/template"
+
+	"github.com/sirupsen/logrus"
 
 	"oauth2-server/internal/config"
 	"oauth2-server/internal/storage"
+
+	"golang.org/x/oauth2"
 )
 
 // Handlers holds all the dependencies needed by HTTP handlers
 type Handlers struct {
-	Config    *config.Config
-	Storage   storage.Storage
-	Templates *template.Template
-	Logger    *logrus.Logger
+	Config         *config.Config
+	Store           *storage.Storage
+	Templates      *template.Template
+	Logger         *logrus.Logger
+	OAuth2Provider *oauth2.Provider
 }
 
 // NewHandlers creates a new handlers instance with dependencies
-func NewHandlers(cfg *config.Config, store storage.Storage, templates *template.Template, logger *logrus.Logger) *Handlers {
+func NewHandlers(
+	config *config.Config,
+	store *storage.Storage,
+	templates *template.Template,
+	logger *logrus.Logger,
+	oauth2Provider *oauth2.Provider,
+) *Handlers {
 	return &Handlers{
-		Config:    cfg,
-		Storage:   store,
-		Templates: templates,
-		Logger:    logger,
+		Config:         config,
+		Store:          store,
+		Templates:      templates,
+		Logger:         logger,
+		OAuth2Provider: oauth2Provider,
 	}
 }
 
