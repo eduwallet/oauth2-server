@@ -4,8 +4,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"oauth2-server/internal/models"
 )
 
 // LoadFromEnv loads configuration from environment variables and overrides YAML config
@@ -146,41 +144,28 @@ func (c *Config) loadClientsFromEnv() {
 		}
 	}
 
-	// Convert environment client configs to ClientInfo
+	// Convert environment client configs to ClientConfig - FIXED VARIABLE NAME
 	for clientID, props := range clientEnvs {
 		if secret, hasSecret := props["SECRET"]; hasSecret {
-			clientInfo := models.ClientInfo{
-				ID:            clientID,
-				Secret:        secret,
-				Name:          getOrDefault(props, "NAME", "Environment Client "+clientID),
-				RedirectURIs:  strings.Split(getOrDefault(props, "REDIRECT_URIS", ""), ","),
-				GrantTypes:    strings.Split(getOrDefault(props, "GRANT_TYPES", "authorization_code,refresh_token"), ","),
-				ResponseTypes: strings.Split(getOrDefault(props, "RESPONSE_TYPES", "code"), ","),
-				Scopes:        strings.Split(getOrDefault(props, "SCOPES", "openid,profile,email"), ","),
-				Audience:      strings.Split(getOrDefault(props, "AUDIENCE", ""), ","),
+			redirectURIs := filterEmpty(strings.Split(getOrDefault(props, "REDIRECT_URIS", ""), ","))
+			grantTypes := filterEmpty(strings.Split(getOrDefault(props, "GRANT_TYPES", "authorization_code,refresh_token"), ","))
+			responseTypes := filterEmpty(strings.Split(getOrDefault(props, "RESPONSE_TYPES", "code"), ","))
+			scopes := filterEmpty(strings.Split(getOrDefault(props, "SCOPES", "openid,profile,email"), ","))
+
+			clientConfig := ClientConfig{ // ← Fixed: use clientConfig instead of ConfigClient
+				ID:                      clientID,
+				Secret:                  secret,
+				Name:                    getOrDefault(props, "NAME", "Environment Client "+clientID),
+				RedirectURIs:            redirectURIs,
+				GrantTypes:              grantTypes,
+				ResponseTypes:           responseTypes,
+				Scopes:                  scopes,
+				TokenEndpointAuthMethod: "client_secret_basic",
+				Public:                  false,
+				EnabledFlows:            grantTypes,
 			}
 
-			clientInfo.RedirectURIs = filterEmpty(clientInfo.RedirectURIs)
-			clientInfo.GrantTypes = filterEmpty(clientInfo.GrantTypes)
-			clientInfo.ResponseTypes = filterEmpty(clientInfo.ResponseTypes)
-			clientInfo.Scopes = filterEmpty(clientInfo.Scopes)
-			clientInfo.Audience = filterEmpty(clientInfo.Audience)
-
-			// Convert models.ClientInfo to ClientConfig
-			clientConfig := ClientConfig{
-				ID:                      clientInfo.ID,
-				Secret:                  clientInfo.Secret,
-				Name:                    clientInfo.Name,
-				RedirectURIs:            clientInfo.RedirectURIs,
-				GrantTypes:              clientInfo.GrantTypes,
-				ResponseTypes:           clientInfo.ResponseTypes,
-				Scopes:                  clientInfo.Scopes,
-				Audience:                clientInfo.Audience,
-				TokenEndpointAuthMethod: "client_secret_basic", // Default
-				Public:                  false,                 // Default
-				EnabledFlows:            clientInfo.GrantTypes, // Use grant types as enabled flows
-			}
-			c.Clients = append(c.Clients, clientConfig)
+			c.Clients = append(c.Clients, clientConfig) // ← Fixed variable name
 		}
 	}
 }
@@ -223,21 +208,12 @@ func (c *Config) loadUsersFromEnv() {
 	// Convert environment user configs to User
 	for userID, props := range userEnvs {
 		if username, hasUsername := props["USERNAME"]; hasUsername {
-			user := models.User{
+			userConfig := UserConfig{
 				ID:       userID,
 				Username: username,
 				Password: getOrDefault(props, "PASSWORD", ""),
 				Email:    getOrDefault(props, "EMAIL", username+"@example.com"),
 				Name:     getOrDefault(props, "NAME", username),
-			}
-
-			// Convert models.User to UserConfig
-			userConfig := UserConfig{
-				ID:       user.ID,
-				Username: user.Username,
-				Password: user.Password,
-				Email:    user.Email,
-				Name:     user.Name,
 			}
 			c.Users = append(c.Users, userConfig)
 		}

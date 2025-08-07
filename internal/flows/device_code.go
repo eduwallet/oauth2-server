@@ -20,7 +20,7 @@ import (
 
 // DeviceCodeFlow handles the device authorization flow (RFC 8628)
 type DeviceCodeFlow struct {
-	clientStore      *store.ClientStore
+	clientManager    *store.SimpleClientManager // ← Changed from clientStore
 	tokenStore       *store.TokenStore
 	config           *config.Config
 	deviceAuths      map[string]*models.DeviceAuthorization
@@ -29,9 +29,9 @@ type DeviceCodeFlow struct {
 }
 
 // NewDeviceCodeFlow creates a new device code flow handler
-func NewDeviceCodeFlow(clientStore *store.ClientStore, tokenStore *store.TokenStore, config *config.Config) *DeviceCodeFlow {
+func NewDeviceCodeFlow(clientManager *store.SimpleClientManager, tokenStore *store.TokenStore, config *config.Config) *DeviceCodeFlow {
 	return &DeviceCodeFlow{
-		clientStore:      clientStore,
+		clientManager:    clientManager, // ← Updated parameter
 		tokenStore:       tokenStore,
 		config:           config,
 		deviceAuths:      make(map[string]*models.DeviceAuthorization),
@@ -63,9 +63,9 @@ func (f *DeviceCodeFlow) HandleAuthorization(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Validate client with context
+	// Validate client using SimpleClientManager
 	ctx := context.Background()
-	client, err := f.clientStore.GetClient(ctx, clientID)
+	client, err := f.clientManager.GetClient(ctx, clientID) // ← Updated to use clientManager
 	if err != nil {
 		utils.WriteErrorResponse(w, "invalid_client", "Invalid client")
 		return
@@ -176,9 +176,9 @@ func (f *DeviceCodeFlow) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate client with context
+	// Validate client using SimpleClientManager
 	ctx := context.Background()
-	_, err := f.clientStore.GetClient(ctx, clientID)
+	_, err := f.clientManager.GetClient(ctx, clientID) // ← Updated to use clientManager
 	if err != nil {
 		utils.WriteInvalidClientError(w, "Invalid client")
 		return

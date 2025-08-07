@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"net/http"
-	"oauth2-server/internal/models"
 	"oauth2-server/internal/utils"
 	"os"
 	"strings"
@@ -83,6 +82,9 @@ type ClientConfig struct {
 	EnabledFlows            []string `yaml:"enabled_flows"`
 }
 
+// ConfigClient is an alias for ClientConfig for backward compatibility
+type ConfigClient = ClientConfig
+
 // UserConfig represents a user configuration from YAML
 type UserConfig struct {
 	ID       string `yaml:"id"`
@@ -109,34 +111,9 @@ type ProxyConfig struct {
 	ForceHTTPS    bool   `yaml:"force_https"`
 }
 
-// ToModelsClientInfo converts ClientConfig to models.ClientInfo
-func (c ClientConfig) ToModelsClientInfo() models.ClientInfo {
-	return models.ClientInfo{
-		ID:            c.ID,
-		Secret:        c.Secret,
-		Name:          c.Name,
-		RedirectURIs:  c.RedirectURIs,
-		GrantTypes:    c.GrantTypes,
-		ResponseTypes: c.ResponseTypes,
-		Scopes:        c.Scopes,
-		Audience:      c.Audience,
-	}
-}
-
 // ValidateRedirectURI validates a redirect URI against this client's registered URIs
 func (c ClientConfig) ValidateRedirectURI(requestedURI string) bool {
-	return utils.ValidateClientRedirectURI(requestedURI, c.ToModelsClientInfo().RedirectURIs)
-}
-
-// ToModelsUser converts UserConfig to models.User
-func (u UserConfig) ToModelsUser() models.User {
-	return models.User{
-		ID:       u.ID,
-		Username: u.Username,
-		Password: u.Password,
-		Email:    u.Email,
-		Name:     u.Name,
-	}
+	return utils.ValidateClientRedirectURI(requestedURI, c.RedirectURIs)
 }
 
 // Validate validates the configuration
@@ -190,6 +167,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// Type alias for backward compatibility
 type User = UserConfig
 
 // GetEffectiveBaseURL returns the effective base URL considering proxy headers
@@ -249,7 +227,7 @@ func LoadYAMLConfig(configPath string) (*YAMLConfig, error) {
 		configPath = "config.yaml"
 	}
 
-	data, err := os.ReadFile(configPath) // Instead of ioutil.ReadFile
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read YAML config file: %w", err)
 	}

@@ -51,16 +51,16 @@ type Address struct {
 	Country       string `json:"country,omitempty"`
 }
 
-// ValidateUser validates user data
-func (u *User) ValidateUser() error {
-	if u.Username == "" {
-		return ErrInvalidUsername
-	}
-	if u.Email == "" {
-		return ErrInvalidEmail
-	}
-	return nil
-}
+// // ValidateUser validates user data
+// func (u *User) ValidateUser() error {
+// 	if u.Username == "" {
+// 		return ErrInvalidUsername
+// 	}
+// 	if u.Email == "" {
+// 		return ErrInvalidEmail
+// 	}
+// 	return nil
+// }
 
 // GetProfile returns a user profile for OIDC
 func (u *User) GetProfile() *UserProfile {
