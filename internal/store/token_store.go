@@ -39,17 +39,17 @@ type TokenInfo struct {
 
 // TokenExchangeRequest represents a token exchange request for auditing
 type TokenExchangeRequest struct {
-	GrantType         string    `json:"grant_type"`
-	Resource          string    `json:"resource,omitempty"`
-	Audience          string    `json:"audience,omitempty"`
-	Scope             string    `json:"scope,omitempty"`
+	GrantType          string    `json:"grant_type"`
+	Resource           string    `json:"resource,omitempty"`
+	Audience           string    `json:"audience,omitempty"`
+	Scope              string    `json:"scope,omitempty"`
 	RequestedTokenType string    `json:"requested_token_type,omitempty"`
-	SubjectToken      string    `json:"subject_token"`
-	SubjectTokenType  string    `json:"subject_token_type"`
-	ActorToken        string    `json:"actor_token,omitempty"`
-	ActorTokenType    string    `json:"actor_token_type,omitempty"`
-	ClientID          string    `json:"client_id"`
-	Timestamp         time.Time `json:"timestamp"`
+	SubjectToken       string    `json:"subject_token"`
+	SubjectTokenType   string    `json:"subject_token_type"`
+	ActorToken         string    `json:"actor_token,omitempty"`
+	ActorTokenType     string    `json:"actor_token_type,omitempty"`
+	ClientID           string    `json:"client_id"`
+	Timestamp          time.Time `json:"timestamp"`
 }
 
 // TokenExchangeResponse represents a token exchange response for auditing
@@ -68,12 +68,12 @@ type TokenExchangeResponse struct {
 
 // TokenStats represents token statistics
 type TokenStats struct {
-	Total    int                       `json:"total"`
-	Active   int                       `json:"active"`
-	Expired  int                       `json:"expired"`
-	Revoked  int                       `json:"revoked"`
-	ByType   map[string]int           `json:"by_type"`
-	ByClient map[string]int           `json:"by_client"`
+	Total    int            `json:"total"`
+	Active   int            `json:"active"`
+	Expired  int            `json:"expired"`
+	Revoked  int            `json:"revoked"`
+	ByType   map[string]int `json:"by_type"`
+	ByClient map[string]int `json:"by_client"`
 }
 
 // TokenStore manages tokens and implements RFC8693Storage
@@ -323,4 +323,3 @@ func (s *TokenStore) ValidateSubjectToken(ctx context.Context, token string, tok
 		Audience:  storedToken.Audience,
 	}, nil
 }
-

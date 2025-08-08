@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device Authorization - OAuth2 Server</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .device-info {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .scope-list {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+        .scope-list ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        .btn:hover {
+            opacity: 0.9;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Device Authorization Request</h1>
+            <p>A device is requesting access to your account</p>
+        </div>
+
+        <div class="warning">
+            <strong>⚠️ Security Notice:</strong> Only authorize this request if you initiated it from your device.
+        </div>
+
+        <div class="device-info">
+            <h3>Application Details</h3>
+            <p><strong>Client ID:</strong> {{.ClientID}}</p>
+            {{if .Scope}}
+            <div class="scope-list">
+                <h4>Requested Permissions:</h4>
+                <ul>
+                    {{range $scope := (split .Scope " ")}}
+                    <li>{{$scope}}</li>
+                    {{end}}
+                </ul>
+            </div>
+            {{end}}
+        </div>
+
+        <form method="post" action="/device/authorize">
+            <input type="hidden" name="device_code" value="{{.DeviceCode}}">
+            
+            <div class="buttons">
+                <button type="submit" name="action" value="authorize" class="btn btn-primary">
+                    ✅ Authorize Device
+                </button>
+                <button type="submit" name="action" value="deny" class="btn btn-secondary">
+                    ❌ Deny Access
+                </button>
+            </div>
+        </form>
+
+        <div style="margin-top: 30px; text-align: center; color: #666; font-size: 14px;">
+            <p>This authorization will allow the device to access your account with the specified permissions.</p>
+        </div>
+    </div>
+</body>
+</html>

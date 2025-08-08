@@ -1,37 +1,13 @@
 package auth
 
 import (
-//	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
 	"strings"
 
-//	"oauth2-server/internal/store"
-
 	"github.com/ory/fosite"
 )
-
-// // AuthenticateClient authenticates a client using client credentials
-// func AuthenticateClient(clientID, clientSecret string, clientStore *store.ClientStore) (fosite.Client, error) {
-// 	if clientID == "" || clientSecret == "" {
-// 		return nil, errors.New("client credentials are required")
-// 	}
-
-// 	// Get client from store with context
-// 	ctx := context.Background()
-// 	client, err := clientStore.GetClient(ctx, clientID)
-// 	if err != nil {
-// 		return nil, errors.New("client not found")
-// 	}
-
-// 	// Validate client credentials
-// 	if err := clientStore.ValidateClientCredentials(clientID, clientSecret); err != nil {
-// 		return nil, err
-// 	}
-
-// 	return client, nil
-// }
 
 // ExtractClientCredentials extracts client credentials from request
 func ExtractClientCredentials(r *http.Request) (string, string, error) {

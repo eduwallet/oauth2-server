@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth2 Server - Device Authorization</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+        .logo {
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            color: #333;
+            margin: 0;
+            font-size: 28px;
+            font-weight: 300;
+        }
+        .device-code {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border: 2px dashed #667eea;
+        }
+        .user-code {
+            font-size: 36px;
+            font-weight: bold;
+            color: #333;
+            letter-spacing: 4px;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+        }
+        .instructions {
+            color: #666;
+            margin: 20px 0;
+            line-height: 1.6;
+        }
+        .verification-url {
+            font-size: 18px;
+            color: #667eea;
+            font-weight: 500;
+            margin: 15px 0;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            margin: 10px;
+            transition: transform 0.2s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .qr-code {
+            margin: 20px 0;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .status.pending {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .countdown {
+            font-size: 14px;
+            color: #666;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>📱 Device Authorization</h1>
+        </div>
+
+        <div class="instructions">
+            To authorize this device, please visit the verification URL below and enter the user code:
+        </div>
+
+        <div class="device-code">
+            <div class="verification-url">
+                {{.VerificationURI}}
+            </div>
+            <div class="user-code">
+                {{.UserCode}}
+            </div>
+        </div>
+
+        <a href="{{.VerificationURIComplete}}" class="btn" target="_blank">
+            Open Verification Page
+        </a>
+
+        {{if .QRCode}}
+        <div class="qr-code">
+            <img src="data:image/png;base64,{{.QRCode}}" alt="QR Code for device authorization">
+            <p style="font-size: 12px; color: #666;">Scan with your mobile device</p>
+        </div>
+        {{end}}
+
+        <div class="status pending" id="status">
+            <strong>⏳ Waiting for authorization...</strong>
+            <div class="countdown" id="countdown">
+                Expires in <span id="timer">{{.ExpiresIn}}</span> seconds
+            </div>
+        </div>
+
+        <script>
+            let expiresIn = {{.ExpiresIn}};
+            const interval = {{.Interval}};
+            let pollTimer;
+            let countdownTimer;
+
+            function updateCountdown() {
+                const timerElement = document.getElementById('timer');
+                if (expiresIn > 0) {
+                    timerElement.textContent = expiresIn;
+                    expiresIn--;
+                } else {
+                    clearInterval(countdownTimer);
+                    clearInterval(pollTimer);
+                    updateStatus('error', '⏰ Authorization expired. Please restart the process.');
+                }
+            }
+
+            function updateStatus(type, message) {
+                const statusElement = document.getElementById('status');
+                statusElement.className = 'status ' + type;
+                statusElement.innerHTML = '<strong>' + message + '</strong>';
+            }
+
+            function pollForToken() {
+                fetch('/device/poll', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        device_code: '{{.DeviceCode}}'
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.access_token) {
+                        clearInterval(pollTimer);
+                        clearInterval(countdownTimer);
+                        updateStatus('success', '✅ Authorization successful! You can now close this page.');
+                    } else if (data.error === 'authorization_pending') {
+                        // Continue polling
+                    } else if (data.error === 'slow_down') {
+                        // Increase polling interval
+                        clearInterval(pollTimer);
+                        pollTimer = setInterval(pollForToken, (interval + 5) * 1000);
+                    } else if (data.error) {
+                        clearInterval(pollTimer);
+                        clearInterval(countdownTimer);
+                        updateStatus('error', '❌ Authorization failed: ' + data.error_description);
+                    }
+                })
+                .catch(error => {
+                    console.error('Polling error:', error);
+                });
+            }
+
+            // Start countdown
+            countdownTimer = setInterval(updateCountdown, 1000);
+
+            // Start polling
+            pollTimer = setInterval(pollForToken, interval * 1000);
+        </script>
+    </div>
+</body>
+</html>

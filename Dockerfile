@@ -41,6 +41,7 @@ COPY --from=builder /app/oauth2-server /app/oauth2-server
 
 # Copy configuration files
 COPY --from=builder /app/config.yaml /app/config.yaml
+COPY --from=builder /app/templates /app/templates
 
 # Set working directory
 WORKDIR /app
