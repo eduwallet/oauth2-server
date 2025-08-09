@@ -7,10 +7,10 @@ import (
 )
 
 type RegistrationHandler struct {
-	clientManager *store.SimpleClientManager
+	clientManager *store.ClientManager
 }
 
-func NewRegistrationHandler(clientManager *store.SimpleClientManager) *RegistrationHandler {
+func NewRegistrationHandler(clientManager *store.ClientManager) *RegistrationHandler {
 	return &RegistrationHandler{
 		clientManager: clientManager,
 	}

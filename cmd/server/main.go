@@ -19,13 +19,9 @@ import (
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
-	"github.com/ory/fosite/handler/rfc8693"
-	"github.com/ory/fosite/storage"
 
 	"github.com/sirupsen/logrus"
 
-	"oauth2-server/internal/auth"
-	"oauth2-server/internal/flows"
 	"oauth2-server/internal/handlers"
 	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
@@ -37,15 +33,11 @@ var log = logrus.New()
 
 var (
 	// Application configuration
-	cfg *config.Config
+	configuration *config.Config
 
 	// OAuth2 provider and stores
 	oauth2Provider fosite.OAuth2Provider
-	clientManager  *store.SimpleClientManager
-	tokenStore     *store.TokenStore
-
-	// Flows
-	deviceCodeFlow *flows.DeviceCodeFlow
+	compositeStore *store.CompositeStore
 
 	// Handlers
 	registrationHandlers *handlers.RegistrationHandler
@@ -54,75 +46,25 @@ var (
 	templates *template.Template
 )
 
-// Update CompositeStore to use SimpleClientManager
-type CompositeStore struct {
-	*store.SimpleClientManager // ← Much simpler!
-	*storage.MemoryStore
-	*store.TokenStore
-}
-
-// GetClient implements fosite.ClientManager
-func (c *CompositeStore) GetClient(ctx context.Context, id string) (fosite.Client, error) {
-	return c.SimpleClientManager.GetClient(ctx, id)
-}
-
-// ValidateSubjectToken delegates to TokenStore (RFC8693Storage interface)
-func (c *CompositeStore) ValidateSubjectToken(ctx context.Context, token string, tokenType string, client fosite.Client) (*rfc8693.TokenInfo, error) {
-	tokenInfo, err := c.TokenStore.ValidateSubjectToken(ctx, token, tokenType, client)
-	if err != nil {
-		return nil, err
-	}
-
-	return &rfc8693.TokenInfo{
-		TokenType: tokenInfo.TokenType,
-		Subject:   tokenInfo.ClientID,
-		Scopes:    tokenInfo.Scopes,
-		ExpiresAt: tokenInfo.ExpiresAt.Unix(),
-		IssuedAt:  tokenInfo.IssuedAt.Unix(),
-		Audiences: fosite.Arguments(tokenInfo.Audience),
-	}, nil
-}
-
-// ValidateActorToken delegates to TokenStore (RFC8693Storage interface)
-func (c *CompositeStore) ValidateActorToken(ctx context.Context, token string, tokenType string, client fosite.Client) (*rfc8693.TokenInfo, error) {
-	return c.ValidateSubjectToken(ctx, token, tokenType, client)
-}
-
-// StoreTokenExchange implements RFC8693Storage interface with correct signature
-func (c *CompositeStore) StoreTokenExchange(ctx context.Context, request *rfc8693.TokenExchangeRequest, response *rfc8693.TokenExchangeResponse) error {
-	// For now, just log the exchange for audit trail
-	if response.IssuedTokenType != "" {
-		// Successfully exchanged token
-		log.Printf("✅ Token exchange successful: IssuedTokenType=%s",
-			response.IssuedTokenType)
-
-	} else {
-		// Failed token exchange
-		log.Printf("❌ Token exchange failed")
-	}
-
-	return nil
-}
-
 func main() {
 	log.Println("🚀 Starting OAuth2 Server...")
 
 	// Load configuration from YAML
 	var err error
-	cfg, err = config.Load()
+	configuration, err = config.Load()
 	if err != nil {
 		log.Fatalf("❌ Failed to load configuration: %v", err)
 	}
 
 	// Validate configuration
-	if err := cfg.Validate(); err != nil {
+	if err := configuration.Validate(); err != nil {
 		log.Fatalf("❌ Invalid configuration: %v", err)
 	}
 
 	// Access logging configuration correctly:
-	logLevel := cfg.Logging.Level          // ✅ Correct
-	logFormat := cfg.Logging.Format        // ✅ Correct
-	enableAudit := cfg.Logging.EnableAudit // ✅ Correct
+	logLevel := configuration.Logging.Level          // ✅ Correct
+	logFormat := configuration.Logging.Format        // ✅ Correct
+	enableAudit := configuration.Logging.EnableAudit // ✅ Correct
 
 	// Initialize logger based on config
 	switch logLevel {
@@ -151,10 +93,13 @@ func main() {
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
 
 	// Initialize stores
-	initializeStores()
+	compositeStore = store.NewCompositeStore()
+
+	// Initialize stores
+	initializeClients()
 
 	// Load clients from configuration
-	if err := clientManager.LoadClientsFromConfig(cfg.Clients); err != nil {
+	if err := compositeStore.ClientManager.LoadClientsFromConfig(configuration.Clients); err != nil {
 		log.Fatalf("❌ Failed to load clients from config: %v", err)
 	}
 
@@ -169,42 +114,31 @@ func main() {
 	}
 
 	// Initialize flows
-	initializeFlows()
+	initializeHandlers()
 
 	// Setup routes
 	setupRoutes()
 
 	// Start server
-	log.Printf("🌐 OAuth2 server starting on port %d", cfg.Server.Port)
-	log.Printf("🔗 Authorization endpoint: %s/auth", cfg.Server.BaseURL)
-	log.Printf("🎫 Token endpoint: %s/token", cfg.Server.BaseURL)
-	log.Printf("📱 Device authorization: %s/device_authorization", cfg.Server.BaseURL)
-	log.Printf("🔧 Client registration: %s/register", cfg.Server.BaseURL)
-	log.Printf("🏥 Health check: %s/health", cfg.Server.BaseURL)
+	log.Printf("🌐 OAuth2 server starting on port %d", configuration.Server.Port)
+	log.Printf("🔗 Authorization endpoint: %s/auth", configuration.Server.BaseURL)
+	log.Printf("🎫 Token endpoint: %s/token", configuration.Server.BaseURL)
+	log.Printf("📱 Device authorization: %s/device/authorize", configuration.Server.BaseURL)
+	log.Printf("🔧 Client registration: %s/register", configuration.Server.BaseURL)
+	log.Printf("🏥 Health check: %s/health", configuration.Server.BaseURL)
 
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.Server.Port), nil); err != nil {
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", configuration.Server.Port), nil); err != nil {
 		log.Fatalf("❌ Server failed to start: %v", err)
 	}
 }
 
-func initializeStores() error {
-	// Initialize simplified client manager
-	clientManager = store.NewSimpleClientManager()
-
-	// Load clients from config if any - FIXED: Use correct method and type
-	if len(cfg.Clients) > 0 {
-		if err := clientManager.LoadClientsFromConfig(cfg.Clients); err != nil {
+func initializeClients() error {
+	// Load clients from config if any
+	if len(configuration.Clients) > 0 {
+		if err := compositeStore.ClientManager.LoadClientsFromConfig(configuration.Clients); err != nil {
 			return fmt.Errorf("failed to load clients from config: %w", err)
 		}
 	}
-
-	// Initialize token store
-	expiryConfig := map[string]time.Duration{
-		"access_token":  time.Hour,
-		"refresh_token": time.Hour * 24 * 30,
-		"id_token":      time.Hour,
-	}
-	tokenStore = store.NewTokenStore(cfg.Server.BaseURL, expiryConfig)
 
 	log.Printf("✅ Stores initialized")
 
@@ -218,27 +152,21 @@ func initializeOAuth2Provider() error {
 		return fmt.Errorf("failed to generate RSA key: %w", err)
 	}
 
-	// Create simplified composite store
-	compositeStore := &CompositeStore{
-		SimpleClientManager: clientManager,
-		TokenStore:          tokenStore,
-	}
-
 	// Configure OAuth2 provider
 	config := &fosite.Config{
-		AccessTokenLifespan:      time.Duration(cfg.Security.TokenExpirySeconds) * time.Second,
-		RefreshTokenLifespan:     time.Duration(cfg.Security.RefreshTokenExpirySeconds) * time.Second,
-		AuthorizeCodeLifespan:    time.Duration(cfg.Security.AuthorizationCodeExpirySeconds) * time.Second,
-		GlobalSecret:             []byte(cfg.Security.JWTSecret + "-padded-to-32-bytes-for-hmac-security"),
-		AccessTokenIssuer:        cfg.Server.BaseURL,
+		AccessTokenLifespan:      time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
+		RefreshTokenLifespan:     time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
+		AuthorizeCodeLifespan:    time.Duration(configuration.Security.AuthorizationCodeExpirySeconds) * time.Second,
+		GlobalSecret:             []byte(configuration.Security.JWTSecret + "-padded-to-32-bytes-for-hmac-security"),
+		AccessTokenIssuer:        configuration.Server.BaseURL,
 		ScopeStrategy:            fosite.HierarchicScopeStrategy,
 		AudienceMatchingStrategy: fosite.DefaultAudienceMatchingStrategy,
 	}
 
-	// Build OAuth2 provider with all grant types INCLUDING Token Exchange
+	// Build OAuth2 provider with all grant types INCLUDING Device Code
 	oauth2Provider = compose.Compose(
 		config,
-		compositeStore, // Now properly implements RFC8693Storage
+		compositeStore,
 		&compose.CommonStrategy{
 			CoreStrategy: compose.NewOAuth2HMACStrategy(config),
 			OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(
@@ -254,25 +182,19 @@ func initializeOAuth2Provider() error {
 		compose.OpenIDConnectExplicitFactory,
 		compose.OAuth2TokenIntrospectionFactory,
 		compose.OAuth2TokenRevocationFactory,
-
-		// This should now work! 🚀
 		compose.RFC8693TokenExchangeFactory,
+		compose.RFC8628DeviceFactory,
 	)
 
-	log.Printf("✅ OAuth2 provider initialized")
-
+	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil
 }
 
-func initializeFlows() {
-	// Initialize device flow
-	deviceCodeFlow = flows.NewDeviceCodeFlow(clientManager, tokenStore, cfg)
-	deviceCodeFlow.StartCleanupTimer()
-
+func initializeHandlers() {
 	// Initialize registration handlers
-	registrationHandlers = handlers.NewRegistrationHandler(clientManager)
+	registrationHandlers = handlers.NewRegistrationHandler(compositeStore.ClientManager)
 
-	log.Printf("✅ OAuth2 flows initialized")
+	log.Printf("✅ OAuth2 handlers initialized")
 }
 
 func loadTemplates() error {
@@ -300,15 +222,10 @@ func loadTemplates() error {
 
 func setupRoutes() {
 	// OAuth2 endpoints - use fosite's built-in handlers
-	http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler))
+	//    http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler))
 	http.HandleFunc("/oauth/token", proxyAwareMiddleware(tokenHandler))
 	http.HandleFunc("/oauth/introspect", proxyAwareMiddleware(introspectHandler))
 	http.HandleFunc("/oauth/revoke", proxyAwareMiddleware(revokeHandler))
-
-	// Device flow endpoints
-	http.HandleFunc("/device/authorize", proxyAwareMiddleware(deviceCodeFlow.HandleAuthorization))
-	http.HandleFunc("/device", proxyAwareMiddleware(deviceVerificationHandler))
-	http.HandleFunc("/device/token", proxyAwareMiddleware(deviceCodeFlow.HandleToken))
 
 	// Registration endpoints
 	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandlers.HandleRegistration))
@@ -324,9 +241,8 @@ func setupRoutes() {
 	// Stats endpoint
 	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		statsHandler := handlers.StatsHandler{
-			TokenStore:    tokenStore,
-			ClientManager: clientManager,
-			Config:        cfg,
+			ClientManager: compositeStore.ClientManager,
+			Config:        configuration,
 		}
 		statsHandler.ServeHTTP(w, r)
 	}))
@@ -458,18 +374,6 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 	oauth2Provider.WriteAuthorizeResponse(ctx, w, ar, response)
 }
 
-func deviceAuthHandler(w http.ResponseWriter, r *http.Request) {
-	deviceCodeFlow.HandleAuthorization(w, r)
-}
-
-func registrationHandler(w http.ResponseWriter, r *http.Request) {
-	registrationHandlers.HandleRegistration(w, r)
-}
-
-func registrationConfigHandler(w http.ResponseWriter, r *http.Request) {
-	registrationHandlers.HandleClientConfiguration(w, r)
-}
-
 // Token handler that routes to appropriate flow
 func tokenHandler(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
@@ -481,8 +385,6 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("🔄 Processing token request with grant_type: %s", grantType)
 
 	switch grantType {
-	case "urn:ietf:params:oauth:grant-type:device_code":
-		deviceCodeFlow.HandleToken(w, r)
 	default:
 		// Let fosite handle ALL standard grant types INCLUDING token exchange
 		handleStandardTokenRequest(w, r)
@@ -492,7 +394,7 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 func handleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Let fosite handle the token request (now includes token exchange)
+	// Let fosite handle ALL token requests including token exchange
 	accessRequest, err := oauth2Provider.NewAccessRequest(ctx, r, &fosite.DefaultSession{})
 	if err != nil {
 		log.Printf("❌ Error creating access request: %v", err)
@@ -500,7 +402,7 @@ func handleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enhance session with user info if needed
+	// Enhance session with user info for authorization code flow
 	session := accessRequest.GetSession()
 	if defaultSession, ok := session.(*fosite.DefaultSession); ok {
 		grantType := r.FormValue("grant_type")
@@ -510,9 +412,7 @@ func handleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
 			defaultSession.Subject = extractUserFromAuthCode(accessRequest)
 		case "client_credentials":
 			defaultSession.Subject = accessRequest.GetClient().GetID()
-		case "urn:ietf:params:oauth:grant-type:token-exchange":
-			// For token exchange, subject comes from the subject token
-			defaultSession.Subject = extractSubjectFromTokenExchange(accessRequest, r)
+			// Remove token exchange handling - fosite does this automatically
 		}
 	}
 
@@ -524,19 +424,6 @@ func handleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	oauth2Provider.WriteAccessResponse(ctx, w, accessRequest, response)
-}
-
-// Helper function to extract subject from token exchange
-func extractSubjectFromTokenExchange(req fosite.AccessRequester, r *http.Request) string {
-	subjectToken := r.FormValue("subject_token")
-	if subjectToken != "" {
-		// Validate and extract subject from the subject token
-		// This logic depends on your token validation implementation
-		if tokenInfo, err := auth.ValidateToken(tokenStore, subjectToken); err == nil {
-			return tokenInfo.UserID
-		}
-	}
-	return "unknown"
 }
 
 // Helper function to extract user from authorization code
@@ -576,10 +463,36 @@ func showDeviceVerificationForm(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// This handler shows the HTML page where the user enters the code
+func deviceVerificationPageHandler(w http.ResponseWriter, r *http.Request) {
+	userCode := r.URL.Query().Get("user_code")
+	data := map[string]interface{}{
+		"UserCode": userCode,
+		"Error":    r.URL.Query().Get("error"),
+	}
+	if err := templates.ExecuteTemplate(w, "device.html", data); err != nil {
+		log.WithError(err).Error("Failed to render device verification page")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// authenticateUserFromConfig checks user credentials against the loaded configuration.
+// In a real-world application, this would involve a database lookup and hashed password comparison.
+func authenticateUserFromConfig(username, password string) *config.User {
+	for _, user := range configuration.Users {
+		if user.Username == username && user.Password == password {
+			log.Printf("✅ User authenticated successfully: %s", username)
+			return &user
+		}
+	}
+	log.Printf("⚠️ Authentication failed for user: %s", username)
+	return nil
+}
+
+// This handler processes the user's login and consent
 func handleDeviceVerification(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		log.Printf("Failed to parse form: %v", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		http.Redirect(w, r, "/device?error=Invalid+request", http.StatusFound)
 		return
 	}
 
@@ -587,44 +500,71 @@ func handleDeviceVerification(w http.ResponseWriter, r *http.Request) {
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
-	// Normalize user code - trim, uppercase, and ensure consistent formatting
-	userCode = strings.TrimSpace(strings.ToUpper(userCode))
-
-	// Validate user code format
-	if err := utils.ValidateUserCode(userCode); err != nil {
-		http.Redirect(w, r, "/device?error=Invalid user code format", http.StatusFound)
-		return
-	}
-
-	// Ensure user code has the hyphen format for device flow lookup
-	if len(userCode) == 8 && !strings.Contains(userCode, "-") {
-		userCode = fmt.Sprintf("%s-%s", userCode[:4], userCode[4:])
-	}
-
 	// Authenticate user against configured users
 	user := authenticateUserFromConfig(username, password)
 	if user == nil {
-		http.Redirect(w, r, "/device?error=Invalid username or password", http.StatusFound)
+		http.Redirect(w, r, "/device?error=Invalid+credentials&user_code="+userCode, http.StatusFound)
 		return
 	}
 
-	// Authorize the device
-	if deviceCodeFlow.AuthorizeDevice(userCode, user.ID) {
-		showDeviceVerificationSuccess(w, r)
-	} else {
-		http.Redirect(w, r, "/device?error=Invalid or expired user code", http.StatusFound)
-	}
+	// // Authorize the device using our new storage method
+	// ctx := r.Context()
+	// if compositeStore, ok := oauth2Provider.GetStore().(interface {
+	// 	AuthorizeDeviceCode(context.Context, string, string) error
+	// }); ok {
+	// 	// Fosite's device handler hashes the user code for storage, so we must do the same
+	// 	hasher := oauth2Provider.GetHasher(ctx)
+	// 	signature, err := hasher.Hash(ctx, []byte(userCode))
+	// 	if err != nil {
+	// 		http.Redirect(w, r, "/device?error=Internal+server+error", http.StatusFound)
+	// 		return
+	// 	}
+
+	// 	err = compositeStore.AuthorizeDeviceCode(ctx, signature, user.ID)
+	// 	if err != nil {
+	// 		log.Printf("Error authorizing device: %v", err)
+	// 		http.Redirect(w, r, "/device?error=Invalid+or+expired+user+code", http.StatusFound)
+	// 		return
+	// 	}
+	// }
+
+	// Show success page
+	showDeviceVerificationSuccess(w, r)
 }
 
-// Add helper function for user authentication
-func authenticateUserFromConfig(username, password string) *config.User {
-	if user, found := cfg.GetUserByUsername(username); found {
-		// In a real implementation, you'd hash and compare passwords properly
-		if user.Password == password {
-			return user
-		}
+// deviceAuthorizationHandler handles the initial device authorization request (RFC 8628).
+// It delegates the entire process to the fosite provider.
+func deviceAuthorizationHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	return nil
+
+	// Create a session for the device authorization
+	session := &fosite.DefaultSession{
+		Subject: "", // Will be filled by the user later
+	}
+
+	// The NewDeviceRequest method handles parsing, validation, code generation,
+	// storage, and writing the JSON response or error.
+	deviceRequest, err := oauth2Provider.NewDeviceRequest(ctx, r)
+	if err != nil {
+		log.WithError(err).Error("Error during device authorization request")
+		// Note: The error is already written to the response writer by the fosite handler
+		return
+	}
+
+	// Create a response from the request
+	deviceResponse, err := oauth2Provider.NewDeviceResponse(ctx, deviceRequest, session)
+	if err != nil {
+		log.WithError(err).Error("Error during device authorization request")
+		return
+	}
+
+	// Let fosite write the response with the correct parameters
+	oauth2Provider.WriteDeviceResponse(ctx, w, deviceRequest, deviceResponse)
 }
 
 func showDeviceVerificationSuccess(w http.ResponseWriter, r *http.Request) {
@@ -658,18 +598,22 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 
 	token := parts[1]
 
-	// Validate the access token (simplified version)
-	if err := auth.ValidateAccessToken(token); err != nil {
-		w.Header().Set("WWW-Authenticate", "Bearer")
+	// Use fosite's introspection to validate the token
+	ctx := r.Context()
+	// We require the "openid" scope to allow access to this endpoint.
+	_, requester, err := oauth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &fosite.DefaultSession{}, "openid")
+	if err != nil {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="The access token is invalid or has expired."`)
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)
 		return
 	}
 
-	// For now, return the first user's info or a default user
-	// In a real implementation, you'd extract user ID from the token
+	// Get user info from token claims (the subject)
+	subject := requester.GetSession().GetSubject()
+
+	// Build user info response based on the user ID from the token
 	var userInfo map[string]interface{}
-	if len(cfg.Users) > 0 {
-		user := cfg.Users[0]
+	if user, found := configuration.GetUserByID(subject); found {
 		userInfo = map[string]interface{}{
 			"sub":      user.ID,
 			"name":     user.Name,
@@ -677,12 +621,10 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 			"username": user.Username,
 		}
 	} else {
-		// Fallback if no users configured
-		userInfo = map[string]interface{}{
-			"sub":   "default-user",
-			"name":  "Default User",
-			"email": "default@example.com",
-		}
+		// This case should ideally not happen if tokens are issued correctly
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="User not found."`)
+		http.Error(w, "User associated with token not found", http.StatusUnauthorized)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -695,7 +637,7 @@ func wellKnownHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
 	// Get the effective base URL (proxy-aware)
-	baseURL := cfg.GetEffectiveBaseURL(r)
+	baseURL := configuration.GetEffectiveBaseURL(r)
 
 	wellKnown := map[string]interface{}{
 		// OAuth2 Authorization Server Metadata (RFC 8414)
@@ -866,8 +808,9 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"status":    "healthy",
 		"timestamp": time.Now().Unix(),
 		"version":   "1.0.0",
-		"base_url":  cfg.Server.BaseURL,
-		"clients":   clientManager.GetClientCount(), // ← Use the new method
+		"base_url":  configuration.Server.BaseURL,
+		"clients":   compositeStore.ClientManager.GetClientCount(),
+		"storage":   "fosite-memory", // Indicate we're using fosite's storage
 	}
 
 	json.NewEncoder(w).Encode(response)
@@ -877,9 +820,9 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	// Generate user list from configuration
 	var userListHTML strings.Builder
-	if len(cfg.Users) > 0 {
+	if len(configuration.Users) > 0 {
 		userListHTML.WriteString("<h3>👥 Available Test Users:</h3><ul>")
-		for _, user := range cfg.Users {
+		for _, user := range configuration.Users {
 			userListHTML.WriteString(fmt.Sprintf(
 				"<li><strong>%s</strong> (%s) - Password: <code>%s</code></li>",
 				user.Username, user.Name, user.Password))
@@ -891,9 +834,9 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Generate client list from configuration
 	var clientListHTML strings.Builder
-	if len(cfg.Clients) > 0 {
+	if len(configuration.Clients) > 0 {
 		clientListHTML.WriteString("<h3>🔑 Configured Clients:</h3><ul>")
-		for _, client := range cfg.Clients {
+		for _, client := range configuration.Clients {
 			clientListHTML.WriteString(fmt.Sprintf(
 				"<li><strong>%s</strong> - %s<br><small>Grant Types: %s</small></li>",
 				client.ID, client.Name, strings.Join(client.GrantTypes, ", ")))
@@ -1016,7 +959,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		</script>
 	</div>
 </body>
-</html>`, cfg.Server.BaseURL)
+</html>`, configuration.Server.BaseURL)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -1068,12 +1011,12 @@ func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 
 		// Update the config's BaseURL for this request if needed
 		if r.URL.Scheme != "" && r.Host != "" {
-			originalBaseURL := cfg.Server.BaseURL
-			cfg.Server.BaseURL = r.URL.Scheme + "://" + r.Host
+			originalBaseURL := configuration.Server.BaseURL
+			configuration.Server.BaseURL = r.URL.Scheme + "://" + r.Host
 
 			// Restore original BaseURL after request
 			defer func() {
-				cfg.Server.BaseURL = originalBaseURL
+				configuration.Server.BaseURL = originalBaseURL
 			}()
 		}
 
@@ -1086,9 +1029,6 @@ func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 }
 
 // Add these handler aliases after your existing handlers
-func authorizeHandler(w http.ResponseWriter, r *http.Request) {
-	authHandler(w, r) // Use your existing authHandler
-}
 
 func deviceVerificationHandler(w http.ResponseWriter, r *http.Request) {
 	deviceHandler(w, r) // Use your existing deviceHandler
@@ -1100,7 +1040,7 @@ func oauth2DiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
 	// Get the effective base URL (proxy-aware)
-	baseURL := cfg.GetEffectiveBaseURL(r)
+	baseURL := configuration.GetEffectiveBaseURL(r)
 
 	// OAuth2 Authorization Server Metadata (RFC 8414)
 	oauth2Metadata := map[string]interface{}{
