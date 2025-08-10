@@ -1,18 +1,18 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
-	"oauth2-server/internal/store"
+
+	"github.com/ory/fosite/storage"
 )
 
 type RegistrationHandler struct {
-	clientManager *store.ClientManager
+	memoryStore *storage.MemoryStore
 }
 
-func NewRegistrationHandler(clientManager *store.ClientManager) *RegistrationHandler {
+func NewRegistrationHandler(memoryStore *storage.MemoryStore) *RegistrationHandler {
 	return &RegistrationHandler{
-		clientManager: clientManager,
+		memoryStore: memoryStore,
 	}
 }
 
@@ -22,30 +22,32 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		return
 	}
 
-	var req store.ClientRegistrationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
+	http.Error(w, "Method not yet implemented", http.StatusMethodNotAllowed)
 
-	// Register the client
-	client, err := h.clientManager.RegisterClient(req)
-	if err != nil {
-		http.Error(w, "Registration failed", http.StatusInternalServerError)
-		return
-	}
+	// var req storage.ClientRegistrationRequest
+	// if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// 	http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	// 	return
+	// }
 
-	// Return client credentials
-	response := map[string]interface{}{
-		"client_id":     client.ID,
-		"client_secret": client.Secret,
-		"client_name":   client.Name,
-		"grant_types":   client.GrantTypes,
-		"scopes":        client.Scopes,
-	}
+	// // Register the client
+	// client, err := h.clientManager.RegisterClient(req)
+	// if err != nil {
+	// 	http.Error(w, "Registration failed", http.StatusInternalServerError)
+	// 	return
+	// }
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	// // Return client credentials
+	// response := map[string]interface{}{
+	// 	"client_id":     client.ID,
+	// 	"client_secret": client.Secret,
+	// 	"client_name":   client.Name,
+	// 	"grant_types":   client.GrantTypes,
+	// 	"scopes":        client.Scopes,
+	// }
+
+	// w.Header().Set("Content-Type", "application/json")
+	// json.NewEncoder(w).Encode(response)
 }
 
 // HandleClientConfiguration handles client configuration requests (placeholder)

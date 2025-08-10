@@ -19,11 +19,12 @@ import (
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
+	"github.com/ory/fosite/storage"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/sirupsen/logrus"
 
 	"oauth2-server/internal/handlers"
-	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 )
@@ -37,7 +38,7 @@ var (
 
 	// OAuth2 provider and stores
 	oauth2Provider fosite.OAuth2Provider
-	compositeStore *store.CompositeStore
+	memoryStore    *storage.MemoryStore
 
 	// Handlers
 	registrationHandlers *handlers.RegistrationHandler
@@ -93,19 +94,26 @@ func main() {
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
 
 	// Initialize stores
-	compositeStore = store.NewCompositeStore()
-
-	// Initialize stores
-	initializeClients()
-
-	// Load clients from configuration
-	if err := compositeStore.ClientManager.LoadClientsFromConfig(configuration.Clients); err != nil {
-		log.Fatalf("❌ Failed to load clients from config: %v", err)
-	}
+	memoryStore = storage.NewMemoryStore()
 
 	// Initialize OAuth2 provider
 	if err := initializeOAuth2Provider(); err != nil {
 		log.Fatalf("❌ Failed to initialize OAuth2 provider: %v", err)
+	}
+
+	// Then extract the hasher
+	// hasher := &fosite.BCrypt{
+	// 	Cost: 12, // 12 is a standard work factor for bcrypt
+	// }
+
+	// Now initialize clients with the hasher
+	if err := initializeClients(); err != nil {
+		log.Fatalf("❌ Failed to initialize clients: %v", err)
+	}
+
+	// In main() function, after initializing clients
+	if err := initializeUsers(); err != nil {
+		log.Fatalf("❌ Failed to initialize users: %v", err)
 	}
 
 	// Load templates
@@ -135,13 +143,59 @@ func main() {
 func initializeClients() error {
 	// Load clients from config if any
 	if len(configuration.Clients) > 0 {
-		if err := compositeStore.ClientManager.LoadClientsFromConfig(configuration.Clients); err != nil {
-			return fmt.Errorf("failed to load clients from config: %w", err)
+
+		// Register each client in the memory store
+		for _, client := range configuration.Clients {
+			hashedSecret, err := bcrypt.GenerateFromPassword([]byte(client.Secret), bcrypt.DefaultCost)
+			if err != nil {
+				return fmt.Errorf("failed to hash secret for client %s: %w", client.ID, err)
+			}
+			log.Println("Registering client:", client.ID)
+
+			newClient := &fosite.DefaultClient{
+				ID:     client.ID,
+				Secret: hashedSecret,
+				// Name:              client.Name,
+				// Description:       client.Description,
+				RedirectURIs:  client.RedirectURIs,
+				GrantTypes:    client.GrantTypes,
+				ResponseTypes: client.ResponseTypes,
+				Scopes:        client.Scopes,
+				Audience:      client.Audience,
+				//				TokenEndpointAuthMethod: client.TokenEndpointAuthMethod,
+				Public: client.Public,
+				//				EnabledFlows:       client.EnabledFlows,
+			}
+
+			memoryStore.Clients[client.ID] = newClient
 		}
 	}
 
-	log.Printf("✅ Stores initialized")
+	log.Printf("✅ Stores initialized with %d clients", len(memoryStore.Clients))
+	return nil
 
+}
+
+// Add this function to initialize users
+func initializeUsers() error {
+
+	// Load users from configuration
+	if len(configuration.Users) > 0 {
+		for _, user := range configuration.Users {
+
+			// Make a copy of the user to avoid issues with loop variables
+			newUser := storage.MemoryUserRelation{
+				Username: user.Username,
+				Password: user.Password,
+			}
+
+			memoryStore.Users[user.ID] = newUser
+
+			log.Printf("✅ Registered user: %s (%s)", user.Username, user.ID)
+		}
+	}
+
+	log.Printf("✅ User store initialized with %d users", len(memoryStore.Users))
 	return nil
 }
 
@@ -166,7 +220,7 @@ func initializeOAuth2Provider() error {
 	// Build OAuth2 provider with all grant types INCLUDING Device Code
 	oauth2Provider = compose.Compose(
 		config,
-		compositeStore,
+		memoryStore,
 		&compose.CommonStrategy{
 			CoreStrategy: compose.NewOAuth2HMACStrategy(config),
 			OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(
@@ -182,7 +236,7 @@ func initializeOAuth2Provider() error {
 		compose.OpenIDConnectExplicitFactory,
 		compose.OAuth2TokenIntrospectionFactory,
 		compose.OAuth2TokenRevocationFactory,
-		compose.RFC8693TokenExchangeFactory,
+		//		compose.RFC8693TokenExchangeFactory,
 		compose.RFC8628DeviceFactory,
 	)
 
@@ -192,8 +246,6 @@ func initializeOAuth2Provider() error {
 
 func initializeHandlers() {
 	// Initialize registration handlers
-	registrationHandlers = handlers.NewRegistrationHandler(compositeStore.ClientManager)
-
 	log.Printf("✅ OAuth2 handlers initialized")
 }
 
@@ -241,8 +293,7 @@ func setupRoutes() {
 	// Stats endpoint
 	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		statsHandler := handlers.StatsHandler{
-			ClientManager: compositeStore.ClientManager,
-			Config:        configuration,
+			Config: configuration,
 		}
 		statsHandler.ServeHTTP(w, r)
 	}))
@@ -809,7 +860,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now().Unix(),
 		"version":   "1.0.0",
 		"base_url":  configuration.Server.BaseURL,
-		"clients":   compositeStore.ClientManager.GetClientCount(),
+		"clients":   len(memoryStore.Clients),
 		"storage":   "fosite-memory", // Indicate we're using fosite's storage
 	}
 
