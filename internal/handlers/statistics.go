@@ -3,16 +3,17 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"oauth2-server/pkg/config"
+
+	"github.com/ory/fosite/storage"
 )
 
-// StatsHandler handles statistics requests
-type StatsHandler struct {
-	Config *config.Config
+// StatisticsHandler handles statistics requests
+type StatisticsHandler struct {
+	MemoryStore *storage.MemoryStore
 }
 
 // ServeHTTP implements http.Handler (updated for struct return)
-func (h *StatsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *StatisticsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -23,11 +24,12 @@ func (h *StatsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"version": "1.0.0", // You could pull this from config
 			"status":  "running",
 		},
+		"tokens":  len(h.MemoryStore.AccessTokens),
+		"clients": len(h.MemoryStore.Clients),
+		"users":   len(h.MemoryStore.Users),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(stats)
 }
-
-// The getClientCount method has been removed as it was redundant.

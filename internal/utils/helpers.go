@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // HashPassword creates a hash of the password (placeholder implementation)
@@ -174,6 +175,14 @@ func ExtractClientIDFromPath(path string) string {
 		return parts[1]
 	}
 	return ""
+}
+
+func HashSecret(secret string) ([]byte, error) {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	return hashed, nil
 }
 
 // ValidateRegistrationAccessToken checks if the registration access token is valid

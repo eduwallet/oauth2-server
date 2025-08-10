@@ -20,7 +20,6 @@ import (
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
 	"github.com/ory/fosite/storage"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/sirupsen/logrus"
 
@@ -41,7 +40,7 @@ var (
 	memoryStore    *storage.MemoryStore
 
 	// Handlers
-	registrationHandlers *handlers.RegistrationHandler
+	registrationHandler *handlers.RegistrationHandler
 
 	// Templates for rendering HTML responses
 	templates *template.Template
@@ -146,10 +145,11 @@ func initializeClients() error {
 
 		// Register each client in the memory store
 		for _, client := range configuration.Clients {
-			hashedSecret, err := bcrypt.GenerateFromPassword([]byte(client.Secret), bcrypt.DefaultCost)
+			hashedSecret, err := utils.HashSecret(client.Secret)
 			if err != nil {
 				return fmt.Errorf("failed to hash secret for client %s: %w", client.ID, err)
 			}
+
 			log.Println("Registering client:", client.ID)
 
 			newClient := &fosite.DefaultClient{
@@ -246,6 +246,9 @@ func initializeOAuth2Provider() error {
 
 func initializeHandlers() {
 	// Initialize registration handlers
+
+	registrationHandler = handlers.NewRegistrationHandler(memoryStore)
+
 	log.Printf("✅ OAuth2 handlers initialized")
 }
 
@@ -280,7 +283,7 @@ func setupRoutes() {
 	http.HandleFunc("/oauth/revoke", proxyAwareMiddleware(revokeHandler))
 
 	// Registration endpoints
-	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandlers.HandleRegistration))
+	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler.HandleRegistration))
 
 	// Discovery endpoints
 	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(oauth2DiscoveryHandler)) // ← ADD THIS
@@ -292,10 +295,10 @@ func setupRoutes() {
 
 	// Stats endpoint
 	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		statsHandler := handlers.StatsHandler{
-			Config: configuration,
+		statisticsHandler := handlers.StatisticsHandler{
+			MemoryStore: memoryStore,
 		}
-		statsHandler.ServeHTTP(w, r)
+		statisticsHandler.ServeHTTP(w, r)
 	}))
 
 	// Health endpoint
@@ -869,33 +872,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 
 // Home handler
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-	// Generate user list from configuration
-	var userListHTML strings.Builder
-	if len(configuration.Users) > 0 {
-		userListHTML.WriteString("<h3>👥 Available Test Users:</h3><ul>")
-		for _, user := range configuration.Users {
-			userListHTML.WriteString(fmt.Sprintf(
-				"<li><strong>%s</strong> (%s) - Password: <code>%s</code></li>",
-				user.Username, user.Name, user.Password))
-		}
-		userListHTML.WriteString("</ul>")
-	} else {
-		userListHTML.WriteString("<p><em>No test users configured in YAML</em></p>")
-	}
-
-	// Generate client list from configuration
-	var clientListHTML strings.Builder
-	if len(configuration.Clients) > 0 {
-		clientListHTML.WriteString("<h3>🔑 Configured Clients:</h3><ul>")
-		for _, client := range configuration.Clients {
-			clientListHTML.WriteString(fmt.Sprintf(
-				"<li><strong>%s</strong> - %s<br><small>Grant Types: %s</small></li>",
-				client.ID, client.Name, strings.Join(client.GrantTypes, ", ")))
-		}
-		clientListHTML.WriteString("</ul>")
-	} else {
-		clientListHTML.WriteString("<p><em>No clients configured in YAML</em></p>")
-	}
 
 	homeHTML := fmt.Sprintf(`
 <!DOCTYPE html>
@@ -989,22 +965,22 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		</style>
 		<script>
 		function loadStats() {
-		  fetch('/stats')
-		    .then(r => r.json())
-		    .then(stats => {
-		      // Use the correct attribute for tokens
-		      document.getElementById('stats-tokens-value').innerText =
-		        stats.tokens?.tokens?.total ?? (typeof stats.tokens.tokens.total === "number" ? stats.tokens.tokens.total : "—");
-		      document.getElementById('stats-clients-value').innerText =
-		        stats.clients?.total ?? (typeof stats.clients === "number" ? stats.clients : "—");
-		      document.getElementById('stats-users-value').innerText =
-		        stats.users?.total ?? (typeof stats.users === "number" ? stats.users : stats.users ?? "—");
-		    })
-		    .catch(() => {
-		      document.getElementById('stats-tokens-value').innerText = '—';
-		      document.getElementById('stats-clients-value').innerText = '—';
-		      document.getElementById('stats-users-value').innerText = '—';
-		    });
+			fetch('/stats')
+				.then(r => r.json())
+				.then(stats => {
+					// Properly access properties from the stats object
+					document.getElementById('stats-tokens-value').innerText = 
+						stats.tokens ?? "—";
+					document.getElementById('stats-clients-value').innerText = 
+						stats.clients ?? "—";
+					document.getElementById('stats-users-value').innerText = 
+						stats.users ?? "—";
+				})
+				.catch(() => {
+					document.getElementById('stats-tokens-value').innerText = '—';
+					document.getElementById('stats-clients-value').innerText = '—';
+					document.getElementById('stats-users-value').innerText = '—';
+				});
 		}
 		document.addEventListener('DOMContentLoaded', loadStats);
 		</script>
