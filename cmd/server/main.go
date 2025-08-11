@@ -41,6 +41,7 @@ var (
 
 	// Handlers
 	registrationHandler *handlers.RegistrationHandler
+	deviceCodeHandler    *handlers.DeviceCodeHandler
 
 	// Templates for rendering HTML responses
 	templates *template.Template
@@ -231,7 +232,7 @@ func initializeOAuth2Provider() error {
 		compose.OpenIDConnectExplicitFactory,
 		compose.OAuth2TokenIntrospectionFactory,
 		compose.OAuth2TokenRevocationFactory,
-		compose.RFC8693TokenExchangeFactory,
+//		compose.RFC8693TokenExchangeFactory,
 		compose.RFC8628DeviceFactory,
 	)
 
@@ -277,11 +278,16 @@ func setupRoutes() {
 	http.HandleFunc("/oauth/introspect", proxyAwareMiddleware(introspectHandler))
 	http.HandleFunc("/oauth/revoke", proxyAwareMiddleware(revokeHandler))
 
+	// Device flow endpoints - use our new handler
+	http.HandleFunc("/device/authorize", proxyAwareMiddleware(deviceCodeHandler.HandleDeviceAuthorization))
+	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
+	http.HandleFunc("/device/auth", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
+
 	// Registration endpoints
 	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler.HandleRegistration))
 
 	// Discovery endpoints
-	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(oauth2DiscoveryHandler)) // ← ADD THIS
+	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(oauth2DiscoveryHandler))
 	http.HandleFunc("/.well-known/openid-configuration", proxyAwareMiddleware(wellKnownHandler))
 	http.HandleFunc("/.well-known/jwks.json", proxyAwareMiddleware(jwksHandler))
 
@@ -632,6 +638,58 @@ func showDeviceVerificationSuccess(w http.ResponseWriter, r *http.Request) {
 		log.WithError(err).Error("Failed to render device success template")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// Enhanced userinfo handler with proper user lookup
+func userInfoHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract bearer token
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+		return
+	}
+
+	token := parts[1]
+
+	// Use fosite's introspection to validate the token
+	ctx := r.Context()
+	// We require the "openid" scope to allow access to this endpoint.
+	_, requester, err := oauth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &fosite.DefaultSession{}, "openid")
+	if err != nil {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="The access token is invalid or has expired."`)
+		http.Error(w, "Invalid access token", http.StatusUnauthorized)
+		return
+	}
+
+	// Get user info from token claims (the subject)
+	subject := requester.GetSession().GetSubject()
+
+	// Build user info response based on the user ID from the token
+	var userInfo map[string]interface{}
+	if user, found := configuration.GetUserByID(subject); found {
+		userInfo = map[string]interface{}{
+			"sub":      user.ID,
+			"name":     user.Name,
+			"email":    user.Email,
+			"username": user.Username,
+		}
+	} else {
+		// This case should ideally not happen if tokens are issued correctly
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="User not found."`)
+		http.Error(w, "User associated with token not found", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(userInfo)
 }
 
 // Well-known handler
