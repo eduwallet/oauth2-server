@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -155,18 +154,14 @@ func initializeClients() error {
 			log.Println("Registering client:", client.ID)
 
 			newClient := &fosite.DefaultClient{
-				ID:     client.ID,
-				Secret: hashedSecret,
-				// Name:              client.Name,
-				// Description:       client.Description,
+				ID:            client.ID,
+				Secret:        hashedSecret,
 				RedirectURIs:  client.RedirectURIs,
 				GrantTypes:    client.GrantTypes,
 				ResponseTypes: client.ResponseTypes,
 				Scopes:        client.Scopes,
 				Audience:      client.Audience,
-				//				TokenEndpointAuthMethod: client.TokenEndpointAuthMethod,
-				Public: client.Public,
-				//				EnabledFlows:       client.EnabledFlows,
+				Public:        client.Public,
 			}
 
 			memoryStore.Clients[client.ID] = newClient
@@ -208,38 +203,19 @@ func initializeOAuth2Provider() error {
 		return fmt.Errorf("failed to generate RSA key: %w", err)
 	}
 
-	// Configure OAuth2 provider
-	config := &fosite.Config{
-		AccessTokenLifespan:      time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
-		RefreshTokenLifespan:     time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
-		AuthorizeCodeLifespan:    time.Duration(configuration.Security.AuthorizationCodeExpirySeconds) * time.Second,
-		GlobalSecret:             []byte(configuration.Security.JWTSecret + "-padded-to-32-bytes-for-hmac-security"),
-		AccessTokenIssuer:        configuration.Server.BaseURL,
-		ScopeStrategy:            fosite.HierarchicScopeStrategy,
-		AudienceMatchingStrategy: fosite.DefaultAudienceMatchingStrategy,
+	// Configure OAuth2 provider with minimal settings
+	config := &compose.Config{
+		AccessTokenLifespan:   time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
+		RefreshTokenLifespan:  time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
+		AuthorizeCodeLifespan: time.Duration(configuration.Security.AuthorizationCodeExpirySeconds) * time.Second,
 	}
 
-	// Build OAuth2 provider...
-	oauth2Provider = compose.Compose(
+	// Create a simple OAuth2 provider without complex strategies
+	oauth2Provider = compose.ComposeAllEnabled(
 		config,
 		memoryStore,
-		&compose.CommonStrategy{
-			CoreStrategy: compose.NewOAuth2HMACStrategy(config),
-			OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(
-				func(ctx context.Context) (interface{}, error) {
-					return privateKey, nil
-				},
-				config,
-			),
-		},
-		compose.OAuth2AuthorizeExplicitFactory,
-		compose.OAuth2ClientCredentialsGrantFactory,
-		compose.OAuth2RefreshTokenGrantFactory,
-		compose.OpenIDConnectExplicitFactory,
-		compose.OAuth2TokenIntrospectionFactory,
-		compose.OAuth2TokenRevocationFactory,
-		//		compose.RFC8693TokenExchangeFactory,
-		compose.RFC8628DeviceFactory,
+		[]byte(configuration.Security.JWTSecret),
+		privateKey,
 	)
 
 	log.Printf("✅ OAuth2 provider initialized with fosite storage")
@@ -296,7 +272,9 @@ func setupRoutes() {
 	// Device flow endpoints - use our new handler
 	http.HandleFunc("/device/authorize", proxyAwareMiddleware(deviceCodeHandler.HandleDeviceAuthorization))
 	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
-	http.HandleFunc("/device/auth", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
+	http.HandleFunc("/device/verify", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
+	// TODO: Add polling endpoint if needed
+	// http.HandleFunc("/device/poll", proxyAwareMiddleware(deviceCodeHandler.HandleDevicePolling))
 
 	// Registration endpoints
 	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler.HandleRegistration))

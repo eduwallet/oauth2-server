@@ -84,6 +84,9 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// Debug: Log the received metadata
+	log.Printf("🔍 Received registration metadata: %+v", metadata)
+
 	// Generate client ID (random string)
 	clientID, err := generateRandomString(32)
 	if err != nil {
@@ -108,7 +111,8 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	// Apply defaults if needed
 	grantTypes := metadata.GrantTypes
 	if len(grantTypes) == 0 {
-		grantTypes = []string{"authorization_code"}
+		// Default to supporting both authorization code and device flows
+		grantTypes = []string{"authorization_code", "urn:ietf:params:oauth:grant-type:device_code", "refresh_token"}
 	}
 
 	responseTypes := metadata.ResponseTypes
@@ -116,11 +120,17 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		responseTypes = []string{"code"}
 	}
 
+	// Debug: Log the registration details
+	log.Printf("🔍 Registering client with Grant Types: %v, Response Types: %v", grantTypes, responseTypes)
+
 	// Convert scope string to array if provided
 	var scopes []string
 	if metadata.Scope != "" {
 		scopes = splitScope(metadata.Scope)
 	}
+
+	// Debug: Log scope information
+	log.Printf("🔍 Client scopes from metadata: '%s' -> %v", metadata.Scope, scopes)
 
 	// Create the client
 	newClient := &fosite.DefaultClient{

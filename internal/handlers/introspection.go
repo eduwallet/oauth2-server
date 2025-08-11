@@ -94,10 +94,10 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			h.Log.Printf("❌ Introspection error details: %v", err)
 		}
 
-		h.OAuth2Provider.WriteIntrospectionError(ctx, w, err)
+		h.OAuth2Provider.WriteIntrospectionError(w, err)
 		return
 	}
 
 	// Write the successful introspection response
-	h.OAuth2Provider.WriteIntrospectionResponse(ctx, w, ir)
+	h.OAuth2Provider.WriteIntrospectionResponse(w, ir)
 }

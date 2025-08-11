@@ -101,6 +101,51 @@
             color: #666;
             margin-top: 10px;
         }
+        .login-form {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border: 1px solid #dee2e6;
+        }
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.25);
+        }
+        .user-code-display {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+            border-left: 4px solid #2196f3;
+        }
+        .user-code-display strong {
+            color: #1976d2;
+            font-size: 18px;
+            letter-spacing: 1px;
+        }
+        .verification-section {
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -109,6 +154,44 @@
             <h1>📱 Device Authorization</h1>
         </div>
 
+        {{if .UserCode}}
+        <!-- User verification flow - when user_code is provided -->
+        <div class="verification-section">
+            <h2>Verify Device Authorization</h2>
+            <p>Please enter your credentials to authorize this device.</p>
+            
+            <div class="user-code-display">
+                <strong>User Code: {{.UserCode}}</strong>
+            </div>
+
+            {{if .Error}}
+            <div class="status error">
+                <strong>❌ {{.Error}}</strong>
+            </div>
+            {{end}}
+
+            <form method="post" action="/device/verify" class="login-form">
+                <input type="hidden" name="user_code" value="{{.UserCode}}">
+                
+                <div class="form-group">
+                    <label for="username">Username:</label>
+                    <input type="text" id="username" name="username" required autocomplete="username">
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
+                </div>
+                
+                <button type="submit" class="btn">Authorize Device</button>
+            </form>
+
+            <div class="countdown" id="countdown">
+                Expires in <span id="timer">{{.ExpiresIn}}</span> seconds
+            </div>
+        </div>
+        {{else}}
+        <!-- Device display flow - when no user_code is provided -->
         <div class="instructions">
             To authorize this device, please visit the verification URL below and enter the user code:
         </div>
@@ -139,6 +222,7 @@
                 Expires in <span id="timer">{{.ExpiresIn}}</span> seconds
             </div>
         </div>
+        {{end}}
 
         <script>
             let expiresIn = {{.ExpiresIn}};
@@ -153,15 +237,26 @@
                     expiresIn--;
                 } else {
                     clearInterval(countdownTimer);
-                    clearInterval(pollTimer);
-                    updateStatus('error', '⏰ Authorization expired. Please restart the process.');
+                    if (pollTimer) clearInterval(pollTimer);
+                    
+                    // Show expiration message
+                    const userCode = '{{.UserCode}}';
+                    if (userCode) {
+                        // Verification page - redirect to error
+                        window.location.href = '/device?error=Authorization+expired&user_code=' + userCode;
+                    } else {
+                        // Device display page - update status
+                        updateStatus('error', '⏰ Authorization expired. Please restart the process.');
+                    }
                 }
             }
 
             function updateStatus(type, message) {
                 const statusElement = document.getElementById('status');
-                statusElement.className = 'status ' + type;
-                statusElement.innerHTML = '<strong>' + message + '</strong>';
+                if (statusElement) {
+                    statusElement.className = 'status ' + type;
+                    statusElement.innerHTML = '<strong>' + message + '</strong>';
+                }
             }
 
             function pollForToken() {
@@ -200,8 +295,11 @@
             // Start countdown
             countdownTimer = setInterval(updateCountdown, 1000);
 
-            // Start polling
-            pollTimer = setInterval(pollForToken, interval * 1000);
+            // Only start polling if we're on the device display page (no user code)
+            const userCode = '{{.UserCode}}';
+            if (!userCode && '{{.DeviceCode}}') {
+                pollTimer = setInterval(pollForToken, interval * 1000);
+            }
         </script>
     </div>
 </body>
