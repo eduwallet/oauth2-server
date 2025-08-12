@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/handler/openid"
 )
 
 type UserInfoHandler struct {
@@ -36,7 +37,7 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Use fosite's introspection to validate the token
 	ctx := r.Context()
 	// We require the "openid" scope to allow access to this endpoint.
-	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &fosite.DefaultSession{}, "openid")
+	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &openid.DefaultSession{}, "openid")
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="The access token is invalid or has expired."`)
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)

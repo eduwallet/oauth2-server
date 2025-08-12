@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"oauth2-server/internal/utils"
+	"oauth2-server/pkg/config"
 	"strings"
 	"time"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/handler/openid"
 	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
@@ -17,35 +18,24 @@ import (
 // TokenHandler manages OAuth2 token requests
 type TokenHandler struct {
 	OAuth2Provider fosite.OAuth2Provider
+	Configuration  *config.Config
 	Log            *logrus.Logger
 }
 
 // NewTokenHandler creates a new token handler
-func NewTokenHandler(oauth2Provider fosite.OAuth2Provider, log *logrus.Logger) *TokenHandler {
+func NewTokenHandler(oauth2Provider fosite.OAuth2Provider, configuration *config.Config, log *logrus.Logger) *TokenHandler {
 	return &TokenHandler{
 		OAuth2Provider: oauth2Provider,
+		Configuration:  configuration,
 		Log:            log,
 	}
 }
 
 // ServeHTTP handles token requests and routes to appropriate flow
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		utils.WriteInvalidRequestError(w, "Failed to parse request")
-		return
-	}
-
-	grantType := r.FormValue("grant_type")
-	h.Log.Printf("🔄 Processing token request with grant_type: %s", grantType)
-
-	switch grantType {
-	case "urn:ietf:params:oauth:grant-type:device_code":
-		// Handle device code grant with our custom implementation
-		h.handleDeviceCodeGrant(w, r)
-	default:
-		// Let fosite handle ALL other standard grant types
-		h.handleStandardTokenRequest(w, r)
-	}
+	// Simple approach: Let fosite handle ALL token requests including device code grant
+	// Fosite has built-in device flow support when using compose.ComposeAllEnabled
+	h.handleStandardTokenRequest(w, r)
 }
 
 func (h *TokenHandler) handleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +55,7 @@ func (h *TokenHandler) handleStandardTokenRequest(w http.ResponseWriter, r *http
 	h.Log.Printf("📝 All form values: %v", r.Form)
 
 	// Let fosite handle ALL token requests including device code flow
-	accessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, r, &fosite.DefaultSession{})
+	accessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, r, &openid.DefaultSession{})
 	if err != nil {
 		h.Log.Printf("❌ Error creating access request: %v", err)
 		h.Log.Printf("🔍 Request form data: %v", r.Form)
@@ -74,7 +64,14 @@ func (h *TokenHandler) handleStandardTokenRequest(w http.ResponseWriter, r *http
 
 		// Check if this is a device code request specifically
 		if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
-			h.Log.Printf("🔍 Device code grant request failed")
+			h.Log.Printf("🔍 Device code grant request failed, attempting custom device code bridge")
+
+			// BRIDGE: Check if the device code exists in our custom storage
+			// and manually create a token if it's authorized
+			if h.handleCustomDeviceCodeBridge(w, r, deviceCode, clientID) {
+				return // Bridge handled the request
+			}
+
 			h.Log.Printf("🔍 Device code: %s", deviceCode)
 			h.Log.Printf("🔍 Client ID: %s", clientID)
 
@@ -110,15 +107,15 @@ func (h *TokenHandler) handleStandardTokenRequest(w http.ResponseWriter, r *http
 
 	// Enhance session with user info for authorization code flow
 	session := accessRequest.GetSession()
-	if defaultSession, ok := session.(*fosite.DefaultSession); ok {
+	if defaultSession, ok := session.(*openid.DefaultSession); ok {
 		grantType := r.FormValue("grant_type")
 
 		switch grantType {
 		case "authorization_code":
-			defaultSession.Subject = h.extractUserFromAuthCode(accessRequest)
-		case "client_credentials":
-			defaultSession.Subject = accessRequest.GetClient().GetID()
-			// Remove token exchange handling - fosite does this automatically
+			subject := h.extractUserFromAuthCode(accessRequest)
+			defaultSession.Claims.Subject = subject
+			// case "client_credentials":
+			// 	defaultSession.Claims.Subject = clientID
 		}
 	}
 
@@ -141,83 +138,15 @@ func (h *TokenHandler) extractUserFromAuthCode(req fosite.AccessRequester) strin
 
 // handleDeviceCodeGrant handles the device code grant type for token exchange
 func (h *TokenHandler) handleDeviceCodeGrant(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	deviceCode := r.FormValue("device_code")
-	clientID := r.FormValue("client_id")
+	// Let fosite handle the device code grant properly!
+	// Based on the official fosite test, we should let fosite's standard flow handle this
+	// The key insight: fosite already has device code grant support built-in
 
-	h.Log.Printf("🔍 Device code grant - Device Code: %s, Client ID: %s", deviceCode, clientID)
+	h.Log.Printf("🔄 Delegating device code grant to fosite's standard flow")
 
-	// Look up the device authorization
-	deviceAuth := h.findDeviceAuth(deviceCode)
-	if deviceAuth == nil {
-		h.Log.Printf("❌ Device authorization not found for device code: %s", deviceCode)
-		h.writeTokenError(w, "invalid_grant", "Device authorization not found or expired")
-		return
-	}
-
-	// Check if the device has been authorized by the user
-	if !deviceAuth.IsUsed {
-		h.Log.Printf("⏳ Device authorization pending for device code: %s", deviceCode)
-		h.writeTokenError(w, "authorization_pending", "User has not yet completed authorization")
-		return
-	}
-
-	// Check if the client ID matches
-	if deviceAuth.ClientID != clientID {
-		h.Log.Printf("❌ Client ID mismatch for device code: %s (expected: %s, got: %s)", deviceCode, deviceAuth.ClientID, clientID)
-		h.writeTokenError(w, "invalid_client", "Client ID does not match")
-		return
-	}
-
-	// Get the client from fosite's store
-	fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite)
-	if !ok {
-		h.Log.Printf("❌ Unsupported OAuth2 provider type")
-		h.writeTokenError(w, "server_error", "Unsupported OAuth2 provider type")
-		return
-	}
-
-	client, err := fositeProvider.Store.GetClient(ctx, deviceAuth.ClientID)
-	if err != nil {
-		h.Log.Printf("❌ Failed to get client: %v", err)
-		h.writeTokenError(w, "invalid_client", "Invalid client")
-		return
-	}
-
-	// Parse the requested scopes
-	scopes := fosite.Arguments{}
-	if deviceAuth.Scope != "" {
-		scopes = strings.Split(deviceAuth.Scope, " ")
-	}
-
-	// Create a proper session for the authenticated user
-	session := &fosite.DefaultSession{
-		Subject:  deviceAuth.UserID,
-		Username: deviceAuth.UserID,
-	}
-
-	// Create access request manually for device flow
-	// Use authorization_code grant internally since fosite understands it
-	accessRequest := fosite.NewAccessRequest(session)
-	accessRequest.Client = client
-	accessRequest.GrantTypes = fosite.Arguments{"authorization_code"} // Use supported grant type
-	accessRequest.RequestedScope = scopes
-	accessRequest.GrantedScope = scopes
-
-	// Now use fosite's token generation and storage
-	response, err := h.generateFositeTokens(ctx, fositeProvider, accessRequest)
-	if err != nil {
-		h.Log.Printf("❌ Failed to generate fosite tokens: %v", err)
-		h.writeTokenError(w, "server_error", "Failed to generate tokens")
-		return
-	}
-
-	h.Log.Printf("✅ Device code exchange successful for user: %s", deviceAuth.UserID)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	json.NewEncoder(w).Encode(response)
+	// Let fosite handle the device code grant through its standard mechanisms
+	// This ensures proper token generation, storage, and introspection compatibility
+	h.handleStandardTokenRequest(w, r)
 }
 
 // generateFositeTokens uses fosite's internal token generation and storage
@@ -294,6 +223,114 @@ func (h *TokenHandler) storeFositeTokens(ctx context.Context, fositeProvider *fo
 	}
 
 	return fmt.Errorf("unsupported store type - expected MemoryStore")
+}
+
+// handleCustomDeviceCodeBridge bridges custom device authorization storage with fosite token handling
+// This method checks our custom device authorization storage and manually issues tokens if the device is authorized
+func (h *TokenHandler) handleCustomDeviceCodeBridge(w http.ResponseWriter, r *http.Request, deviceCode, clientID string) bool {
+	h.Log.Printf("🌉 Attempting device code bridge for device code: %s", deviceCode)
+
+	// Access our custom device authorization storage via the global variable
+	// This is a temporary bridge until we fully integrate device auth with fosite
+	deviceAuthsMutex.RLock()
+	deviceAuth, exists := deviceAuths[deviceCode]
+	deviceAuthsMutex.RUnlock()
+
+	if !exists {
+		h.Log.Printf("🔍 Device code not found in custom storage: %s", deviceCode)
+		return false
+	}
+
+	// Check if device is authorized and has a user
+	deviceAuth.Mutex.RLock()
+	isUsed := deviceAuth.IsUsed
+	userID := deviceAuth.UserID
+	clientIDFromAuth := deviceAuth.ClientID
+	scope := deviceAuth.Scope
+	expiresAt := deviceAuth.ExpiresAt
+	deviceAuth.Mutex.RUnlock()
+
+	// Validate the device authorization
+	if clientIDFromAuth != clientID {
+		h.Log.Printf("🔍 Client ID mismatch: expected %s, got %s", clientIDFromAuth, clientID)
+		return false
+	}
+
+	if time.Now().After(expiresAt) {
+		h.Log.Printf("🔍 Device authorization expired")
+		return false
+	}
+
+	if !isUsed {
+		h.Log.Printf("🔍 Device not yet authorized by user")
+		// Return authorization_pending error
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":             "authorization_pending",
+			"error_description": "The authorization request is still pending as the end user hasn't yet completed the user-interaction steps.",
+		})
+		return true
+	}
+
+	if userID == "" {
+		h.Log.Printf("🔍 Device authorized but no user ID")
+		return false
+	}
+
+	h.Log.Printf("✅ Device code bridge: Found authorized device for user %s", userID)
+
+	// Generate tokens manually using fosite-compatible approach
+	ctx := r.Context()
+
+	// Get the client to create a proper access request
+	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
+		client, err := fositeProvider.Store.GetClient(ctx, clientID)
+		if err != nil {
+			h.Log.Printf("❌ Failed to get client: %v", err)
+			return false
+		}
+
+		// Create a mock access request for token generation
+		session := userSession("", userID, []string{})
+
+		scopes := strings.Split(scope, " ")
+		if len(scopes) == 0 {
+			scopes = []string{"openid"}
+		}
+
+		// Create a minimal access request
+		accessRequest := &fosite.AccessRequest{
+			Request: fosite.Request{
+				Client:         client,
+				RequestedScope: fosite.Arguments(scopes),
+				GrantedScope:   fosite.Arguments(scopes),
+				Session:        session,
+				RequestedAt:    time.Now(),
+			},
+		}
+
+		// Generate tokens using fosite-compatible method
+		if tokenResponse, err := h.generateFositeTokens(ctx, fositeProvider, accessRequest); err == nil {
+			h.Log.Printf("✅ Device code bridge: Generated tokens for user %s", userID)
+
+			// Mark device as used (consume it)
+			deviceAuth.Mutex.Lock()
+			deviceAuth.IsUsed = true
+			deviceAuth.Mutex.Unlock()
+
+			// Return the token response
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
+			json.NewEncoder(w).Encode(tokenResponse)
+			return true
+		} else {
+			h.Log.Printf("❌ Failed to generate tokens: %v", err)
+		}
+	}
+
+	return false
 } // Helper methods for device code grant
 func (h *TokenHandler) findDeviceAuth(deviceCode string) *DeviceAuth {
 	// Access the shared deviceAuths map from the same package

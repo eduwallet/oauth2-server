@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/base64"
 	"net/http"
 	"strings"
 
@@ -30,34 +29,41 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	// Log the incoming request for debugging
 	h.Log.Printf("🔍 Introspection request: Method=%s, Content-Type=%s", r.Method, r.Header.Get("Content-Type"))
 
-	// Log authentication headers with more detail
-	authHeader := r.Header.Get("Authorization")
-	h.Log.Printf("🔍 Authorization header present: %t", authHeader != "")
-	if authHeader != "" {
-		parts := strings.Split(authHeader, " ")
-		if len(parts) > 0 {
-			h.Log.Printf("🔍 Auth method: %s", parts[0])
-
-			// DEBUG: Extract and log Basic Auth credentials (without exposing the secret)
-			if parts[0] == "Basic" && len(parts) > 1 {
-				// Decode the Basic Auth to get client ID (but not log the secret)
-				if decoded, err := base64.StdEncoding.DecodeString(parts[1]); err == nil {
-					credentials := string(decoded)
-					if credParts := strings.Split(credentials, ":"); len(credParts) >= 2 {
-						clientID := credParts[0]
-						secretLength := len(credParts[1])
-						h.Log.Printf("🔍 Basic Auth - Client ID: %s, Secret length: %d", clientID, secretLength)
-					}
-				}
-			}
-		}
-	}
-
 	// Ensure it's a POST request
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Log authentication headers with more detail
+	authHeader := r.Header.Get("Authorization")
+	h.Log.Printf("🔍 Authorization header present: %t", authHeader != "")
+
+	if authHeader == "" {
+		h.Log.Printf("❌ Missing Authorization header for introspection")
+		http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 {
+		h.Log.Printf("❌ Invalid Authorization header format")
+		http.Error(w, "Invalid Authorization header format", http.StatusUnauthorized)
+		return
+	}
+
+	authMethod := parts[0]
+
+	h.Log.Printf("🔍 Auth method: %s", authMethod)
+
+	// According to RFC 7662 and fosite documentation, introspection requires Bearer token
+	if authMethod != "Bearer" {
+		h.Log.Printf("❌ Invalid authentication method for introspection. Expected Bearer, got: %s", authMethod)
+		http.Error(w, "Bearer token required for introspection", http.StatusUnauthorized)
+		return
+	}
+
+	h.Log.Printf("🔍 Bearer token present for introspection authorization")
 
 	// Parse form data
 	if err := r.ParseForm(); err != nil {
@@ -69,17 +75,13 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	// Log form values (but hide sensitive data)
 	token := r.FormValue("token")
 	tokenTypeHint := r.FormValue("token_type_hint")
-	clientID := r.FormValue("client_id")
-	clientSecret := r.FormValue("client_secret")
+	//	clientID := r.FormValue("client_id")
+	//	clientSecret := r.FormValue("client_secret")
 
 	h.Log.Printf("🔍 Introspection details: token_present=%t, token_type_hint=%s", token != "", tokenTypeHint)
-	h.Log.Printf("🔍 Client credentials in form: client_id_present=%t, client_secret_present=%t", clientID != "", clientSecret != "")
-
-	// Create a session for introspection
-	session := &fosite.DefaultSession{}
 
 	// Create the introspection request
-	ir, err := h.OAuth2Provider.NewIntrospectionRequest(ctx, r, session)
+	ir, err := h.OAuth2Provider.NewIntrospectionRequest(ctx, r, newSession())
 	if err != nil {
 		h.Log.Printf("❌ Error creating introspection request: %v", err)
 

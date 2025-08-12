@@ -47,6 +47,7 @@ var (
 	jwksHandler            *handlers.JWKSHandler
 	healthHandler          *handlers.HealthHandler
 	oauth2DiscoveryHandler *handlers.OAuth2DiscoveryHandler
+	authorizeHandler       *handlers.AuthorizeHandler
 
 	// Templates for rendering HTML responses
 	templates *template.Template
@@ -130,7 +131,7 @@ func main() {
 	// Start server
 	log.Printf("🌐 OAuth2 server starting on port %d", configuration.Server.Port)
 	log.Printf("🔗 Authorization endpoint: %s/auth", configuration.Server.BaseURL)
-	log.Printf("🎫 Token endpoint: %s/token", configuration.Server.BaseURL)
+	log.Printf("🎫 Token endpoint: %s/oauth/token", configuration.Server.BaseURL)
 	log.Printf("📱 Device authorization: %s/device/authorize", configuration.Server.BaseURL)
 	log.Printf("🔧 Client registration: %s/register", configuration.Server.BaseURL)
 	log.Printf("🏥 Health check: %s/health", configuration.Server.BaseURL)
@@ -208,6 +209,10 @@ func initializeOAuth2Provider() error {
 		AccessTokenLifespan:   time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
 		RefreshTokenLifespan:  time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
 		AuthorizeCodeLifespan: time.Duration(configuration.Security.AuthorizationCodeExpirySeconds) * time.Second,
+		// Add some important configuration that might be missing
+		ScopeStrategy:              fosite.HierarchicScopeStrategy,
+		AudienceMatchingStrategy:   fosite.DefaultAudienceMatchingStrategy,
+		SendDebugMessagesToClients: true, // Enable debug messages for development
 	}
 
 	// Create a simple OAuth2 provider without complex strategies
@@ -223,18 +228,19 @@ func initializeOAuth2Provider() error {
 }
 
 func initializeHandlers() {
-	// Initialize registration handlers
+	// Initialize OAuth2 handlers
 
 	registrationHandler = handlers.NewRegistrationHandler(memoryStore)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
 	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, templates, configuration, log)
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
 	homeHandler = handlers.NewHomeHandler(configuration)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, log)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	jwksHandler = handlers.NewJWKSHandler()
 	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration)
+	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log)
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }
@@ -264,13 +270,18 @@ func loadTemplates() error {
 
 func setupRoutes() {
 	// OAuth2 endpoints - use fosite's built-in handlers
-	//    http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler))
+	http.HandleFunc("/auth", proxyAwareMiddleware(authorizeHandler.ServeHTTP))  // Add /auth alias for authorization
+	http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
 	http.HandleFunc("/oauth/token", proxyAwareMiddleware(tokenHandler.ServeHTTP))
 	http.HandleFunc("/oauth/introspect", proxyAwareMiddleware(introspectionHandler.ServeHTTP))
 	http.HandleFunc("/oauth/revoke", proxyAwareMiddleware(revokeHandler.ServeHTTP))
 
-	// Device flow endpoints - use our new handler
-	http.HandleFunc("/device/authorize", proxyAwareMiddleware(deviceCodeHandler.HandleDeviceAuthorization))
+	// Device flow endpoints - use our custom device authorization but store in fosite-compatible format
+	http.HandleFunc("/device/authorize", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		// Use our custom device authorization handler
+		// The key insight: we need to store device authorization in fosite's memory store format
+		deviceCodeHandler.HandleDeviceAuthorization(w, r)
+	}))
 	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
 	http.HandleFunc("/device/verify", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
 	// TODO: Add polling endpoint if needed

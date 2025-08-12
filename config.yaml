@@ -9,11 +9,11 @@ server:
   shutdown_timeout: 5
 
 security:
-  jwt_signing_key: "your-secret-key-here"
+  jwt_signing_key: "abcdefghijklmnopqrstuvwxyz123456"
   token_expiry_seconds: 3600
   refresh_token_expiry_seconds: 86400
   device_code_expiry_seconds: 600
-  authorization_code"_expiry_seconds: 300
+  authorization_code_expiry_seconds: 300
   enable_pkce: true
   require_https: false
 
@@ -38,8 +38,8 @@ clients:
   name: "Frontend Application"
   description: "Main frontend SPA application"
   redirect_uris:
-  - "/client1/callback"
-  - "/callback"
+  - "http://localhost:8080/client1/callback"
+  - "http://localhost:8080/callback"
   grant_types:
   - "authorization_code"
   - "refresh_token"
@@ -110,7 +110,7 @@ clients:
   name: "Mobile Application"
   description: "Mobile application client"
   redirect_uris:
-  - "/oauth/callback"
+  - "http://localhost:8080/oauth/callback"
   grant_types:
   - "authorization_code"
   - "refresh_token"
@@ -130,11 +130,11 @@ clients:
   - "authorization_code"
   - "device_code"
 
-# Smart TV Device Flow Client
+# Smart TV Device Flow Client (Public - no secret for device flow)
 - id: "smart-tv-app"
-  secret: "tv-secret"
   name: "Smart TV Application"
   description: "Smart TV or IoT device application"
+  public: true
   redirect_uris: []
   grant_types:
   - "urn:ietf:params:oauth:grant-type:device_code"
@@ -147,7 +147,6 @@ clients:
   audience:
   - "api-service"
   token_endpoint_auth_method: "client_secret_basic"
-  public: false
   enabled_flows:
   - "device_code"
 
