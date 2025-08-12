@@ -205,7 +205,7 @@ func initializeOAuth2Provider() error {
 	}
 
 	// Configure OAuth2 provider with minimal settings
-	config := &compose.Config{
+	config := &fosite.Config{
 		AccessTokenLifespan:   time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
 		RefreshTokenLifespan:  time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
 		AuthorizeCodeLifespan: time.Duration(configuration.Security.AuthorizationCodeExpirySeconds) * time.Second,
@@ -219,7 +219,6 @@ func initializeOAuth2Provider() error {
 	oauth2Provider = compose.ComposeAllEnabled(
 		config,
 		memoryStore,
-		[]byte(configuration.Security.JWTSecret),
 		privateKey,
 	)
 
@@ -270,7 +269,7 @@ func loadTemplates() error {
 
 func setupRoutes() {
 	// OAuth2 endpoints - use fosite's built-in handlers
-	http.HandleFunc("/auth", proxyAwareMiddleware(authorizeHandler.ServeHTTP))  // Add /auth alias for authorization
+	http.HandleFunc("/auth", proxyAwareMiddleware(authorizeHandler.ServeHTTP)) // Add /auth alias for authorization
 	http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
 	http.HandleFunc("/oauth/token", proxyAwareMiddleware(tokenHandler.ServeHTTP))
 	http.HandleFunc("/oauth/introspect", proxyAwareMiddleware(introspectionHandler.ServeHTTP))

@@ -38,8 +38,7 @@ clients:
   name: "Frontend Application"
   description: "Main frontend SPA application"
   redirect_uris:
-  - "http://localhost:8080/client1/callback"
-  - "http://localhost:8080/callback"
+  - "/callback"
   grant_types:
   - "authorization_code"
   - "refresh_token"
