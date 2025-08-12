@@ -15,6 +15,7 @@ import (
 )
 
 // RegistrationHandler manages dynamic client registration
+
 type RegistrationHandler struct {
 	memoryStore *storage.MemoryStore
 }
@@ -84,9 +85,6 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Debug: Log the received metadata
-	log.Printf("🔍 Received registration metadata: %+v", metadata)
-
 	// Generate client ID (random string)
 	clientID, err := generateRandomString(32)
 	if err != nil {
@@ -111,8 +109,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	// Apply defaults if needed
 	grantTypes := metadata.GrantTypes
 	if len(grantTypes) == 0 {
-		// Default to supporting both authorization code and device flows
-		grantTypes = []string{"authorization_code", "urn:ietf:params:oauth:grant-type:device_code", "refresh_token"}
+		grantTypes = []string{"authorization_code"}
 	}
 
 	responseTypes := metadata.ResponseTypes

@@ -46,7 +46,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ar, err := h.OAuth2Provider.NewAuthorizeRequest(ctx, r)
 	if err != nil {
 		h.Log.Printf("❌ Error occurred in NewAuthorizeRequest: %v", err)
-		h.OAuth2Provider.WriteAuthorizeError(w, ar, err)
+		h.OAuth2Provider.WriteAuthorizeError(ctx, w, ar, err)
 		return
 	}
 
@@ -168,7 +168,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.Log.Printf("🔍 Fosite error hint: %s", fositeErr.HintField)
 		}
 
-		h.OAuth2Provider.WriteAuthorizeError(w, ar, authErr)
+		h.OAuth2Provider.WriteAuthorizeError(ctx, w, ar, authErr)
 		return
 	}
 	h.Log.Printf("🔍 Sending back response to requestor...")
@@ -181,7 +181,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Log.Printf("🔍 About to call WriteAuthorizeResponse...")
 
 	// Last but not least, send the response!
-	h.OAuth2Provider.WriteAuthorizeResponse(w, ar, response)
+	h.OAuth2Provider.WriteAuthorizeResponse(ctx, w, ar, response)
 
 	h.Log.Printf("🔍 WriteAuthorizeResponse completed")
 	h.Log.Printf("🔍 HTTP response headers after WriteAuthorizeResponse: %+v", w.Header())

@@ -27,8 +27,8 @@ func (h *RevokeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err := h.OAuth2Provider.NewRevocationRequest(ctx, r)
 	if err != nil {
 		h.Log.Printf("❌ Error revoking token: %v", err)
-		h.OAuth2Provider.WriteRevocationResponse(w, err)
+		h.OAuth2Provider.WriteRevocationResponse(ctx, w, err)
 		return
 	}
-	h.OAuth2Provider.WriteRevocationResponse(w, nil)
+	h.OAuth2Provider.WriteRevocationResponse(ctx, w, nil)
 }
