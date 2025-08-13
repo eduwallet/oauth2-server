@@ -53,9 +53,11 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	grantType := r.FormValue("grant_type")
 	h.Log.Printf("🔍 Token request - Grant Type: %s", grantType)
 
-	// Let fosite handle ALL token requests natively, including device code flow
-	// This removes all custom bridge logic and relies purely on fosite's implementation
-	accessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, r, &openid.DefaultSession{})
+	// Let fosite handle ALL token requests natively, including device code flow and refresh tokens
+	// Use a consistent session for all requests - fosite will manage session retrieval for refresh tokens
+	session := &openid.DefaultSession{}
+
+	accessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, r, session)
 	if err != nil {
 		h.Log.Printf("❌ NewAccessRequest failed: %v", err)
 		h.OAuth2Provider.WriteAccessError(ctx, w, accessRequest, err)
@@ -66,6 +68,10 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	accessResponse, err := h.OAuth2Provider.NewAccessResponse(ctx, accessRequest)
 	if err != nil {
 		h.Log.Printf("❌ NewAccessResponse failed: %v", err)
+		h.Log.Printf("🔍 Access request details - Client: %s, Grant: %s, Scopes: %v",
+			accessRequest.GetClient().GetID(),
+			accessRequest.GetGrantTypes(),
+			accessRequest.GetGrantedScopes())
 		h.OAuth2Provider.WriteAccessError(ctx, w, accessRequest, err)
 		return
 	}

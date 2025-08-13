@@ -69,6 +69,8 @@ clients:
   - "refresh_token"
   response_types: []
   scopes:
+  - "openid"
+  - "profile"
   - "api:read"
   - "api:write"
   - "api:admin"
@@ -143,6 +145,7 @@ clients:
   - "openid"
   - "profile"
   - "api:read"
+  - "offline_access"
   audience:
   - "api-service"
   token_endpoint_auth_method: "client_secret_basic"
@@ -151,6 +154,23 @@ clients:
 
 users:
 # Test users for development and testing
+- id: "admin-user"
+  username: "admin"
+  password: "password"
+  name: "Admin User"
+  email: "admin@example.com"
+  enabled: true
+  roles:
+  - "admin"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "offline_access"
+  - "api:read"
+  - "api:write"
+  - "api:admin"
+
 - id: "user-001"
   username: "john.doe"
   password: "password123"
