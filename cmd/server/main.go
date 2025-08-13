@@ -228,7 +228,6 @@ func initializeOAuth2Provider() error {
 	f := compose.RFC8693TokenExchangeFactory(config, memoryStore, compose.NewOAuth2HMACStrategy(config))
 	config.TokenEndpointHandlers = append(config.TokenEndpointHandlers, f)
 
-
 	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil
 }
