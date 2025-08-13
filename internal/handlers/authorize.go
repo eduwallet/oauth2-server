@@ -61,7 +61,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// We're simplifying things and just checking if the request includes a valid username
 	r.ParseForm()
 	username := r.PostForm.Get("username")
-	
+
 	if username == "" {
 		// Show unified authorization template for login
 		h.showAuthorizationTemplate(w, r, ar, "", false)
@@ -174,20 +174,20 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // AuthTemplateData represents the data structure for the unified authorization template
 type AuthTemplateData struct {
-	IsDeviceFlow   bool
-	ShowLoginForm  bool
-	Username       string
-	ClientID       string
-	ClientName     string
-	RedirectURI    string
-	State          string
-	CodeChallenge  string
-	Scopes         []string
-	Error          string
-	FormAction     string
-	HiddenFields   map[string]string
-	UserCode       string
-	DeviceCode     string
+	IsDeviceFlow  bool
+	ShowLoginForm bool
+	Username      string
+	ClientID      string
+	ClientName    string
+	RedirectURI   string
+	State         string
+	CodeChallenge string
+	Scopes        []string
+	Error         string
+	FormAction    string
+	HiddenFields  map[string]string
+	UserCode      string
+	DeviceCode    string
 }
 
 // showAuthorizationTemplate renders the unified authorization template

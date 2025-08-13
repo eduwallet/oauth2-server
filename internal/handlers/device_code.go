@@ -434,20 +434,20 @@ func (h *DeviceCodeHandler) findDeviceAuthorization(userCode string) (fosite.Dev
 
 // DeviceAuthTemplateData represents the data structure for the unified authorization template (device flow)
 type DeviceAuthTemplateData struct {
-	IsDeviceFlow   bool
-	ShowLoginForm  bool
-	Username       string
-	ClientID       string
-	ClientName     string
-	RedirectURI    string
-	State          string
-	CodeChallenge  string
-	Scopes         []string
-	Error          string
-	FormAction     string
-	HiddenFields   map[string]string
-	UserCode       string
-	DeviceCode     string
+	IsDeviceFlow  bool
+	ShowLoginForm bool
+	Username      string
+	ClientID      string
+	ClientName    string
+	RedirectURI   string
+	State         string
+	CodeChallenge string
+	Scopes        []string
+	Error         string
+	FormAction    string
+	HiddenFields  map[string]string
+	UserCode      string
+	DeviceCode    string
 }
 
 // showDeviceAuthorizationTemplate renders the unified authorization template for device flow
@@ -456,9 +456,9 @@ func (h *DeviceCodeHandler) showDeviceAuthorizationTemplate(w http.ResponseWrite
 	data := DeviceAuthTemplateData{
 		IsDeviceFlow:  true, // This is device flow
 		ShowLoginForm: !isAuthenticated,
-		ClientID:      "smart-tv-app", // Default device client ID
-		RedirectURI:   "",             // Not used in device flow
-		State:         "",             // Not used in device flow
+		ClientID:      "smart-tv-app",                                           // Default device client ID
+		RedirectURI:   "",                                                       // Not used in device flow
+		State:         "",                                                       // Not used in device flow
 		Scopes:        []string{"openid", "profile", "email", "offline_access"}, // Default device scopes
 		Error:         errorMsg,
 		FormAction:    "/device/verify",
@@ -488,12 +488,12 @@ func (h *DeviceCodeHandler) showDeviceAuthorizationTemplate(w http.ResponseWrite
 func (h *DeviceCodeHandler) showDeviceConsentTemplate(w http.ResponseWriter, r *http.Request, userCode string, user *config.User, errorMsg string) {
 	// Prepare template data for device consent (user is authenticated)
 	data := DeviceAuthTemplateData{
-		IsDeviceFlow:  true, // This is device flow
+		IsDeviceFlow:  true,  // This is device flow
 		ShowLoginForm: false, // User is already authenticated, show consent form
 		Username:      user.Username,
-		ClientID:      "smart-tv-app", // Default device client ID
-		RedirectURI:   "",             // Not used in device flow
-		State:         "",             // Not used in device flow
+		ClientID:      "smart-tv-app",                                           // Default device client ID
+		RedirectURI:   "",                                                       // Not used in device flow
+		State:         "",                                                       // Not used in device flow
 		Scopes:        []string{"openid", "profile", "email", "offline_access"}, // Default device scopes
 		Error:         errorMsg,
 		FormAction:    "/device/consent",

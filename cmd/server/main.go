@@ -316,11 +316,11 @@ func setupRoutes() {
 
 	// Health endpoint
 	http.HandleFunc("/health", proxyAwareMiddleware(healthHandler.ServeHTTP))
-	
+
 	// Claims display endpoints
 	http.HandleFunc("/claims", proxyAwareMiddleware(claimsHandler.ServeHTTP))
 	http.HandleFunc("/callback", proxyAwareMiddleware(claimsHandler.HandleCallback))
-	
+
 	// Demo page
 	http.HandleFunc("/demo", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmpl, err := template.ParseFiles("templates/demo.html")
@@ -331,7 +331,7 @@ func setupRoutes() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		tmpl.Execute(w, nil)
 	}))
-	
+
 	http.HandleFunc("/", proxyAwareMiddleware(homeHandler.ServeHTTP))
 
 	log.Printf("✅ Routes set up successfully")
