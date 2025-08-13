@@ -41,7 +41,7 @@ var (
 	deviceCodeHandler      *handlers.DeviceCodeHandler
 	introspectionHandler   *handlers.IntrospectionHandler
 	discoveryHandler       *handlers.DiscoveryHandler
-	homeHandler            *handlers.HomeHandler
+	statusHandler          *handlers.StatusHandler
 	tokenHandler           *handlers.TokenHandler
 	revokeHandler          *handlers.RevokeHandler
 	jwksHandler            *handlers.JWKSHandler
@@ -225,6 +225,10 @@ func initializeOAuth2Provider() error {
 		privateKey,
 	)
 
+	f := compose.RFC8693TokenExchangeFactory(config, memoryStore, compose.NewOAuth2HMACStrategy(config))
+	config.TokenEndpointHandlers = append(config.TokenEndpointHandlers, f)
+
+
 	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil
 }
@@ -236,7 +240,7 @@ func initializeHandlers() {
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
 	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
-	homeHandler = handlers.NewHomeHandler(configuration)
+	statusHandler = handlers.NewStatusHandler(configuration)
 	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	jwksHandler = handlers.NewJWKSHandler()
@@ -280,11 +284,7 @@ func setupRoutes() {
 	http.HandleFunc("/oauth/revoke", proxyAwareMiddleware(revokeHandler.ServeHTTP))
 
 	// Device flow endpoints - use our custom device authorization but store in fosite-compatible format
-	http.HandleFunc("/device/authorize", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		// Use our custom device authorization handler
-		// The key insight: we need to store device authorization in fosite's memory store format
-		deviceCodeHandler.HandleDeviceAuthorization(w, r)
-	}))
+	http.HandleFunc("/device/authorize", proxyAwareMiddleware(deviceCodeHandler.HandleDeviceAuthorization))
 	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
 	http.HandleFunc("/device/verify", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
 	http.HandleFunc("/device/consent", proxyAwareMiddleware(deviceCodeHandler.HandleConsent))
@@ -322,7 +322,7 @@ func setupRoutes() {
 	http.HandleFunc("/callback", proxyAwareMiddleware(claimsHandler.HandleCallback))
 
 	// Demo page
-	http.HandleFunc("/demo", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmpl, err := template.ParseFiles("templates/demo.html")
 		if err != nil {
 			http.Error(w, "Template error", http.StatusInternalServerError)
@@ -332,7 +332,7 @@ func setupRoutes() {
 		tmpl.Execute(w, nil)
 	}))
 
-	http.HandleFunc("/", proxyAwareMiddleware(homeHandler.ServeHTTP))
+	http.HandleFunc("/status", proxyAwareMiddleware(statusHandler.ServeHTTP))
 
 	log.Printf("✅ Routes set up successfully")
 }

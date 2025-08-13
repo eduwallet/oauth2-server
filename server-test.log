@@ -1,0 +1,26 @@
+time="2025-08-13T22:57:30+02:00" level=info msg="🚀 Starting OAuth2 Server..."
+{"level":"info","msg":"✅ Configuration loaded successfully","time":"2025-08-13T22:57:30+02:00"}
+{"level":"info","msg":"🔧 Log Level: debug, Format: json, Audit: true","time":"2025-08-13T22:57:30+02:00"}
+{"level":"info","msg":"✅ OAuth2 provider initialized with fosite storage","time":"2025-08-13T22:57:30+02:00"}
+{"level":"info","msg":"Registering client: frontend-app","time":"2025-08-13T22:57:30+02:00"}
+{"level":"info","msg":"Registering client: web-app-client","time":"2025-08-13T22:57:30+02:00"}
+{"level":"info","msg":"Registering client: backend-client","time":"2025-08-13T22:57:30+02:00"}
+{"level":"info","msg":"Registering client: frontend-client","time":"2025-08-13T22:57:30+02:00"}
+{"level":"info","msg":"Registering client: mobile-app","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"Registering client: smart-tv-app","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ Stores initialized with 6 clients","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ Registered user: admin (admin-user)","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ Registered user: john.doe (user-001)","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ Registered user: jane.smith (user-002)","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ Registered user: testuser (user-003)","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ User store initialized with 4 users","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ Templates loaded","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ OAuth2 handlers initialized","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"✅ Routes set up successfully","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"🌐 OAuth2 server starting on port 8080","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"🔗 Authorization endpoint: http://localhost:8080/auth","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"🎫 Token endpoint: http://localhost:8080/oauth/token","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"📱 Device authorization: http://localhost:8080/device/authorize","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"🔧 Client registration: http://localhost:8080/register","time":"2025-08-13T22:57:31+02:00"}
+{"level":"info","msg":"🏥 Health check: http://localhost:8080/health","time":"2025-08-13T22:57:31+02:00"}
+{"level":"fatal","msg":"❌ Server failed to start: listen tcp :8080: bind: address already in use","time":"2025-08-13T22:57:31+02:00"}
