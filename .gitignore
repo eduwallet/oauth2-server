@@ -4,4 +4,4 @@ bin/oauth2-server
 main
 server.log
 ./server
-./server.log
+./*.log

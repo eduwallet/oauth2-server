@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"oauth2-server/pkg/config"
 	"strings"
@@ -39,6 +40,8 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// We require the "openid" scope to allow access to this endpoint.
 	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &openid.DefaultSession{}, "openid")
 	if err != nil {
+		log.Printf("❌ Introspection failed: %v", err)
+
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="The access token is invalid or has expired."`)
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)
 		return

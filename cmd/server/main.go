@@ -233,7 +233,7 @@ func initializeHandlers() {
 
 	registrationHandler = handlers.NewRegistrationHandler(memoryStore)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
-	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, templates, configuration, log)
+	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
 	homeHandler = handlers.NewHomeHandler(configuration)
 	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log)
@@ -285,6 +285,7 @@ func setupRoutes() {
 	}))
 	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
 	http.HandleFunc("/device/verify", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
+	http.HandleFunc("/device/consent", proxyAwareMiddleware(deviceCodeHandler.HandleConsent))
 
 	// Registration endpoints
 	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler.HandleRegistration))

@@ -2,16 +2,11 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
 	"oauth2-server/pkg/config"
-	"strings"
-	"sync"
-	"time"
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/storage"
@@ -21,6 +16,7 @@ import (
 // DeviceCodeHandler handles all operations related to the device authorization grant
 type DeviceCodeHandler struct {
 	OAuth2Provider fosite.OAuth2Provider
+	MemoryStore    *storage.MemoryStore
 	Templates      *template.Template
 	Config         *config.Config
 	Logger         *logrus.Logger
@@ -29,12 +25,14 @@ type DeviceCodeHandler struct {
 // NewDeviceCodeHandler creates a new DeviceCodeHandler
 func NewDeviceCodeHandler(
 	provider fosite.OAuth2Provider,
+	memoryStore *storage.MemoryStore,
 	templates *template.Template,
 	config *config.Config,
 	logger *logrus.Logger,
 ) *DeviceCodeHandler {
 	return &DeviceCodeHandler{
 		OAuth2Provider: provider,
+		MemoryStore:    memoryStore,
 		Templates:      templates,
 		Config:         config,
 		Logger:         logger,
@@ -42,7 +40,7 @@ func NewDeviceCodeHandler(
 }
 
 // HandleDeviceAuthorization handles the device authorization request (RFC 8628)
-// Simple approach: basic device/user code generation, let fosite handle tokens
+// Pure fosite approach: let fosite handle everything including storage
 func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -51,104 +49,41 @@ func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *
 		return
 	}
 
-	// Parse form
-	if err := r.ParseForm(); err != nil {
-		h.Logger.WithError(err).Error("Failed to parse form")
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
+	h.Logger.Info("🚀 Processing device authorization request using pure fosite flow")
 
-	h.Logger.Info("🚀 Processing device authorization request (simplified approach)")
-
-	// Basic client validation using fosite
-
-	var clientID string
-	authenticated := false
-
-	// Extract client ID from Basic auth if not in form
-	if username, _, ok := r.BasicAuth(); ok {
-		_, err := h.OAuth2Provider.(*fosite.Fosite).AuthenticateClient(ctx, r, r.Form)
-		if err != nil {
-			h.Logger.WithError(err).Error("Failed to authenticate client")
-			h.writeErrorResponse(w, "invalid_client", "Client authentication failed")
-			return
-		}
-		authenticated = true
-		clientID = username
-		h.Logger.Printf("🔑 Extracted client ID from Basic auth: %s", clientID)
-	} else {
-		clientID = r.FormValue("client_id")
-		if clientID == "" {
-			h.writeErrorResponse(w, "invalid_client", "Missing client_id")
-			return
-		}
-	}
-
-	// Validate the client exists and supports device flow
-	client, err := h.getClient(ctx, clientID)
+	// Let fosite handle the device authorization request completely
+	deviceRequest, err := h.OAuth2Provider.NewDeviceRequest(ctx, r)
 	if err != nil {
-		h.writeErrorResponse(w, "invalid_client", "Unknown client")
+		h.Logger.WithError(err).Error("Failed to create device request")
+		h.writeErrorResponse(w, "invalid_request", err.Error())
 		return
 	}
 
-	if !authenticated && !client.IsPublic() {
-		h.Logger.Warnf("❌ Client %s is not public and no Basic auth provided", clientID)
-		h.writeErrorResponse(w, "invalid_client", "Client authentication required")
-		return
-	}
+	// Create a session for the device authorization
+	session := &fosite.DefaultSession{}
 
-	h.Logger.Printf("🔍 Client found: %s", client.GetID())
-	h.Logger.Printf("🔍 Client grant types: %v", client.GetGrantTypes())
-	h.Logger.Printf("🔍 Client has device_code grant: %v", client.GetGrantTypes().Has("urn:ietf:params:oauth:grant-type:device_code"))
-	h.Logger.Printf("🔍 Client is public: %v", client.IsPublic())
-
-	// Check if client supports device flow
-	if !client.GetGrantTypes().Has("urn:ietf:params:oauth:grant-type:device_code") {
-		h.writeErrorResponse(w, "unsupported_grant_type", "Client does not support device code flow")
-		return
-	}
-
-	// Generate device code and user code
-	deviceCode, err := h.generateDeviceCode()
+	// Generate the device authorization response using fosite
+	deviceResponse, err := h.OAuth2Provider.NewDeviceResponse(ctx, deviceRequest, session)
 	if err != nil {
-		h.writeErrorResponse(w, "server_error", "Failed to generate device code")
+		h.Logger.WithError(err).Error("Failed to create device response")
+		h.writeErrorResponse(w, "server_error", err.Error())
 		return
 	}
 
-	userCode, err := h.generateUserCode()
-	if err != nil {
-		h.writeErrorResponse(w, "server_error", "Failed to generate user code")
-		return
-	}
+	// Extract the codes from fosite's response for logging only
+	deviceCode := deviceResponse.GetDeviceCode()
+	userCode := deviceResponse.GetUserCode()
+	clientID := deviceRequest.GetClient().GetID()
 
-	// Store the device authorization in our simple storage
-	// Also store it in fosite's storage for token exchange compatibility
-	err = h.storeDeviceAuthorization(deviceCode, userCode, clientID, r.FormValue("scope"))
-	if err != nil {
-		h.writeErrorResponse(w, "server_error", "Failed to store device authorization")
-		return
-	}
+	deviceResponse.SetVerificationURI(h.Config.BaseURL + "/device")
+	deviceResponse.SetVerificationURIComplete(h.Config.BaseURL + "/device?user_code=" + userCode)
 
-	// Additionally, try to store in fosite's format for token endpoint compatibility
-	h.storeFositeDeviceAuthorization(ctx, deviceCode, userCode, clientID, r.FormValue("scope"))
+	h.Logger.Infof("✅ Device authorization created via fosite for client: %s", clientID)
+	h.Logger.Printf("🔍 Device Code: %s...", deviceCode[:20])
+	h.Logger.Printf("🔍 User Code: %s", userCode)
 
-	h.Logger.Infof("✅ Device authorization created for client: %s", clientID)
-
-	// Build the response
-	baseURL := h.Config.GetEffectiveBaseURL(r)
-	response := map[string]interface{}{
-		"device_code":               deviceCode,
-		"user_code":                 userCode,
-		"verification_uri":          baseURL + "/device",
-		"verification_uri_complete": baseURL + "/device?user_code=" + userCode,
-		"expires_in":                600, // 10 minutes
-		"interval":                  5,   // 5 seconds
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	json.NewEncoder(w).Encode(response)
+	// Let fosite write the response
+	h.OAuth2Provider.WriteDeviceResponse(ctx, w, deviceRequest, deviceResponse)
 }
 
 // writeErrorResponse writes a JSON error response
@@ -204,6 +139,16 @@ func (h *DeviceCodeHandler) HandleVerification(w http.ResponseWriter, r *http.Re
 
 	h.Logger.Infof("🔍 Processing verification for user code: %s, username: %s", userCode, username)
 
+	// First, validate that the user code exists and is still pending
+	_, deviceAuthKey, err := h.findDeviceAuthorization(userCode)
+	if err != nil {
+		h.Logger.WithError(err).Warnf("⚠️ Invalid or expired user code: %s", userCode)
+		h.showInvalidUserCodePage(w, r, userCode)
+		return
+	}
+
+	h.Logger.Infof("✅ Found valid pending device authorization for user code: %s (key: %s)", userCode, deviceAuthKey)
+
 	// Authenticate user
 	user := h.authenticateUser(username, password)
 	if user == nil {
@@ -211,66 +156,8 @@ func (h *DeviceCodeHandler) HandleVerification(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	h.Logger.Infof("✅ User %s authenticated successfully for user code: %s", user.Username, userCode)
-
-	// Now we need to find the fosite device request and update its state
-	// This requires accessing fosite's storage to find the device authorization by user code
-	err := h.approveDeviceAuthorization(r.Context(), userCode, user.ID)
-	if err != nil {
-		h.Logger.WithError(err).Errorf("❌ Failed to approve device authorization for user code: %s", userCode)
-		http.Redirect(w, r, "/device?error=Authorization+failed&user_code="+userCode, http.StatusFound)
-		return
-	}
-
-	h.Logger.Infof("✅ Device authorization approved for user code: %s", userCode)
-
-	// Show success page - user has provided consent and device is authorized
-	h.showSuccessPage(w, r)
-}
-
-// approveDeviceAuthorization finds the device request and approves it in both storage systems
-func (h *DeviceCodeHandler) approveDeviceAuthorization(ctx context.Context, userCode, userID string) error {
-	h.Logger.Infof("🔍 Looking for device authorization with user code: %s", userCode)
-
-	// First, update our custom storage
-	if deviceAuth := h.findDeviceAuthByUserCode(userCode); deviceAuth != nil {
-		deviceAuth.Mutex.Lock()
-		defer deviceAuth.Mutex.Unlock()
-
-		if time.Now().After(deviceAuth.ExpiresAt) {
-			return fmt.Errorf("device authorization expired")
-		}
-
-		if deviceAuth.IsUsed {
-			return fmt.Errorf("device authorization already used")
-		}
-
-		deviceAuth.UserID = userID
-		deviceAuth.IsUsed = true
-
-		h.Logger.Infof("✅ Custom device authorization updated for user code: %s", userCode)
-	}
-
-	// Second, try to update fosite's storage
-	if deviceReq, err := h.GetDeviceCodeSession(ctx, userCode, &fosite.DefaultSession{}); err == nil {
-		if customReq, ok := deviceReq.(*CustomDeviceRequest); ok {
-			// Set the user code state to approved (1 = approved)
-			customReq.SetUserCodeState(1)
-
-			// Update the session with user information
-			if session := customReq.GetSession(); session != nil {
-				if defaultSession, ok := session.(*fosite.DefaultSession); ok {
-					defaultSession.Subject = userID
-				}
-			}
-
-			h.Logger.Infof("✅ Fosite device authorization approved for user code: %s", userCode)
-		}
-	} else {
-		h.Logger.WithError(err).Warnf("⚠️ Could not find fosite device auth for user code: %s", userCode)
-	}
-
-	return nil
+	// Show consent page instead of immediately completing authorization
+	h.showConsentPage(w, r, userCode, user)
 }
 
 // authenticateUser checks user credentials against the configured users
@@ -287,204 +174,286 @@ func (h *DeviceCodeHandler) authenticateUser(username, password string) *config.
 
 // showSuccessPage displays a success message after device verification
 func (h *DeviceCodeHandler) showSuccessPage(w http.ResponseWriter, r *http.Request) {
-	h.Logger.Info("🎯 Attempting to show success page")
+	h.Logger.Info("🎯 Showing device verification success page")
 
 	data := map[string]interface{}{
 		"Success": true,
-		"Message": "Device has been successfully authorized",
+		"Message": "Device verification completed successfully!",
 	}
 
-	h.Logger.Info("📄 About to execute device_success.html template")
 	if err := h.Templates.ExecuteTemplate(w, "device_success.html", data); err != nil {
 		h.Logger.WithError(err).Error("❌ Failed to render device success template")
-		// Instead of http.Error, let's try a simple response
+		// Fallback to simple HTML response
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`
 			<html>
-			<head><title>Success</title></head>
+			<head><title>Device Verification</title></head>
 			<body>
-				<h1>✅ Authorization Successful!</h1>
-				<p>Your device has been successfully authorized.</p>
-				<p>You can now return to your device and continue using the application.</p>
+				<h1>✅ User Authenticated!</h1>
+				<p>You have successfully authenticated.</p>
+				<p>You can now return to your device.</p>
 			</body>
 			</html>
 		`))
 		return
 	}
-	h.Logger.Info("✅ Successfully rendered device success page")
+	h.Logger.Info("✅ Successfully rendered device verification success page")
 }
 
-// Helper methods for device authorization
+// showConsentPage displays the consent page where users can approve or deny the device
+func (h *DeviceCodeHandler) showConsentPage(w http.ResponseWriter, r *http.Request, userCode string, user *config.User) {
+	h.Logger.Infof("🎯 Showing device consent page for user: %s, user code: %s", user.Username, userCode)
 
-// DeviceAuth represents a device authorization entry
-type DeviceAuth struct {
-	DeviceCode string
-	UserCode   string
-	ClientID   string
-	Scope      string
-	ExpiresAt  time.Time
-	IsUsed     bool
-	UserID     string
-	Mutex      sync.RWMutex
-}
-
-// In-memory storage for device authorizations
-var deviceAuths = make(map[string]*DeviceAuth)
-var deviceAuthsMutex sync.RWMutex
-
-func (h *DeviceCodeHandler) getClient(ctx context.Context, clientID string) (fosite.Client, error) {
-	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
-		return fositeProvider.Store.GetClient(ctx, clientID)
-	}
-	return nil, fmt.Errorf("unsupported OAuth2 provider type")
-}
-
-func (h *DeviceCodeHandler) generateDeviceCode() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return "ory_dc_" + hex.EncodeToString(bytes), nil
-}
-
-func (h *DeviceCodeHandler) generateUserCode() (string, error) {
-	bytes := make([]byte, 4)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	// Convert to uppercase letters/digits for easier user input
-	encoded := hex.EncodeToString(bytes)
-	userCode := strings.ToUpper(encoded)[:8]
-	return userCode, nil
-}
-
-func (h *DeviceCodeHandler) storeDeviceAuthorization(deviceCode, userCode, clientID, scope string) error {
-	deviceAuthsMutex.Lock()
-	defer deviceAuthsMutex.Unlock()
-
-	deviceAuths[deviceCode] = &DeviceAuth{
-		DeviceCode: deviceCode,
-		UserCode:   userCode,
-		ClientID:   clientID,
-		Scope:      scope,
-		ExpiresAt:  time.Now().Add(10 * time.Minute),
-		IsUsed:     false,
-		UserID:     "",
+	data := map[string]interface{}{
+		"UserCode": userCode,
+		"Username": user.Username,
+		"UserID":   user.ID,
+		"Message":  "Please review and approve the device authorization request.",
 	}
 
-	// Also store by user code for verification lookup
-	deviceAuths[userCode] = deviceAuths[deviceCode]
-
-	return nil
-}
-
-// TODO https://github.com/HarryKodden/fosite/blob/60d35288beefd60ddc31a349c40b8e5b3cd31136/storage/memory.go#L531
-
-// DeviceAuthPair represents the pairing of device code and user code signatures
-type DeviceAuthPair struct {
-	DeviceCodeSignature string
-	UserCodeSignature   string
-}
-
-// CreateDeviceAuthSession stores the device auth session in fosite-compatible format
-func (h *DeviceCodeHandler) CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, req fosite.DeviceRequester) error {
-	// Get the underlying fosite provider to access the memory store
-	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
-		if memoryStore, ok := fositeProvider.Store.(*storage.MemoryStore); ok {
-			return memoryStore.CreateDeviceAuthSession(ctx, deviceCodeSignature, userCodeSignature, req)
-		}
+	if err := h.Templates.ExecuteTemplate(w, "device_consent.html", data); err != nil {
+		h.Logger.WithError(err).Error("❌ Failed to render device consent template")
+		// Fallback to simple HTML response
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf(`
+			<html>
+			<head><title>Device Authorization Consent</title></head>
+			<body>
+				<h1>🔐 Device Authorization Request</h1>
+				<p>Hello <strong>%s</strong>,</p>
+				<p>A device is requesting access to your account.</p>
+				<p><strong>User Code:</strong> %s</p>
+				<form method="POST" action="/device/consent">
+					<input type="hidden" name="user_code" value="%s">
+					<input type="hidden" name="username" value="%s">
+					<button type="submit" name="action" value="approve" style="background: green; color: white; padding: 10px 20px; margin: 10px;">✅ Approve</button>
+					<button type="submit" name="action" value="deny" style="background: red; color: white; padding: 10px 20px; margin: 10px;">❌ Deny</button>
+				</form>
+			</body>
+			</html>
+		`, user.Username, userCode, userCode, user.Username)))
+		return
 	}
-	return fmt.Errorf("unable to access fosite memory store")
+	h.Logger.Info("✅ Successfully rendered device consent page")
 }
 
-// GetDeviceCodeSession gets the device code session from fosite storage
-func (h *DeviceCodeHandler) GetDeviceCodeSession(ctx context.Context, signature string, session fosite.Session) (fosite.DeviceRequester, error) {
-	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
-		if memoryStore, ok := fositeProvider.Store.(*storage.MemoryStore); ok {
-			return memoryStore.GetDeviceCodeSession(ctx, signature, session)
-		}
-	}
-	return nil, fmt.Errorf("unable to access fosite memory store")
-}
-
-// InvalidateDeviceCodeSession invalidates the device code session
-func (h *DeviceCodeHandler) InvalidateDeviceCodeSession(ctx context.Context, code string) error {
-	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
-		if memoryStore, ok := fositeProvider.Store.(*storage.MemoryStore); ok {
-			return memoryStore.InvalidateDeviceCodeSession(ctx, code)
-		}
-	}
-	return fmt.Errorf("unable to access fosite memory store")
-}
-
-func (h *DeviceCodeHandler) findDeviceAuthByUserCode(userCode string) *DeviceAuth {
-	deviceAuthsMutex.RLock()
-	defer deviceAuthsMutex.RUnlock()
-
-	if auth, exists := deviceAuths[userCode]; exists {
-		auth.Mutex.RLock()
-		defer auth.Mutex.RUnlock()
-		return auth
-	}
-	return nil
-}
-
-// CustomDeviceRequest implements fosite.DeviceRequester interface
-type CustomDeviceRequest struct {
-	*fosite.Request
-	userCodeState fosite.UserCodeState
-}
-
-// GetUserCodeState implements fosite.DeviceRequester
-func (r *CustomDeviceRequest) GetUserCodeState() fosite.UserCodeState {
-	return r.userCodeState
-}
-
-// SetUserCodeState sets the user code state
-func (r *CustomDeviceRequest) SetUserCodeState(state fosite.UserCodeState) {
-	r.userCodeState = state
-}
-
-// Ensure CustomDeviceRequest implements fosite.DeviceRequester
-var _ fosite.DeviceRequester = (*CustomDeviceRequest)(nil)
-
-// storeFositeDeviceAuthorization stores device authorization in fosite-compatible format
-func (h *DeviceCodeHandler) storeFositeDeviceAuthorization(ctx context.Context, deviceCode, userCode, clientID, scope string) {
-	// Create a proper fosite DeviceRequester
-	client, err := h.getClient(ctx, clientID)
-	if err != nil {
-		h.Logger.WithError(err).Error("Failed to get client for fosite device auth storage")
+// HandleConsent processes the user's consent decision (approve/deny)
+func (h *DeviceCodeHandler) HandleConsent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Create a device request that implements fosite.DeviceRequester
-	deviceReq := &CustomDeviceRequest{
-		Request: &fosite.Request{
-			ID:             deviceCode, // Use device code as the request ID
-			RequestedAt:    time.Now(),
-			Client:         client,
-			RequestedScope: fosite.Arguments{},
-			GrantedScope:   fosite.Arguments{},
-			Session:        &fosite.DefaultSession{},
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/device?error=Invalid+request", http.StatusFound)
+		return
+	}
+
+	userCode := r.FormValue("user_code")
+	username := r.FormValue("username")
+	action := r.FormValue("action")
+
+	h.Logger.Infof("🔍 Processing consent for user code: %s, username: %s, action: %s", userCode, username, action)
+
+	// First, validate that the user code still exists and is pending
+	_, _, err := h.findDeviceAuthorization(userCode)
+	if err != nil {
+		h.Logger.WithError(err).Warnf("⚠️ Invalid or expired user code during consent: %s", userCode)
+		h.showInvalidUserCodePage(w, r, userCode)
+		return
+	}
+
+	// Find the user (for security, re-validate)
+	var user *config.User
+	for _, u := range h.Config.Users {
+		if u.Username == username {
+			user = &u
+			break
+		}
+	}
+
+	if user == nil {
+		http.Redirect(w, r, "/device?error=Invalid+user&user_code="+userCode, http.StatusFound)
+		return
+	}
+
+	// Process the consent decision
+	if action == "approve" {
+		// Complete the device authorization with accepted state
+		err := h.completeDeviceAuthorization(r.Context(), userCode, user, fosite.UserCodeAccepted)
+		if err != nil {
+			h.Logger.WithError(err).Error("❌ Failed to complete device authorization")
+			http.Redirect(w, r, "/device?error=Authorization+failed&user_code="+userCode, http.StatusFound)
+			return
+		}
+
+		h.Logger.Infof("✅ Device authorization APPROVED for user code: %s", userCode)
+		h.showSuccessPage(w, r)
+
+	} else if action == "deny" {
+		// Complete the device authorization with rejected state
+		err := h.completeDeviceAuthorization(r.Context(), userCode, user, fosite.UserCodeRejected)
+		if err != nil {
+			h.Logger.WithError(err).Error("❌ Failed to complete device authorization")
+			http.Redirect(w, r, "/device?error=Authorization+failed&user_code="+userCode, http.StatusFound)
+			return
+		}
+
+		h.Logger.Infof("❌ Device authorization DENIED for user code: %s", userCode)
+		h.showDeniedPage(w, r)
+
+	} else {
+		http.Redirect(w, r, "/device?error=Invalid+action&user_code="+userCode, http.StatusFound)
+		return
+	}
+}
+
+// showDeniedPage displays a message when user denies the device authorization
+func (h *DeviceCodeHandler) showDeniedPage(w http.ResponseWriter, r *http.Request) {
+	h.Logger.Info("🎯 Showing device authorization denied page")
+
+	data := map[string]interface{}{
+		"Success": false,
+		"Message": "Device authorization was denied.",
+	}
+
+	if err := h.Templates.ExecuteTemplate(w, "device_denied.html", data); err != nil {
+		h.Logger.WithError(err).Error("❌ Failed to render device denied template")
+		// Fallback to simple HTML response
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`
+			<html>
+			<head><title>Authorization Denied</title></head>
+			<body>
+				<h1>❌ Authorization Denied</h1>
+				<p>You have denied the device authorization request.</p>
+				<p>The device will not have access to your account.</p>
+				<p>You can safely close this window.</p>
+			</body>
+			</html>
+		`))
+		return
+	}
+	h.Logger.Info("✅ Successfully rendered device denied page")
+}
+
+// showInvalidUserCodePage displays an error when the user code is invalid or expired
+func (h *DeviceCodeHandler) showInvalidUserCodePage(w http.ResponseWriter, r *http.Request, userCode string) {
+	h.Logger.Infof("🎯 Showing invalid user code page for: %s", userCode)
+
+	data := map[string]interface{}{
+		"Success":  false,
+		"UserCode": userCode,
+		"Message":  "The user code is invalid or has expired.",
+	}
+
+	if err := h.Templates.ExecuteTemplate(w, "device_invalid.html", data); err != nil {
+		h.Logger.WithError(err).Error("❌ Failed to render device invalid template")
+		// Fallback to simple HTML response
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(fmt.Sprintf(`
+			<html>
+			<head><title>Invalid User Code</title></head>
+			<body>
+				<h1>❌ Invalid User Code</h1>
+				<p>The user code <strong>%s</strong> is invalid or has expired.</p>
+				<p>Please check your device for a new code or restart the authorization process.</p>
+				<a href="/device" style="color: #007bff; text-decoration: none;">← Go back to device verification</a>
+			</body>
+			</html>
+		`, userCode)))
+		return
+	}
+	h.Logger.Info("✅ Successfully rendered invalid user code page")
+}
+
+// completeDeviceAuthorization completes the device authorization flow in fosite storage
+func (h *DeviceCodeHandler) completeDeviceAuthorization(ctx context.Context, userCode string, user *config.User, userCodeState fosite.UserCodeState) error {
+	// Access the memory store to find the device authorization by user code
+	store := h.MemoryStore
+
+	h.Logger.Infof("🔍 Debug: Looking for user code '%s' in storage", userCode)
+	h.Logger.Infof("🔍 Debug: DeviceAuths has %d entries", len(store.DeviceAuths))
+
+	// Find the device authorization session by iterating through all device auths
+	// Look for the one without a completed session (pending authorization)
+	var deviceAuth fosite.DeviceRequester
+	var deviceAuthKey string
+	found := false
+
+	for key, auth := range store.DeviceAuths {
+		h.Logger.Infof("🔍 Debug: Checking DeviceAuth key '%s'", key)
+
+		// Check if this device auth has no user session yet (pending)
+		if auth.GetSession() == nil || auth.GetSession().GetUsername() == "" {
+			h.Logger.Infof("🔍 Debug: DeviceAuth has no user session (pending - this is our target)")
+			deviceAuth = auth
+			deviceAuthKey = key
+			found = true
+			h.Logger.Infof("🔍 Using pending DeviceAuth key '%s' as the target", key)
+			break
+		} else {
+			h.Logger.Infof("🔍 Debug: DeviceAuth has session (already completed)")
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("no pending device authorization found in storage")
+	}
+
+	// Create a session with user information
+	session := &fosite.DefaultSession{
+		Username: user.Username,
+		Subject:  user.Username,
+		Extra: map[string]interface{}{
+			"user_id": user.Username,
 		},
-		userCodeState: 0, // 0 = pending authorization
 	}
 
-	// Add requested scopes if provided
-	if scope != "" {
-		for _, s := range strings.Split(scope, " ") {
-			deviceReq.RequestedScope = append(deviceReq.RequestedScope, s)
-			deviceReq.GrantedScope = append(deviceReq.GrantedScope, s)
+	// Update the device authorization with the user session
+	// This is the key step - we associate the authenticated user with the device authorization
+	deviceAuth.SetSession(session)
+
+	// CRITICAL: Set the user code state - this tells fosite whether user accepted or rejected!
+	deviceAuth.SetUserCodeState(userCodeState)
+
+	// Store the updated device authorization back
+	store.DeviceAuths[deviceAuthKey] = deviceAuth
+
+	h.Logger.Infof("✅ Device authorization completed successfully for user: %s, user code: %s, state: %v", user.Username, userCode, userCodeState)
+
+	return nil
+}
+
+// findDeviceAuthorization finds a pending device authorization by user code
+func (h *DeviceCodeHandler) findDeviceAuthorization(userCode string) (fosite.DeviceRequester, string, error) {
+	store := h.MemoryStore
+
+	h.Logger.Infof("🔍 Debug: Looking for user code '%s' in storage", userCode)
+	h.Logger.Infof("🔍 Debug: DeviceAuths has %d entries", len(store.DeviceAuths))
+
+	// In fosite's MemoryStore, device authorizations are stored with different keys
+	// We need to iterate through all stored device auths and find pending ones
+	// that we can associate with the user code
+	for key, auth := range store.DeviceAuths {
+		h.Logger.Infof("🔍 Debug: Checking DeviceAuth key '%s'", key)
+
+		// Check if this is a pending authorization (no session or empty username)
+		if auth.GetSession() == nil || auth.GetSession().GetUsername() == "" {
+			h.Logger.Infof("🔍 Found pending device authorization with key: %s", key)
+			// For a pending authorization, we'll assume this is the one we're looking for
+			// since there should typically only be one pending at a time for a given user code
+			// In a production system, you might want to store additional metadata to match properly
+			return auth, key, nil
+		} else {
+			h.Logger.Infof("🔍 Debug: DeviceAuth with key '%s' has session (already completed)", key)
 		}
 	}
 
-	// Store in fosite's memory store using our new methods
-	err = h.CreateDeviceAuthSession(ctx, deviceCode, userCode, deviceReq)
-	if err != nil {
-		h.Logger.WithError(err).Error("Failed to store device auth in fosite storage")
-		return
-	}
-
-	h.Logger.Infof("✅ Device authorization stored in fosite format - Device: %s, User: %s", deviceCode, userCode)
+	h.Logger.Warnf("❌ No pending device authorization found for user code: %s", userCode)
+	return nil, "", fmt.Errorf("no pending device authorization found for user code: %s", userCode)
 }

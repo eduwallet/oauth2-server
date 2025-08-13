@@ -35,42 +35,36 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Log authentication headers with more detail
-	authHeader := r.Header.Get("Authorization")
-	h.Log.Printf("🔍 Authorization header present: %t", authHeader != "")
-
-	if authHeader == "" {
-		h.Log.Printf("❌ Missing Authorization header for introspection")
-		http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
-		return
-	}
-
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 {
-		h.Log.Printf("❌ Invalid Authorization header format")
-		http.Error(w, "Invalid Authorization header format", http.StatusUnauthorized)
-		return
-	}
-
-	authMethod := parts[0]
-
-	h.Log.Printf("🔍 Auth method: %s", authMethod)
-
-	// According to RFC 7662 and fosite documentation, introspection requires Bearer token
-	if authMethod != "Bearer" {
-		h.Log.Printf("❌ Invalid authentication method for introspection. Expected Bearer, got: %s", authMethod)
-		http.Error(w, "Bearer token required for introspection", http.StatusUnauthorized)
-		return
-	}
-
-	h.Log.Printf("🔍 Bearer token present for introspection authorization")
-
-	// Parse form data
+	// Parse form data first to check for client credentials
 	if err := r.ParseForm(); err != nil {
 		h.Log.Printf("❌ Error parsing form: %v", err)
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
+
+	// RFC 7662 allows client authentication via:
+	// 1. Basic authentication in Authorization header
+	// 2. client_id and client_secret in request body
+	// 3. Other client authentication methods
+
+	authHeader := r.Header.Get("Authorization")
+	clientID := r.FormValue("client_id")
+	clientSecret := r.FormValue("client_secret")
+
+	h.Log.Printf("🔍 Introspection auth check: auth_header_present=%t, client_id_present=%t, client_secret_present=%t",
+		authHeader != "", clientID != "", clientSecret != "")
+
+	// Check if we have some form of client authentication
+	hasBasicAuth := authHeader != "" && strings.HasPrefix(authHeader, "Basic ")
+	hasClientCreds := clientID != "" || clientSecret != ""
+
+	if !hasBasicAuth && !hasClientCreds {
+		h.Log.Printf("❌ No client authentication provided for introspection")
+		http.Error(w, "Client authentication required for introspection", http.StatusUnauthorized)
+		return
+	}
+
+	h.Log.Printf("🔍 Client authentication present for introspection")
 
 	// Log form values (but hide sensitive data)
 	token := r.FormValue("token")

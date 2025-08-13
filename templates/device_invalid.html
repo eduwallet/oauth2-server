@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth2 Server - Invalid User Code</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+        .logo {
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            color: #dc3545;
+            margin: 0;
+            font-size: 28px;
+            font-weight: 300;
+        }
+        .error-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+        .user-code {
+            font-family: 'Courier New', monospace;
+            font-size: 18px;
+            font-weight: bold;
+            color: #6c757d;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 6px;
+            margin: 15px 0;
+        }
+        .message {
+            color: #333;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            text-decoration: none;
+            display: inline-block;
+            transition: background-color 0.3s ease;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .help-text {
+            margin-top: 20px;
+            color: #6c757d;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>❌ Invalid User Code</h1>
+        </div>
+        
+        <div class="error-icon">🚫</div>
+        
+        <div class="message">
+            <p>The user code you entered is <strong>invalid or has expired</strong>.</p>
+            {{if .UserCode}}
+            <div class="user-code">{{.UserCode}}</div>
+            {{end}}
+            <p>{{.Message}}</p>
+        </div>
+
+        <a href="/device" class="btn">← Try Again</a>
+        
+        <div class="help-text">
+            <p>Please check your device for a new code or restart the authorization process.</p>
+            <p>Device codes typically expire after a few minutes for security reasons.</p>
+        </div>
+    </div>
+</body>
+</html>
