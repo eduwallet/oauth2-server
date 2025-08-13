@@ -11,15 +11,8 @@ CLIENT_ID="smart-tv-app"
 echo "🧪 Testing Device Code Flow with Fosite Storage Integration"
 echo "=========================================================="
 
-# Start server in background
-echo "🚀 Starting server..."
-cd /Users/kodde001/work/oauth2-server
-./bin/oauth2-server > device_test_server.log 2>&1 &
-SERVER_PID=$!
-
-# Wait for server to start
-echo "⏳ Waiting for server to start..."
-sleep 3
+# Assume server is already running (managed by Makefile)
+echo "📡 Using server at $BASE_URL"
 
 # Step 1: Request device authorization
 echo "📋 Step 1: Requesting device authorization..."
@@ -36,7 +29,6 @@ USER_CODE=$(echo "$DEVICE_RESPONSE" | grep -o '"user_code":"[^"]*"' | sed 's/"us
 if [ -z "$DEVICE_CODE" ] || [ -z "$USER_CODE" ]; then
     echo "❌ Failed to get device/user codes"
     echo "Response: $DEVICE_RESPONSE"
-    kill $SERVER_PID 2>/dev/null || true
     exit 1
 fi
 
@@ -155,9 +147,6 @@ else
     echo "- Token introspection: ❌ Failed (tokens not fosite-compatible)"
 fi
 
-# Cleanup
 echo ""
-echo "🧹 Cleaning up..."
-kill $SERVER_PID 2>/dev/null || true
-wait $SERVER_PID 2>/dev/null || true
+echo "✅ Device authorization flow test completed"
 

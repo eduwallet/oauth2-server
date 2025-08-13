@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth2 Authorization Code Flow with PKCE Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 600px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            border-bottom: 2px solid #f0f2f5;
+            padding-bottom: 20px;
+        }
+        .header h1 {
+            color: #333;
+            margin: 0;
+            font-size: 28px;
+        }
+        .header .subtitle {
+            color: #666;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        .demo-section {
+            margin-bottom: 30px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .config-label {
+            font-weight: 500;
+            color: #495057;
+        }
+        .config-value {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid #ced4da;
+            font-size: 13px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            margin: 10px 5px;
+            border: none;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+        .flow-steps {
+            margin-top: 20px;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 15px;
+            background: #fff;
+            border-radius: 6px;
+            border-left: 4px solid #007bff;
+        }
+        .step-number {
+            background: #007bff;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        .step-text {
+            flex: 1;
+        }
+        .code-block {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+            color: #856404;
+        }
+        .warning-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+        }
+        .footer a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 15px;
+        }
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 OAuth2 Authorization Code Flow with PKCE</h1>
+            <div class="subtitle">Interactive Demo - User Login with Claims Display</div>
+        </div>
+
+        <!-- Configuration Section -->
+        <div class="demo-section">
+            <h2 class="section-title">⚙️ Configuration</h2>
+            <div class="config-grid">
+                <div class="config-label">Client ID:</div>
+                <div class="config-value" id="client-id">web-app-client</div>
+                
+                <div class="config-label">Redirect URI:</div>
+                <div class="config-value" id="redirect-uri">http://localhost:8080/callback</div>
+                
+                <div class="config-label">Scopes:</div>
+                <div class="config-value" id="scopes">openid profile email api:read offline_access</div>
+                
+                <div class="config-label">PKCE Method:</div>
+                <div class="config-value">S256 (SHA256)</div>
+                
+                <div class="config-label">Response Type:</div>
+                <div class="config-value">code</div>
+            </div>
+
+            <div class="warning">
+                <div class="warning-title">📋 Demo Flow</div>
+                This demo will guide you through a complete OAuth2 authorization code flow with PKCE, including:
+                <ul>
+                    <li>PKCE code challenge generation</li>
+                    <li>User authentication</li>
+                    <li>Consent granting</li>
+                    <li>Authorization code exchange</li>
+                    <li>User claims display</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Flow Steps -->
+        <div class="demo-section">
+            <h2 class="section-title">🔄 Authorization Flow Steps</h2>
+            <div class="flow-steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-text">
+                        <strong>Generate PKCE Parameters</strong><br>
+                        Create code verifier and challenge for security
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-text">
+                        <strong>Authorization Request</strong><br>
+                        Redirect to authorization server with parameters
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-text">
+                        <strong>User Authentication</strong><br>
+                        User logs in with credentials
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">4</div>
+                    <div class="step-text">
+                        <strong>User Consent</strong><br>
+                        User grants permission for requested scopes
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">5</div>
+                    <div class="step-text">
+                        <strong>Authorization Code</strong><br>
+                        Receive authorization code via redirect
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">6</div>
+                    <div class="step-text">
+                        <strong>Token Exchange</strong><br>
+                        Exchange code for access token using PKCE verifier
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">7</div>
+                    <div class="step-text">
+                        <strong>Claims Display</strong><br>
+                        Show user information and token details
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Demo Actions -->
+        <div class="demo-section">
+            <h2 class="section-title">🚀 Start Demo</h2>
+            <p>Choose how you want to test the authorization code flow:</p>
+            
+            <button class="btn btn-primary" onclick="startBrowserFlow()">
+                🌐 Start in Browser (Interactive)
+            </button>
+            
+            <button class="btn btn-secondary" onclick="showCurlExample()">
+                💻 Show cURL Commands
+            </button>
+            
+            <div id="curl-example" style="display: none; margin-top: 20px;">
+                <h3>📋 Manual Testing with cURL</h3>
+                <div class="code-block" id="curl-commands">
+                    <!-- cURL commands will be inserted here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Users -->
+        <div class="demo-section">
+            <h2 class="section-title">👥 Test Users</h2>
+            <p>Use these test credentials during the authentication step:</p>
+            <div class="config-grid">
+                <div class="config-label">Username:</div>
+                <div class="config-value">john.doe</div>
+                
+                <div class="config-label">Password:</div>
+                <div class="config-value">password123</div>
+            </div>
+            <div class="config-grid">
+                <div class="config-label">Username:</div>
+                <div class="config-value">jane.smith</div>
+                
+                <div class="config-label">Password:</div>
+                <div class="config-value">password456</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <a href="/health">Server Health</a>
+            <a href="/.well-known/openid-configuration">OpenID Configuration</a>
+            <a href="/userinfo">UserInfo Endpoint</a>
+            <a href="/">Home</a>
+        </div>
+    </div>
+
+    <script>
+        // OAuth2 Configuration
+        const config = {
+            clientId: 'web-app-client',
+            redirectUri: 'http://localhost:8080/callback',
+            scope: 'openid profile email api:read offline_access',
+            baseUrl: 'http://localhost:8080'
+        };
+
+        // Generate PKCE parameters
+        function generatePKCE() {
+            // Generate code verifier (43-128 characters, base64url)
+            const array = new Uint8Array(32);
+            crypto.getRandomValues(array);
+            const codeVerifier = btoa(String.fromCharCode(...array))
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=/g, '');
+
+            // Generate code challenge (SHA256 of verifier, base64url)
+            return crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier))
+                .then(buffer => {
+                    const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(buffer)))
+                        .replace(/\+/g, '-')
+                        .replace(/\//g, '_')
+                        .replace(/=/g, '');
+                    
+                    return { codeVerifier, codeChallenge };
+                });
+        }
+
+        // Generate secure state parameter
+        function generateState() {
+            const array = new Uint8Array(16);
+            crypto.getRandomValues(array);
+            return btoa(String.fromCharCode(...array))
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=/g, '');
+        }
+
+        // Start browser-based flow
+        async function startBrowserFlow() {
+            try {
+                const { codeVerifier, codeChallenge } = await generatePKCE();
+                const state = generateState();
+                
+                // Store PKCE verifier and state for token exchange
+                sessionStorage.setItem('pkce_verifier', codeVerifier);
+                sessionStorage.setItem('oauth_state', state);
+                
+                // Build authorization URL
+                const authUrl = new URL(`${config.baseUrl}/auth`);
+                authUrl.searchParams.set('response_type', 'code');
+                authUrl.searchParams.set('client_id', config.clientId);
+                authUrl.searchParams.set('redirect_uri', config.redirectUri);
+                authUrl.searchParams.set('scope', config.scope);
+                authUrl.searchParams.set('state', state);
+                authUrl.searchParams.set('code_challenge', codeChallenge);
+                authUrl.searchParams.set('code_challenge_method', 'S256');
+                
+                console.log('Starting OAuth2 flow...');
+                console.log('Code Verifier:', codeVerifier);
+                console.log('Code Challenge:', codeChallenge);
+                console.log('State:', state);
+                console.log('Authorization URL:', authUrl.toString());
+                
+                // Redirect to authorization server
+                window.location.href = authUrl.toString();
+                
+            } catch (error) {
+                console.error('Error starting OAuth2 flow:', error);
+                alert('Error starting OAuth2 flow: ' + error.message);
+            }
+        }
+
+        // Show cURL example
+        async function showCurlExample() {
+            const curlDiv = document.getElementById('curl-example');
+            const commandsDiv = document.getElementById('curl-commands');
+            
+            try {
+                const { codeVerifier, codeChallenge } = await generatePKCE();
+                const state = generateState();
+                
+                const commands = `
+# 1. Generate PKCE parameters (already done for you):
+CODE_VERIFIER="${codeVerifier}"
+CODE_CHALLENGE="${codeChallenge}"
+STATE="${state}"
+
+# 2. Start authorization flow (copy this URL to browser):
+${config.baseUrl}/auth?response_type=code&client_id=${config.clientId}&redirect_uri=${encodeURIComponent(config.redirectUri)}&scope=${encodeURIComponent(config.scope)}&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256
+
+# 3. After receiving authorization code, exchange for tokens:
+curl -X POST "${config.baseUrl}/oauth/token" \\
+  -H "Content-Type: application/x-www-form-urlencoded" \\
+  -H "Authorization: Basic $(echo -n '${config.clientId}:web-app-secret' | base64)" \\
+  -d "grant_type=authorization_code&code=YOUR_AUTH_CODE&redirect_uri=${config.redirectUri}&code_verifier=${codeVerifier}"
+
+# 4. Test UserInfo endpoint with access token:
+curl -X GET "${config.baseUrl}/userinfo" \\
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+                `.trim();
+                
+                commandsDiv.textContent = commands;
+                curlDiv.style.display = 'block';
+                
+            } catch (error) {
+                console.error('Error generating cURL example:', error);
+                commandsDiv.textContent = 'Error generating example: ' + error.message;
+                curlDiv.style.display = 'block';
+            }
+        }
+
+        // Check if we're on the callback page and handle token exchange
+        if (window.location.pathname === '/callback') {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const state = urlParams.get('state');
+            const error = urlParams.get('error');
+            
+            if (error) {
+                console.error('OAuth2 error:', error);
+                alert('OAuth2 error: ' + error);
+            } else if (code && state) {
+                console.log('Received authorization code:', code);
+                console.log('State:', state);
+                
+                // In a real app, you would exchange the code for tokens here
+                // For this demo, we'll just show the success message
+                document.body.innerHTML = `
+                    <div style="text-align: center; margin-top: 100px; font-family: Arial;">
+                        <h1>✅ Authorization Successful!</h1>
+                        <p>Authorization Code: ${code}</p>
+                        <p>State: ${state}</p>
+                        <p><a href="/demo">Start New Flow</a></p>
+                    </div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>

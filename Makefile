@@ -164,8 +164,177 @@ setup-env:
 	@echo "Or run this command to add it temporarily:"
 	@echo "export PATH=\"$(shell go env GOPATH)/bin:\$$PATH\""
 
+# Test target - runs all test scripts with server lifecycle management
+test: build
+	@echo "🧪 Starting automated test suite..."
+	@echo "📦 Building server..."
+	@$(MAKE) build
+	@echo "🚀 Starting OAuth2 server in background..."
+	@./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@echo "⏳ Waiting for server to start..."
+	@sleep 3
+	@echo "🔍 Testing server health..."
+	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
+		echo "❌ Server failed to start"; \
+		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
+		exit 1; \
+	fi
+	@echo "✅ Server is healthy, running test scripts..."
+	@passed=0; failed=0; \
+	for script in samples/test_*.sh; do \
+		if [ -f "$$script" ]; then \
+			echo "🧪 Running $$script..."; \
+			if bash "$$script"; then \
+				echo "✅ $$script passed"; \
+				passed=$$((passed + 1)); \
+			else \
+				echo "❌ $$script failed"; \
+				failed=$$((failed + 1)); \
+			fi; \
+			echo ""; \
+		fi; \
+	done; \
+	echo "📊 Test Results: $$passed passed, $$failed failed"; \
+	if [ -f server.pid ]; then \
+		echo "🛑 Stopping server..."; \
+		kill $$(cat server.pid) 2>/dev/null || true; \
+		rm -f server.pid; \
+	fi; \
+	rm -f server-test.log; \
+	if [ $$failed -gt 0 ]; then \
+		echo "❌ Some tests failed"; \
+		exit 1; \
+	else \
+		echo "✅ All tests passed!"; \
+	fi
+
+# Test with verbose output
+test-verbose: build
+	@echo "🧪 Starting automated test suite (verbose mode)..."
+	@echo "📦 Building server..."
+	@$(MAKE) build
+	@echo "🚀 Starting OAuth2 server in background..."
+	@./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@echo "⏳ Waiting for server to start..."
+	@sleep 3
+	@echo "🔍 Testing server health..."
+	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
+		echo "❌ Server failed to start"; \
+		echo "Server logs:"; \
+		cat server-test.log; \
+		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
+		exit 1; \
+	fi
+	@echo "✅ Server is healthy, running test scripts..."
+	@passed=0; failed=0; \
+	for script in samples/test_*.sh; do \
+		if [ -f "$$script" ]; then \
+			echo "🧪 Running $$script..."; \
+			if bash -x "$$script"; then \
+				echo "✅ $$script passed"; \
+				passed=$$((passed + 1)); \
+			else \
+				echo "❌ $$script failed"; \
+				failed=$$((failed + 1)); \
+			fi; \
+			echo ""; \
+		fi; \
+	done; \
+	echo "📊 Test Results: $$passed passed, $$failed failed"; \
+	if [ -f server.pid ]; then \
+		echo "🛑 Stopping server..."; \
+		kill $$(cat server.pid) 2>/dev/null || true; \
+		rm -f server.pid; \
+	fi; \
+	echo "Server logs:"; \
+	cat server-test.log; \
+	rm -f server-test.log; \
+	if [ $$failed -gt 0 ]; then \
+		echo "❌ Some tests failed"; \
+		exit 1; \
+	else \
+		echo "✅ All tests passed!"; \
+	fi
+
+# Test specific script
+test-script:
+	@if [ -z "$(SCRIPT)" ]; then \
+		echo "❌ Please specify a script: make test-script SCRIPT=test_device_native.sh"; \
+		exit 1; \
+	fi
+	@if [ ! -f "samples/$(SCRIPT)" ]; then \
+		echo "❌ Script samples/$(SCRIPT) not found"; \
+		exit 1; \
+	fi
+	@echo "🧪 Testing single script: $(SCRIPT)"
+	@echo "📦 Building server..."
+	@$(MAKE) build
+	@echo "🚀 Starting OAuth2 server in background..."
+	@./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@echo "⏳ Waiting for server to start..."
+	@sleep 3
+	@echo "🔍 Testing server health..."
+	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
+		echo "❌ Server failed to start"; \
+		cat server-test.log; \
+		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
+		exit 1; \
+	fi
+	@echo "✅ Server is healthy, running $(SCRIPT)..."
+	@if bash samples/$(SCRIPT); then \
+		echo "✅ $(SCRIPT) passed"; \
+		result=0; \
+	else \
+		echo "❌ $(SCRIPT) failed"; \
+		result=1; \
+	fi; \
+	if [ -f server.pid ]; then \
+		echo "🛑 Stopping server..."; \
+		kill $$(cat server.pid) 2>/dev/null || true; \
+		rm -f server.pid; \
+	fi; \
+	rm -f server-test.log; \
+	exit $$result
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  build              - Build the OAuth2 server binary"
+	@echo "  run                - Build and run the server"
+	@echo "  dev                - Run in development mode with auto-reload"
+	@echo "  clean              - Remove build artifacts"
+	@echo "  tidy               - Tidy and vendor Go modules"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test               - Run all test scripts with server lifecycle"
+	@echo "  test-verbose       - Run tests with verbose output and logs"
+	@echo "  test-script        - Run specific test script (SCRIPT=filename)"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  fmt                - Format Go code"
+	@echo "  vet                - Run go vet"
+	@echo "  staticcheck        - Run staticcheck linter"
+	@echo "  lint               - Run golangci-lint"
+	@echo "  lint-comprehensive - Run comprehensive linting"
+	@echo "  security           - Run security checks with gosec"
+	@echo "  pre-commit         - Run pre-commit checks (fmt, vet, staticcheck, test)"
+	@echo "  full-check         - Run all checks and tests"
+	@echo ""
+	@echo "Development Tools:"
+	@echo "  install-deps       - Install all development dependencies"
+	@echo "  check-tools        - Check if required tools are installed"
+	@echo "  setup-env          - Show environment setup instructions"
+	@echo ""
+	@echo "Build Variants:"
+	@echo "  build-all          - Build for multiple platforms"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make test                              - Run all tests"
+	@echo "  make test-script SCRIPT=test_device_native.sh  - Run specific test"
+	@echo "  make test-verbose                      - Run tests with detailed output"
+
 # Update .PHONY to include new targets
-.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env
+.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script help
 
 # Update existing targets to use the new patterns
 # Pre-commit checks with better tool handling
@@ -173,13 +342,7 @@ pre-commit: fmt vet
 	@echo "🔍 Running pre-commit checks..."
 	@if command -v staticcheck >/dev/null 2>&1; then \
 		staticcheck ./...; \
-	#elif [ -f "$(shell go env GOPATH)/bin/staticcheck" ]; then \
-	#	$(shell go env GOPATH)/bin/staticcheck ./...; \
-	#else \
-	#	echo "Installing staticcheck..."; \
-	#	go install honnef.co/go/tools/cmd/staticcheck@latest; \
-	#	$(shell go env GOPATH)/bin/staticcheck ./...; \
-	#fi
+	fi
 	@$(MAKE) test
 	@echo "✅ Pre-commit checks completed"
 

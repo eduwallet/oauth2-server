@@ -48,6 +48,7 @@ var (
 	healthHandler          *handlers.HealthHandler
 	oauth2DiscoveryHandler *handlers.OAuth2DiscoveryHandler
 	authorizeHandler       *handlers.AuthorizeHandler
+	claimsHandler          *handlers.ClaimsHandler
 
 	// Templates for rendering HTML responses
 	templates *template.Template
@@ -242,6 +243,7 @@ func initializeHandlers() {
 	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration)
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log)
+	claimsHandler = handlers.NewClaimsHandler(configuration, log)
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }
@@ -314,6 +316,22 @@ func setupRoutes() {
 
 	// Health endpoint
 	http.HandleFunc("/health", proxyAwareMiddleware(healthHandler.ServeHTTP))
+	
+	// Claims display endpoints
+	http.HandleFunc("/claims", proxyAwareMiddleware(claimsHandler.ServeHTTP))
+	http.HandleFunc("/callback", proxyAwareMiddleware(claimsHandler.HandleCallback))
+	
+	// Demo page
+	http.HandleFunc("/demo", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmpl, err := template.ParseFiles("templates/demo.html")
+		if err != nil {
+			http.Error(w, "Template error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		tmpl.Execute(w, nil)
+	}))
+	
 	http.HandleFunc("/", proxyAwareMiddleware(homeHandler.ServeHTTP))
 
 	log.Printf("✅ Routes set up successfully")

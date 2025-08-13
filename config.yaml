@@ -55,6 +55,32 @@ clients:
   public: false
   enabled_flows:
   - "authorization_code"
+
+# Web Application Client for PKCE Demo
+- id: "web-app-client"
+  secret: "web-app-secret"
+  name: "Web Application Client"
+  description: "Web application client supporting authorization code flow with PKCE"
+  redirect_uris:
+  - "http://localhost:8080/callback"
+  - "http://localhost:8080/claims"
+  grant_types:
+  - "authorization_code"
+  - "refresh_token"
+  response_types:
+  - "code"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  - "offline_access"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  public: false
+  enabled_flows:
+  - "authorization_code"
   - "refresh_token"
 
 # Backend Service Client
