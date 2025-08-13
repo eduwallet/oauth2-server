@@ -213,6 +213,8 @@ func initializeOAuth2Provider() error {
 		ScopeStrategy:              fosite.HierarchicScopeStrategy,
 		AudienceMatchingStrategy:   fosite.DefaultAudienceMatchingStrategy,
 		SendDebugMessagesToClients: true, // Enable debug messages for development
+		// Set the HMAC secret from our configuration
+		GlobalSecret: []byte(configuration.Security.JWTSecret),
 	}
 
 	// Create a simple OAuth2 provider without complex strategies
@@ -269,7 +271,7 @@ func loadTemplates() error {
 
 func setupRoutes() {
 	// OAuth2 endpoints - use fosite's built-in handlers
-	http.HandleFunc("/auth", proxyAwareMiddleware(authorizeHandler.ServeHTTP)) // Add /auth alias for authorization
+	http.HandleFunc("/auth", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
 	http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
 	http.HandleFunc("/oauth/token", proxyAwareMiddleware(tokenHandler.ServeHTTP))
 	http.HandleFunc("/oauth/introspect", proxyAwareMiddleware(introspectionHandler.ServeHTTP))
@@ -283,8 +285,6 @@ func setupRoutes() {
 	}))
 	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
 	http.HandleFunc("/device/verify", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
-	// TODO: Add polling endpoint if needed
-	// http.HandleFunc("/device/poll", proxyAwareMiddleware(deviceCodeHandler.HandleDevicePolling))
 
 	// Registration endpoints
 	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler.HandleRegistration))

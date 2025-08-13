@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
 
@@ -60,10 +61,27 @@ func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *
 	h.Logger.Info("🚀 Processing device authorization request (simplified approach)")
 
 	// Basic client validation using fosite
-	clientID := r.FormValue("client_id")
-	if clientID == "" {
-		h.writeErrorResponse(w, "invalid_client", "Missing client_id")
-		return
+
+	var clientID string
+	authenticated := false
+
+	// Extract client ID from Basic auth if not in form
+	if username, _, ok := r.BasicAuth(); ok {
+		_, err := h.OAuth2Provider.(*fosite.Fosite).AuthenticateClient(ctx, r, r.Form)
+		if err != nil {
+			h.Logger.WithError(err).Error("Failed to authenticate client")
+			h.writeErrorResponse(w, "invalid_client", "Client authentication failed")
+			return
+		}
+		authenticated = true
+		clientID = username
+		h.Logger.Printf("🔑 Extracted client ID from Basic auth: %s", clientID)
+	} else {
+		clientID = r.FormValue("client_id")
+		if clientID == "" {
+			h.writeErrorResponse(w, "invalid_client", "Missing client_id")
+			return
+		}
 	}
 
 	// Validate the client exists and supports device flow
@@ -72,6 +90,17 @@ func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *
 		h.writeErrorResponse(w, "invalid_client", "Unknown client")
 		return
 	}
+
+	if !authenticated && !client.IsPublic() {
+		h.Logger.Warnf("❌ Client %s is not public and no Basic auth provided", clientID)
+		h.writeErrorResponse(w, "invalid_client", "Client authentication required")
+		return
+	}
+
+	h.Logger.Printf("🔍 Client found: %s", client.GetID())
+	h.Logger.Printf("🔍 Client grant types: %v", client.GetGrantTypes())
+	h.Logger.Printf("🔍 Client has device_code grant: %v", client.GetGrantTypes().Has("urn:ietf:params:oauth:grant-type:device_code"))
+	h.Logger.Printf("🔍 Client is public: %v", client.IsPublic())
 
 	// Check if client supports device flow
 	if !client.GetGrantTypes().Has("urn:ietf:params:oauth:grant-type:device_code") {
@@ -199,13 +228,11 @@ func (h *DeviceCodeHandler) HandleVerification(w http.ResponseWriter, r *http.Re
 	h.showSuccessPage(w, r)
 }
 
-// approveDeviceAuthorization finds the device request and approves it
+// approveDeviceAuthorization finds the device request and approves it in both storage systems
 func (h *DeviceCodeHandler) approveDeviceAuthorization(ctx context.Context, userCode, userID string) error {
-	// For the simplified approach, we'll just use our existing custom storage
-	// and let fosite handle the token generation when the device polls
-
 	h.Logger.Infof("🔍 Looking for device authorization with user code: %s", userCode)
 
+	// First, update our custom storage
 	if deviceAuth := h.findDeviceAuthByUserCode(userCode); deviceAuth != nil {
 		deviceAuth.Mutex.Lock()
 		defer deviceAuth.Mutex.Unlock()
@@ -221,11 +248,29 @@ func (h *DeviceCodeHandler) approveDeviceAuthorization(ctx context.Context, user
 		deviceAuth.UserID = userID
 		deviceAuth.IsUsed = true
 
-		h.Logger.Infof("✅ Device authorization updated for user code: %s", userCode)
-		return nil
+		h.Logger.Infof("✅ Custom device authorization updated for user code: %s", userCode)
 	}
 
-	return fmt.Errorf("device authorization not found for user code: %s", userCode)
+	// Second, try to update fosite's storage
+	if deviceReq, err := h.GetDeviceCodeSession(ctx, userCode, &fosite.DefaultSession{}); err == nil {
+		if customReq, ok := deviceReq.(*CustomDeviceRequest); ok {
+			// Set the user code state to approved (1 = approved)
+			customReq.SetUserCodeState(1)
+
+			// Update the session with user information
+			if session := customReq.GetSession(); session != nil {
+				if defaultSession, ok := session.(*fosite.DefaultSession); ok {
+					defaultSession.Subject = userID
+				}
+			}
+
+			h.Logger.Infof("✅ Fosite device authorization approved for user code: %s", userCode)
+		}
+	} else {
+		h.Logger.WithError(err).Warnf("⚠️ Could not find fosite device auth for user code: %s", userCode)
+	}
+
+	return nil
 }
 
 // authenticateUser checks user credentials against the configured users
@@ -334,6 +379,45 @@ func (h *DeviceCodeHandler) storeDeviceAuthorization(deviceCode, userCode, clien
 	return nil
 }
 
+// TODO https://github.com/HarryKodden/fosite/blob/60d35288beefd60ddc31a349c40b8e5b3cd31136/storage/memory.go#L531
+
+// DeviceAuthPair represents the pairing of device code and user code signatures
+type DeviceAuthPair struct {
+	DeviceCodeSignature string
+	UserCodeSignature   string
+}
+
+// CreateDeviceAuthSession stores the device auth session in fosite-compatible format
+func (h *DeviceCodeHandler) CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, req fosite.DeviceRequester) error {
+	// Get the underlying fosite provider to access the memory store
+	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
+		if memoryStore, ok := fositeProvider.Store.(*storage.MemoryStore); ok {
+			return memoryStore.CreateDeviceAuthSession(ctx, deviceCodeSignature, userCodeSignature, req)
+		}
+	}
+	return fmt.Errorf("unable to access fosite memory store")
+}
+
+// GetDeviceCodeSession gets the device code session from fosite storage
+func (h *DeviceCodeHandler) GetDeviceCodeSession(ctx context.Context, signature string, session fosite.Session) (fosite.DeviceRequester, error) {
+	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
+		if memoryStore, ok := fositeProvider.Store.(*storage.MemoryStore); ok {
+			return memoryStore.GetDeviceCodeSession(ctx, signature, session)
+		}
+	}
+	return nil, fmt.Errorf("unable to access fosite memory store")
+}
+
+// InvalidateDeviceCodeSession invalidates the device code session
+func (h *DeviceCodeHandler) InvalidateDeviceCodeSession(ctx context.Context, code string) error {
+	if fositeProvider, ok := h.OAuth2Provider.(*fosite.Fosite); ok {
+		if memoryStore, ok := fositeProvider.Store.(*storage.MemoryStore); ok {
+			return memoryStore.InvalidateDeviceCodeSession(ctx, code)
+		}
+	}
+	return fmt.Errorf("unable to access fosite memory store")
+}
+
 func (h *DeviceCodeHandler) findDeviceAuthByUserCode(userCode string) *DeviceAuth {
 	deviceAuthsMutex.RLock()
 	defer deviceAuthsMutex.RUnlock()
@@ -346,14 +430,61 @@ func (h *DeviceCodeHandler) findDeviceAuthByUserCode(userCode string) *DeviceAut
 	return nil
 }
 
-// storeFositeDeviceAuthorization attempts to store device authorization in fosite-compatible format
+// CustomDeviceRequest implements fosite.DeviceRequester interface
+type CustomDeviceRequest struct {
+	*fosite.Request
+	userCodeState fosite.UserCodeState
+}
+
+// GetUserCodeState implements fosite.DeviceRequester
+func (r *CustomDeviceRequest) GetUserCodeState() fosite.UserCodeState {
+	return r.userCodeState
+}
+
+// SetUserCodeState sets the user code state
+func (r *CustomDeviceRequest) SetUserCodeState(state fosite.UserCodeState) {
+	r.userCodeState = state
+}
+
+// Ensure CustomDeviceRequest implements fosite.DeviceRequester
+var _ fosite.DeviceRequester = (*CustomDeviceRequest)(nil)
+
+// storeFositeDeviceAuthorization stores device authorization in fosite-compatible format
 func (h *DeviceCodeHandler) storeFositeDeviceAuthorization(ctx context.Context, deviceCode, userCode, clientID, scope string) {
-	// The key insight: fosite's device code grant handler expects device authorization to be stored
-	// in its MemoryStore. However, the exact storage mechanism is complex.
+	// Create a proper fosite DeviceRequester
+	client, err := h.getClient(ctx, clientID)
+	if err != nil {
+		h.Logger.WithError(err).Error("Failed to get client for fosite device auth storage")
+		return
+	}
 
-	h.Logger.Infof("🔗 Device authorization stored - fosite will handle device code grant via token endpoint")
+	// Create a device request that implements fosite.DeviceRequester
+	deviceReq := &CustomDeviceRequest{
+		Request: &fosite.Request{
+			ID:             deviceCode, // Use device code as the request ID
+			RequestedAt:    time.Now(),
+			Client:         client,
+			RequestedScope: fosite.Arguments{},
+			GrantedScope:   fosite.Arguments{},
+			Session:        &fosite.DefaultSession{},
+		},
+		userCodeState: 0, // 0 = pending authorization
+	}
 
-	// For now, we rely on our custom storage being accessible to the token endpoint.
-	// The token endpoint should check our custom storage if fosite's storage doesn't have the device code.
-	// This is a temporary bridge until we implement full fosite integration.
+	// Add requested scopes if provided
+	if scope != "" {
+		for _, s := range strings.Split(scope, " ") {
+			deviceReq.RequestedScope = append(deviceReq.RequestedScope, s)
+			deviceReq.GrantedScope = append(deviceReq.GrantedScope, s)
+		}
+	}
+
+	// Store in fosite's memory store using our new methods
+	err = h.CreateDeviceAuthSession(ctx, deviceCode, userCode, deviceReq)
+	if err != nil {
+		h.Logger.WithError(err).Error("Failed to store device auth in fosite storage")
+		return
+	}
+
+	h.Logger.Infof("✅ Device authorization stored in fosite format - Device: %s, User: %s", deviceCode, userCode)
 }
