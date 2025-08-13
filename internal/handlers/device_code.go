@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net/http"
 	"oauth2-server/pkg/config"
+	"path/filepath"
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/openid"
@@ -103,24 +104,8 @@ func (h *DeviceCodeHandler) ShowVerificationPage(w http.ResponseWriter, r *http.
 	userCode := r.URL.Query().Get("user_code")
 	errorMsg := r.URL.Query().Get("error")
 
-	// Get device code expiry from configuration (default to 600 seconds)
-	expiresIn := 600
-	if h.Config.YAMLConfig != nil && h.Config.YAMLConfig.Security.DeviceCodeExpirySeconds > 0 {
-		expiresIn = h.Config.YAMLConfig.Security.DeviceCodeExpirySeconds
-	}
-
-	data := map[string]interface{}{
-		"UserCode":   userCode,
-		"Error":      errorMsg,
-		"ExpiresIn":  expiresIn,
-		"Interval":   5,  // Default polling interval
-		"DeviceCode": "", // Not needed for manual verification
-	}
-
-	if err := h.Templates.ExecuteTemplate(w, "device.html", data); err != nil {
-		h.Logger.WithError(err).Error("Failed to render device verification template")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	// Show unified authorization template for device flow
+	h.showDeviceAuthorizationTemplate(w, r, userCode, errorMsg, false)
 }
 
 // HandleVerification processes the user's login and consent for a device
@@ -207,38 +192,8 @@ func (h *DeviceCodeHandler) showSuccessPage(w http.ResponseWriter, r *http.Reque
 func (h *DeviceCodeHandler) showConsentPage(w http.ResponseWriter, r *http.Request, userCode string, user *config.User) {
 	h.Logger.Infof("🎯 Showing device consent page for user: %s, user code: %s", user.Username, userCode)
 
-	data := map[string]interface{}{
-		"UserCode": userCode,
-		"Username": user.Username,
-		"UserID":   user.ID,
-		"Message":  "Please review and approve the device authorization request.",
-	}
-
-	if err := h.Templates.ExecuteTemplate(w, "device_consent.html", data); err != nil {
-		h.Logger.WithError(err).Error("❌ Failed to render device consent template")
-		// Fallback to simple HTML response
-		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf(`
-			<html>
-			<head><title>Device Authorization Consent</title></head>
-			<body>
-				<h1>🔐 Device Authorization Request</h1>
-				<p>Hello <strong>%s</strong>,</p>
-				<p>A device is requesting access to your account.</p>
-				<p><strong>User Code:</strong> %s</p>
-				<form method="POST" action="/device/consent">
-					<input type="hidden" name="user_code" value="%s">
-					<input type="hidden" name="username" value="%s">
-					<button type="submit" name="action" value="approve" style="background: green; color: white; padding: 10px 20px; margin: 10px;">✅ Approve</button>
-					<button type="submit" name="action" value="deny" style="background: red; color: white; padding: 10px 20px; margin: 10px;">❌ Deny</button>
-				</form>
-			</body>
-			</html>
-		`, user.Username, userCode, userCode, user.Username)))
-		return
-	}
-	h.Logger.Info("✅ Successfully rendered device consent page")
+	// Show unified authorization template for device consent (user is authenticated)
+	h.showDeviceConsentTemplate(w, r, userCode, user, "")
 }
 
 // HandleConsent processes the user's consent decision (approve/deny)
@@ -475,4 +430,91 @@ func (h *DeviceCodeHandler) findDeviceAuthorization(userCode string) (fosite.Dev
 
 	h.Logger.Warnf("❌ No pending device authorization found for user code: %s", userCode)
 	return nil, "", fmt.Errorf("no pending device authorization found for user code: %s", userCode)
+}
+
+// DeviceAuthTemplateData represents the data structure for the unified authorization template (device flow)
+type DeviceAuthTemplateData struct {
+	IsDeviceFlow   bool
+	ShowLoginForm  bool
+	Username       string
+	ClientID       string
+	ClientName     string
+	RedirectURI    string
+	State          string
+	CodeChallenge  string
+	Scopes         []string
+	Error          string
+	FormAction     string
+	HiddenFields   map[string]string
+	UserCode       string
+	DeviceCode     string
+}
+
+// showDeviceAuthorizationTemplate renders the unified authorization template for device flow
+func (h *DeviceCodeHandler) showDeviceAuthorizationTemplate(w http.ResponseWriter, r *http.Request, userCode string, errorMsg string, isAuthenticated bool) {
+	// Prepare template data for device flow
+	data := DeviceAuthTemplateData{
+		IsDeviceFlow:  true, // This is device flow
+		ShowLoginForm: !isAuthenticated,
+		ClientID:      "smart-tv-app", // Default device client ID
+		RedirectURI:   "",             // Not used in device flow
+		State:         "",             // Not used in device flow
+		Scopes:        []string{"openid", "profile", "email", "offline_access"}, // Default device scopes
+		Error:         errorMsg,
+		FormAction:    "/device/verify",
+		HiddenFields:  make(map[string]string),
+		UserCode:      userCode,
+		DeviceCode:    "", // Not needed for verification page
+	}
+
+	// Load and execute unified template
+	templatePath := filepath.Join("templates", "unified_auth.html")
+	tmpl, err := template.ParseFiles(templatePath)
+	if err != nil {
+		h.Logger.WithError(err).Error("❌ Error loading unified template")
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.Execute(w, data); err != nil {
+		h.Logger.WithError(err).Error("❌ Error executing unified template")
+		http.Error(w, "Template execution error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// showDeviceConsentTemplate renders the unified authorization template for device consent
+func (h *DeviceCodeHandler) showDeviceConsentTemplate(w http.ResponseWriter, r *http.Request, userCode string, user *config.User, errorMsg string) {
+	// Prepare template data for device consent (user is authenticated)
+	data := DeviceAuthTemplateData{
+		IsDeviceFlow:  true, // This is device flow
+		ShowLoginForm: false, // User is already authenticated, show consent form
+		Username:      user.Username,
+		ClientID:      "smart-tv-app", // Default device client ID
+		RedirectURI:   "",             // Not used in device flow
+		State:         "",             // Not used in device flow
+		Scopes:        []string{"openid", "profile", "email", "offline_access"}, // Default device scopes
+		Error:         errorMsg,
+		FormAction:    "/device/consent",
+		HiddenFields:  make(map[string]string),
+		UserCode:      userCode,
+		DeviceCode:    "", // Not needed for consent page
+	}
+
+	// Load and execute unified template
+	templatePath := filepath.Join("templates", "unified_auth.html")
+	tmpl, err := template.ParseFiles(templatePath)
+	if err != nil {
+		h.Logger.WithError(err).Error("❌ Error loading unified template")
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.Execute(w, data); err != nil {
+		h.Logger.WithError(err).Error("❌ Error executing unified template")
+		http.Error(w, "Template execution error", http.StatusInternalServerError)
+		return
+	}
 }

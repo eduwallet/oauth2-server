@@ -1,9 +1,10 @@
 package handlers
 
 import (
-	"fmt"
+	"html/template"
 	"net/http"
 	"oauth2-server/pkg/config"
+	"path/filepath"
 
 	"github.com/ory/fosite"
 	"github.com/sirupsen/logrus"
@@ -56,30 +57,14 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Log.Printf("🔍 Response types: %v", ar.GetResponseTypes())
 	h.Log.Printf("🔍 Requested scopes: %v", ar.GetRequestedScopes())
 
-	// You have now access to authorizeRequest, Code ResponseTypes, Scopes ...
-	var requestedScopes string
-	for _, scope := range ar.GetRequestedScopes() {
-		requestedScopes += fmt.Sprintf(`<li><input type="checkbox" name="scopes" value="%s" checked>%s</li>`, scope, scope)
-	}
-
 	// Normally, this would be the place where you would check if the user is logged in and gives his consent.
 	// We're simplifying things and just checking if the request includes a valid username
 	r.ParseForm()
 	username := r.PostForm.Get("username")
+	
 	if username == "" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(`<h1>Login page</h1>`))
-		w.Write([]byte(fmt.Sprintf(`
-			<p>Howdy! This is the log in page. For this example, it is enough to supply the username.</p>
-			<form method="post">
-				<p>
-					By logging in, you consent to grant these scopes:
-					<ul>%s</ul>
-				</p>
-				<input type="text" name="username" placeholder="Username" /> <small>try "john.doe"</small><br>
-				<input type="submit" value="Login">
-			</form>
-		`, requestedScopes)))
+		// Show unified authorization template for login
+		h.showAuthorizationTemplate(w, r, ar, "", false)
 		return
 	}
 
@@ -185,4 +170,66 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.Log.Printf("🔍 WriteAuthorizeResponse completed")
 	h.Log.Printf("🔍 HTTP response headers after WriteAuthorizeResponse: %+v", w.Header())
+}
+
+// AuthTemplateData represents the data structure for the unified authorization template
+type AuthTemplateData struct {
+	IsDeviceFlow   bool
+	ShowLoginForm  bool
+	Username       string
+	ClientID       string
+	ClientName     string
+	RedirectURI    string
+	State          string
+	CodeChallenge  string
+	Scopes         []string
+	Error          string
+	FormAction     string
+	HiddenFields   map[string]string
+	UserCode       string
+	DeviceCode     string
+}
+
+// showAuthorizationTemplate renders the unified authorization template
+func (h *AuthorizeHandler) showAuthorizationTemplate(w http.ResponseWriter, r *http.Request, ar fosite.AuthorizeRequester, errorMsg string, isAuthenticated bool) {
+	// Prepare template data
+	data := AuthTemplateData{
+		IsDeviceFlow:  false, // This is authorization code flow
+		ShowLoginForm: !isAuthenticated,
+		ClientID:      ar.GetClient().GetID(),
+		RedirectURI:   ar.GetRedirectURI().String(),
+		State:         ar.GetState(),
+		Scopes:        ar.GetRequestedScopes(),
+		Error:         errorMsg,
+		FormAction:    r.URL.Path,
+		HiddenFields:  make(map[string]string),
+	}
+
+	// Check for PKCE
+	if challenge := ar.GetRequestForm().Get("code_challenge"); challenge != "" {
+		data.CodeChallenge = challenge
+	}
+
+	// Preserve form parameters as hidden fields
+	for key, values := range r.URL.Query() {
+		if len(values) > 0 && key != "username" && key != "password" {
+			data.HiddenFields[key] = values[0]
+		}
+	}
+
+	// Load and execute template
+	templatePath := filepath.Join("templates", "unified_auth.html")
+	tmpl, err := template.ParseFiles(templatePath)
+	if err != nil {
+		h.Log.Printf("❌ Error loading template: %v", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.Execute(w, data); err != nil {
+		h.Log.Printf("❌ Error executing template: %v", err)
+		http.Error(w, "Template execution error", http.StatusInternalServerError)
+		return
+	}
 }
