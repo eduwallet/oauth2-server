@@ -414,6 +414,7 @@
             {{if .IsDeviceFlow}}
                 <input type="hidden" name="device_code" value="{{.DeviceCode}}">
                 <input type="hidden" name="user_code" value="{{.UserCode}}">
+                <input type="hidden" name="username" value="{{.Username}}">
             {{else}}
                 <input type="hidden" name="action" value="consent">
                 {{range $key, $value := .HiddenFields}}
@@ -423,7 +424,7 @@
             
             <div class="buttons">
                 {{if .IsDeviceFlow}}
-                    <button type="submit" name="action" value="authorize" class="btn btn-success">
+                    <button type="submit" name="action" value="approve" class="btn btn-success">
                         ✅ Authorize Device
                     </button>
                     <button type="submit" name="action" value="deny" class="btn btn-danger">

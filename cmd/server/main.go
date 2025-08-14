@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
+	"github.com/ory/fosite/handler/oauth2"
 	"github.com/ory/fosite/storage"
 
 	"github.com/sirupsen/logrus"
@@ -23,6 +25,7 @@ import (
 	"oauth2-server/internal/handlers"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
+	"oauth2-server/rfc8693"
 )
 
 // Create a logger instance
@@ -35,6 +38,10 @@ var (
 	// OAuth2 provider and stores
 	oauth2Provider fosite.OAuth2Provider
 	memoryStore    *storage.MemoryStore
+
+	// TokenStrategy
+	AccessTokenStrategy  oauth2.AccessTokenStrategy
+	RefreshTokenStrategy oauth2.RefreshTokenStrategy
 
 	// Handlers
 	registrationHandler    *handlers.RegistrationHandler
@@ -198,6 +205,60 @@ func initializeUsers() error {
 	return nil
 }
 
+type MyRFC8693Storage struct {
+	*storage.MemoryStore
+}
+
+// 1. Create a wrapper type that embeds MemoryStore and implements RFC8693Storage
+// Implement ValidateSubjectToken
+func (s *MyRFC8693Storage) ValidateSubjectToken(ctx context.Context, token string, tokenType string, client fosite.Client) (*rfc8693.TokenInfo, error) {
+	log.Printf("Validating subject token: %s type: %s", token, tokenType)
+
+	signature := AccessTokenStrategy.AccessTokenSignature(ctx, token)
+
+	req, err := memoryStore.GetAccessTokenSession(ctx, signature, nil)
+	if err != nil {
+		log.Printf("Failed to retrieve access token session: %v", err)
+		return nil, fmt.Errorf("invalid access token: %w", err)
+	}
+
+	session := req.GetSession()
+
+	// Extract token information
+	tokenInfo := &rfc8693.TokenInfo{
+		Subject:   session.GetSubject(),
+		Scopes:    req.GetGrantedScopes(),
+		Audiences: req.GetGrantedAudience(),
+		TokenType: rfc8693.TokenTypeAccessToken,
+		Extra:     make(map[string]interface{}),
+	}
+
+	// Check if token is expired (this is usually handled by the storage layer)
+	// but we include it here for completeness
+	if session.GetExpiresAt(fosite.AccessToken).Before(time.Now().UTC()) {
+		return nil, fmt.Errorf("access token is expired")
+	}
+
+	log.Printf("✅ Subject token validated: %s, tokeninfo: %+v", token, tokenInfo)
+
+	return tokenInfo, nil
+
+}
+
+// Implement ValidateActorToken (can delegate to ValidateSubjectToken)
+func (s *MyRFC8693Storage) ValidateActorToken(ctx context.Context, token string, tokenType string, client fosite.Client) (*rfc8693.TokenInfo, error) {
+	log.Printf("Validating actor token: %s type: %s", token, tokenType)
+	return s.ValidateSubjectToken(ctx, token, tokenType, client)
+}
+
+// Implement StoreTokenExchange (optional, can be a no-op)
+func (s *MyRFC8693Storage) StoreTokenExchange(ctx context.Context, request *rfc8693.TokenExchangeRequest, response *rfc8693.TokenExchangeResponse) error {
+	// Optionally log or store audit info
+	log.Printf("✅ Token exchange request %v, response: %v", request, response)
+
+	return nil
+}
+
 func initializeOAuth2Provider() error {
 	// Generate RSA key for JWT signing
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -216,6 +277,12 @@ func initializeOAuth2Provider() error {
 		SendDebugMessagesToClients: true, // Enable debug messages for development
 		// Set the HMAC secret from our configuration
 		GlobalSecret: []byte(configuration.Security.JWTSecret),
+		// RFC 8693
+		TokenExchangeEnabled: true,
+		TokenExchangeTokenTypes: []string{
+			"urn:ietf:params:oauth:token-type:access_token",
+			"urn:ietf:params:oauth:token-type:refresh_token",
+		},
 	}
 
 	// Create a simple OAuth2 provider without complex strategies
@@ -225,8 +292,24 @@ func initializeOAuth2Provider() error {
 		privateKey,
 	)
 
-	f := compose.RFC8693TokenExchangeFactory(config, memoryStore, compose.NewOAuth2HMACStrategy(config))
-	config.TokenEndpointHandlers = append(config.TokenEndpointHandlers, f)
+	// Setup the RFC8693 handler...
+	AccessTokenStrategy = compose.NewOAuth2HMACStrategy(config)
+	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
+
+	rfc8693Interface := &MyRFC8693Storage{
+		memoryStore,
+	}
+
+	handler := &rfc8693.Handler{
+		Interface:            rfc8693Interface,
+		Config:               config,
+		AccessTokenStrategy:  AccessTokenStrategy,
+		RefreshTokenStrategy: RefreshTokenStrategy,
+		AccessTokenStorage:   memoryStore,
+		RefreshTokenStorage:  memoryStore,
+	}
+
+	config.TokenEndpointHandlers.Append(handler)
 
 	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil

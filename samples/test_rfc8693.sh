@@ -14,6 +14,7 @@ echo "================================================"
 
 # Step 1: Get an access token through client credentials flow
 echo "📋 Step 1: Getting initial access token..."
+
 RESPONSE=$(curl -s -X POST "$BASE_URL/oauth/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET&scope=api:read")
@@ -30,8 +31,11 @@ fi
 
 echo "✅ Got initial access token: ${SUBJECT_TOKEN:0:20}..."
 
+echo $SUBJECT_TOKEN
+echo $(echo -n "$CLIENT_ID:$CLIENT_SECRET" | base64)
+
 # Step 2: Perform RFC8693 Token Exchange
-echo ""
+
 echo "📋 Step 2: Performing RFC8693 Token Exchange..."
 EXCHANGE_RESPONSE=$(curl -s -X POST "$BASE_URL/oauth/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
