@@ -13,3 +13,5 @@ bin/oauth2-server
 config.yaml
 device_test_server.log
 rfc8693/
+server-test.log
+server.pid

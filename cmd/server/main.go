@@ -357,7 +357,9 @@ func setupRoutes() {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.Execute(w, nil)
+		tmpl.Execute(w, map[string]interface{}{
+			"BaseURL": configuration.Server.BaseURL,
+		})
 	}))
 
 	http.HandleFunc("/status", proxyAwareMiddleware(statusHandler.ServeHTTP))

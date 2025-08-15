@@ -182,7 +182,7 @@
                 <div class="config-value" id="client-id">web-app-client</div>
                 
                 <div class="config-label">Redirect URI:</div>
-                <div class="config-value" id="redirect-uri">http://localhost:8080/callback</div>
+                <div class="config-value" id="redirect-uri">{{ .BaseURL }}/callback</div>
                 
                 <div class="config-label">Scopes:</div>
                 <div class="config-value" id="scopes">openid profile email api:read offline_access</div>
@@ -316,9 +316,9 @@
         // OAuth2 Configuration
         const config = {
             clientId: 'web-app-client',
-            redirectUri: 'http://localhost:8080/callback',
+            redirectUri: '{{ .BaseURL }}/callback',
             scope: 'openid profile email api:read offline_access',
-            baseUrl: 'http://localhost:8080'
+            baseUrl: '{{ .BaseURL }}'
         };
 
         // Generate PKCE parameters
