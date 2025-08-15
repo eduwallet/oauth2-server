@@ -22,9 +22,9 @@ proxy:
   public_base_url: "" # Leave empty to auto-detect
   force_https: false
   trusted_proxies:
-    - "10.0.0.0/8"
-    - "172.16.0.0/12"
-    - "192.168.0.0/16"
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
 
 logging:
   level: "debug"
@@ -32,213 +32,213 @@ logging:
   enable_audit: true
 
 clients:
-  # Frontend SPA Client
-  - id: "frontend-app"
-    secret: "frontend-secret"
-    name: "Frontend Application"
-    description: "Main frontend SPA application"
-    redirect_uris:
-      - "/callback"
-    grant_types:
-      - "authorization_code"
-      - "refresh_token"
-      - "urn:ietf:params:oauth:grant-type:token-exchange"
-    response_types:
-      - "code"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "api:read"
-    audience:
-      - "api-service"
-    token_endpoint_auth_method: "client_secret_basic"
-    public: false
-    enabled_flows:
-      - "authorization_code"
+# Frontend SPA Client
+- id: "frontend-app"
+  secret: "frontend-secret"
+  name: "Frontend Application"
+  description: "Main frontend SPA application"
+  redirect_uris:
+  - "/callback"
+  grant_types:
+  - "authorization_code"
+  - "refresh_token"
+  - "urn:ietf:params:oauth:grant-type:token-exchange"
+  response_types:
+  - "code"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  public: false
+  enabled_flows:
+  - "authorization_code"
 
-  # Web Application Client for PKCE Demo
-  - id: "web-app-client"
-    secret: "web-app-secret"
-    name: "Web Application Client"
-    description: "Web application client supporting authorization code flow with PKCE"
-    redirect_uris:
-      - "http://localhost:8080/callback"
-      - "http://localhost:8080/claims"
-    grant_types:
-      - "authorization_code"
-      - "refresh_token"
-    response_types:
-      - "code"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "api:read"
-      - "offline_access"
-    audience:
-      - "api-service"
-    token_endpoint_auth_method: "client_secret_basic"
-    public: false
-    enabled_flows:
-      - "authorization_code"
-      - "refresh_token"
+# Web Application Client for PKCE Demo
+- id: "web-app-client"
+  secret: "web-app-secret"
+  name: "Web Application Client"
+  description: "Web application client supporting authorization code flow with PKCE"
+  redirect_uris:
+  - "/callback"
+  - "/claims"
+  grant_types:
+  - "authorization_code"
+  - "refresh_token"
+  response_types:
+  - "code"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  - "offline_access"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  public: false
+  enabled_flows:
+  - "authorization_code"
+  - "refresh_token"
 
-  # Backend Service Client
-  - id: "backend-client"
-    secret: "backend-client-secret"
-    name: "Backend Service"
-    description: "Internal backend service for server-to-server communication"
-    redirect_uris: []
-    grant_types:
-      - "client_credentials"
-      - "urn:ietf:params:oauth:grant-type:token-exchange"
-      - "refresh_token"
-    response_types: []
-    scopes:
-      - "openid"
-      - "profile"
-      - "api:read"
-      - "api:write"
-      - "api:admin"
-      - "offline_access"
-    audience:
-      - "api-service"
-    token_endpoint_auth_method: "client_secret_basic"
-    public: false
-    enabled_flows:
-      - "client_credentials"
-      - "token_exchange"
+# Backend Service Client
+- id: "backend-client"
+  secret: "backend-client-secret"
+  name: "Backend Service"
+  description: "Internal backend service for server-to-server communication"
+  redirect_uris: []
+  grant_types:
+  - "client_credentials"
+  - "urn:ietf:params:oauth:grant-type:token-exchange"
+  - "refresh_token"
+  response_types: []
+  scopes:
+  - "openid"
+  - "profile"
+  - "api:read"
+  - "api:write"
+  - "api:admin"
+  - "offline_access"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  public: false
+  enabled_flows:
+  - "client_credentials"
+  - "token_exchange"
 
-  # Device Flow Client
-  - id: "frontend-client"
-    secret: "frontend-client-secret"
-    name: "Frontend Client Application"
-    description: "Frontend client that supports device flow"
-    redirect_uris: []
-    grant_types:
-      - "urn:ietf:params:oauth:grant-type:device_code"
-      - "refresh_token"
-    response_types: []
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "api:read"
-    audience:
-      - "api-service"
-    token_endpoint_auth_method: "client_secret_basic"
-    public: false
-    enabled_flows:
-      - "device_code"
+# Device Flow Client
+- id: "frontend-client"
+  secret: "frontend-client-secret"
+  name: "Frontend Client Application"
+  description: "Frontend client that supports device flow"
+  redirect_uris: []
+  grant_types:
+  - "urn:ietf:params:oauth:grant-type:device_code"
+  - "refresh_token"
+  response_types: []
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  public: false
+  enabled_flows:
+  - "device_code"
 
-  # Mobile App Client (Public)
-  - id: "mobile-app"
-    secret: ""
-    name: "Mobile Application"
-    description: "Mobile application client"
-    redirect_uris:
-      - "http://localhost:8080/oauth/callback"
-    grant_types:
-      - "authorization_code"
-      - "refresh_token"
-      - "urn:ietf:params:oauth:grant-type:device_code"
-    response_types:
-      - "code"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "api:read"
-    audience:
-      - "api-service"
-    token_endpoint_auth_method: "none"
-    public: true
-    enabled_flows:
-      - "authorization_code"
-      - "device_code"
+# Mobile App Client (Public)
+- id: "mobile-app"
+  secret: ""
+  name: "Mobile Application"
+  description: "Mobile application client"
+  redirect_uris:
+  - "/oauth/callback"
+  grant_types:
+  - "authorization_code"
+  - "refresh_token"
+  - "urn:ietf:params:oauth:grant-type:device_code"
+  response_types:
+  - "code"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "none"
+  public: true
+  enabled_flows:
+  - "authorization_code"
+  - "device_code"
 
-  # Smart TV Device Flow Client (Public - no secret for device flow)
-  - id: "smart-tv-app"
-    name: "Smart TV Application"
-    description: "Smart TV or IoT device application"
-    public: true
-    redirect_uris: []
-    grant_types:
-      - "urn:ietf:params:oauth:grant-type:device_code"
-      - "refresh_token"
-    response_types: []
-    scopes:
-      - "openid"
-      - "profile"
-      - "api:read"
-      - "offline_access"
-    audience:
-      - "api-service"
-    token_endpoint_auth_method: "client_secret_basic"
-    enabled_flows:
-      - "device_code"
+# Smart TV Device Flow Client (Public - no secret for device flow)
+- id: "smart-tv-app"
+  name: "Smart TV Application"
+  description: "Smart TV or IoT device application"
+  public: true
+  redirect_uris: []
+  grant_types:
+  - "urn:ietf:params:oauth:grant-type:device_code"
+  - "refresh_token"
+  response_types: []
+  scopes:
+  - "openid"
+  - "profile"
+  - "api:read"
+  - "offline_access"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  enabled_flows:
+  - "device_code"
 
 users:
-  # Test users for development and testing
-  - id: "admin-user"
-    username: "admin"
-    password: "password"
-    name: "Admin User"
-    email: "admin@example.com"
-    enabled: true
-    roles:
-      - "admin"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "offline_access"
-      - "api:read"
-      - "api:write"
-      - "api:admin"
+# Test users for development and testing
+- id: "admin-user"
+  username: "admin"
+  password: "password"
+  name: "Admin User"
+  email: "admin@example.com"
+  enabled: true
+  roles:
+  - "admin"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "offline_access"
+  - "api:read"
+  - "api:write"
+  - "api:admin"
 
-  - id: "user-001"
-    username: "john.doe"
-    password: "password123"
-    name: "John Doe"
-    email: "john.doe@example.com"
-    enabled: true
-    roles:
-      - "user"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "api:read"
+- id: "user-001"
+  username: "john.doe"
+  password: "password123"
+  name: "John Doe"
+  email: "john.doe@example.com"
+  enabled: true
+  roles:
+  - "user"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
 
-  - id: "user-002"
-    username: "jane.smith"
-    password: "secret456"
-    name: "Jane Smith"
-    email: "jane.smith@example.com"
-    enabled: true
-    roles:
-      - "user"
-      - "admin"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "api:read"
-      - "api:write"
-      - "api:admin"
+- id: "user-002"
+  username: "jane.smith"
+  password: "secret456"
+  name: "Jane Smith"
+  email: "jane.smith@example.com"
+  enabled: true
+  roles:
+  - "user"
+  - "admin"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  - "api:write"
+  - "api:admin"
 
-  - id: "user-003"
-    username: "testuser"
-    password: "testpass"
-    name: "Test User"
-    email: "test@example.com"
-    enabled: true
-    roles:
-      - "user"
-    scopes:
-      - "openid"
-      - "profile"
-      - "email"
-      - "api:read"
+- id: "user-003"
+  username: "testuser"
+  password: "testpass"
+  name: "Test User"
+  email: "test@example.com"
+  enabled: true
+  roles:
+  - "user"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
