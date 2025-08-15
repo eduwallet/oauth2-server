@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -209,83 +208,6 @@ func initializeUsers() error {
 	return nil
 }
 
-type MyRFC8693Storage struct {
-	*storage.MemoryStore
-}
-
-// 1. Create a wrapper type that embeds MemoryStore and implements RFC8693Storage
-// Implement ValidateSubjectToken
-func (s *MyRFC8693Storage) ValidateSubjectToken(ctx context.Context, token string, tokenType string, client fosite.Client) (*rfc8693.TokenInfo, error) {
-	log.Printf("Validating subject token: %s type: %s", token, tokenType)
-
-	var req fosite.Requester
-	var err error
-
-	switch tokenType {
-	case rfc8693.TokenTypeAccessToken:
-		log.Printf("Validating accesstoken: %s", token)
-
-		signature := AccessTokenStrategy.AccessTokenSignature(ctx, token)
-		log.Printf("Validating accesstoken, signature: %s", signature)
-
-		req, err = memoryStore.GetAccessTokenSession(ctx, signature, nil)
-		if err != nil {
-			log.Printf("Failed to retrieve access token session: %v", err)
-			return nil, fmt.Errorf("invalid access token: %w", err)
-		}
-	case rfc8693.TokenTypeRefreshToken:
-		log.Printf("Validating refreshtoken: %s", token)
-
-		signature := RefreshTokenStrategy.RefreshTokenSignature(ctx, token)
-		log.Printf("Validating refreshtoken, signature: %s", signature)
-
-		req, err = memoryStore.GetRefreshTokenSession(ctx, signature, nil)
-		if err != nil {
-			log.Printf("Failed to retrieve refresh token session: %v", err)
-			return nil, fmt.Errorf("invalid refresh token: %w", err)
-		}
-	default:
-		log.Printf("Tokentype: %s not (yet) implemented", tokenType)
-		return nil, fmt.Errorf("unknown token type: %s", tokenType)
-	}
-
-	session := req.GetSession()
-
-	// Extract token information
-	tokenInfo := &rfc8693.TokenInfo{
-		Subject:   session.GetSubject(),
-		Scopes:    req.GetGrantedScopes(),
-		Audiences: req.GetGrantedAudience(),
-		TokenType: tokenType,
-		Extra:     make(map[string]interface{}),
-	}
-
-	// Check if token is expired (this is usually handled by the storage layer)
-	// but we include it here for completeness
-	//	if session.GetExpiresAt(fosite.AccessToken).Before(time.Now().UTC()) {
-	//		return nil, fmt.Errorf("access token is expired")
-	//	}
-
-	log.Printf("✅ Subject token validated: %s, tokeninfo: %+v", token, tokenInfo)
-
-	return tokenInfo, nil
-
-}
-
-// Implement ValidateActorToken (can delegate to ValidateSubjectToken)
-func (s *MyRFC8693Storage) ValidateActorToken(ctx context.Context, token string, tokenType string, client fosite.Client) (*rfc8693.TokenInfo, error) {
-	log.Printf("Validating actor token: %s type: %s", token, tokenType)
-	return s.ValidateSubjectToken(ctx, token, tokenType, client)
-}
-
-// Implement StoreTokenExchange (optional, can be a no-op)
-func (s *MyRFC8693Storage) StoreTokenExchange(ctx context.Context, request *rfc8693.TokenExchangeRequest, response *rfc8693.TokenExchangeResponse) error {
-	// Optionally log or store audit info
-	log.Printf("✅ Token exchange request %v, response: %v", request, response)
-
-	return nil
-}
-
 func initializeOAuth2Provider() error {
 	// Generate RSA key for JWT signing
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -325,12 +247,7 @@ func initializeOAuth2Provider() error {
 		privateKey,
 	)
 
-	rfc8693Interface := &MyRFC8693Storage{
-		memoryStore,
-	}
-
 	handler := &rfc8693.Handler{
-		Interface:            rfc8693Interface,
 		Config:               config,
 		AccessTokenStrategy:  AccessTokenStrategy,
 		RefreshTokenStrategy: RefreshTokenStrategy,
