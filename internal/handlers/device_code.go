@@ -344,6 +344,7 @@ func (h *DeviceCodeHandler) completeDeviceAuthorization(ctx context.Context, use
 	h.Logger.Infof("🔍 Found device authorization for user code '%s' with device code '%s'", userCode, deviceAuthKey)
 	h.Logger.Infof("🔍 Original device auth client: %s", deviceAuth.GetClient().GetID())
 	h.Logger.Infof("🔍 Original device auth scopes: %v", deviceAuth.GetRequestedScopes())
+	h.Logger.Infof("🔍 Original device auth audiences: %v", deviceAuth.GetRequestedAudience())
 
 	// Create a session with user information and preserve original scopes
 	// Use openid.DefaultSession for OpenID Connect support (ID tokens)
@@ -378,6 +379,13 @@ func (h *DeviceCodeHandler) completeDeviceAuthorization(ctx context.Context, use
 	for _, scope := range deviceAuth.GetRequestedScopes() {
 		h.Logger.Infof("🔍 Granting scope: %s", scope)
 		deviceAuth.GrantScope(scope)
+
+	}
+
+	// Grant for the requested audiences !
+	for _, audience := range deviceAuth.GetRequestedAudience() {
+		h.Logger.Infof("🔍 Granting audience: %s", audience)
+		deviceAuth.GrantAudience(audience)
 	}
 
 	// Update the device authorization with the user session

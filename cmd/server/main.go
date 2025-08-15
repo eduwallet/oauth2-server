@@ -162,6 +162,10 @@ func initializeClients() error {
 
 			log.Println("Registering client:", client.ID)
 
+			if len(client.Audience) == 0 {
+				client.Audience = []string{client.ID}
+			}
+
 			newClient := &fosite.DefaultClient{
 				ID:            client.ID,
 				Secret:        hashedSecret,
@@ -214,12 +218,35 @@ type MyRFC8693Storage struct {
 func (s *MyRFC8693Storage) ValidateSubjectToken(ctx context.Context, token string, tokenType string, client fosite.Client) (*rfc8693.TokenInfo, error) {
 	log.Printf("Validating subject token: %s type: %s", token, tokenType)
 
-	signature := AccessTokenStrategy.AccessTokenSignature(ctx, token)
+	var req fosite.Requester
+	var err error
 
-	req, err := memoryStore.GetAccessTokenSession(ctx, signature, nil)
-	if err != nil {
-		log.Printf("Failed to retrieve access token session: %v", err)
-		return nil, fmt.Errorf("invalid access token: %w", err)
+	switch tokenType {
+	case rfc8693.TokenTypeAccessToken:
+		log.Printf("Validating accesstoken: %s", token)
+
+		signature := AccessTokenStrategy.AccessTokenSignature(ctx, token)
+		log.Printf("Validating accesstoken, signature: %s", signature)
+
+		req, err = memoryStore.GetAccessTokenSession(ctx, signature, nil)
+		if err != nil {
+			log.Printf("Failed to retrieve access token session: %v", err)
+			return nil, fmt.Errorf("invalid access token: %w", err)
+		}
+	case rfc8693.TokenTypeRefreshToken:
+		log.Printf("Validating refreshtoken: %s", token)
+
+		signature := RefreshTokenStrategy.RefreshTokenSignature(ctx, token)
+		log.Printf("Validating refreshtoken, signature: %s", signature)
+
+		req, err = memoryStore.GetRefreshTokenSession(ctx, signature, nil)
+		if err != nil {
+			log.Printf("Failed to retrieve refresh token session: %v", err)
+			return nil, fmt.Errorf("invalid refresh token: %w", err)
+		}
+	default:
+		log.Printf("Tokentype: %s not (yet) implemented", tokenType)
+		return nil, fmt.Errorf("unknown token type: %s", tokenType)
 	}
 
 	session := req.GetSession()
@@ -229,15 +256,15 @@ func (s *MyRFC8693Storage) ValidateSubjectToken(ctx context.Context, token strin
 		Subject:   session.GetSubject(),
 		Scopes:    req.GetGrantedScopes(),
 		Audiences: req.GetGrantedAudience(),
-		TokenType: rfc8693.TokenTypeAccessToken,
+		TokenType: tokenType,
 		Extra:     make(map[string]interface{}),
 	}
 
 	// Check if token is expired (this is usually handled by the storage layer)
 	// but we include it here for completeness
-	if session.GetExpiresAt(fosite.AccessToken).Before(time.Now().UTC()) {
-		return nil, fmt.Errorf("access token is expired")
-	}
+	//	if session.GetExpiresAt(fosite.AccessToken).Before(time.Now().UTC()) {
+	//		return nil, fmt.Errorf("access token is expired")
+	//	}
 
 	log.Printf("✅ Subject token validated: %s, tokeninfo: %+v", token, tokenInfo)
 
@@ -277,6 +304,8 @@ func initializeOAuth2Provider() error {
 		SendDebugMessagesToClients: true, // Enable debug messages for development
 		// Set the HMAC secret from our configuration
 		GlobalSecret: []byte(configuration.Security.JWTSecret),
+		// Set the ID token issuer
+		IDTokenIssuer: configuration.Server.BaseURL,
 		// RFC 8693
 		TokenExchangeEnabled: true,
 		TokenExchangeTokenTypes: []string{
@@ -285,16 +314,16 @@ func initializeOAuth2Provider() error {
 		},
 	}
 
+	// Setup the RFC8693 handler...
+	AccessTokenStrategy = compose.NewOAuth2HMACStrategy(config)
+	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
+
 	// Create a simple OAuth2 provider without complex strategies
 	oauth2Provider = compose.ComposeAllEnabled(
 		config,
 		memoryStore,
 		privateKey,
 	)
-
-	// Setup the RFC8693 handler...
-	AccessTokenStrategy = compose.NewOAuth2HMACStrategy(config)
-	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
 
 	rfc8693Interface := &MyRFC8693Storage{
 		memoryStore,

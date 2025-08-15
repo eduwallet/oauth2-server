@@ -44,6 +44,7 @@ type ClientMetadata struct {
 	Jwks                    string   `json:"jwks,omitempty"`
 	SoftwareID              string   `json:"software_id,omitempty"`
 	SoftwareVersion         string   `json:"software_version,omitempty"`
+	Audience                []string `json:"audience,omitempty"`
 }
 
 // ClientResponse represents the client registration response
@@ -69,6 +70,7 @@ type ClientResponse struct {
 	Jwks                    string   `json:"jwks,omitempty"`
 	SoftwareID              string   `json:"software_id,omitempty"`
 	SoftwareVersion         string   `json:"software_version,omitempty"`
+	Audience                []string `json:"audience,omitempty"`
 }
 
 // HandleRegistration handles client registration requests
@@ -126,8 +128,20 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		scopes = splitScope(metadata.Scope)
 	}
 
+	// Convert audience string to array if provided
+	var audience []string
+	if len(metadata.Audience) != 0 {
+		audience = metadata.Audience
+	}
+
+	// Always add the client ID to its own audience whitelist
+	if clientID != "" && !contains(audience, clientID) {
+		audience = append(audience, clientID)
+	}
+
 	// Debug: Log scope information
 	log.Printf("🔍 Client scopes from metadata: '%s' -> %v", metadata.Scope, scopes)
+	log.Printf("🔍 Client audience from metadata: '%s' -> %v", metadata.Audience, audience)
 
 	// Create the client
 	newClient := &fosite.DefaultClient{
@@ -137,6 +151,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		GrantTypes:    grantTypes,
 		ResponseTypes: responseTypes,
 		Scopes:        scopes,
+		Audience:      audience,
 		Public:        metadata.TokenEndpointAuthMethod == "none",
 	}
 
@@ -159,7 +174,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		ClientName:              metadata.ClientName,
 		ClientURI:               metadata.ClientURI,
 		LogoURI:                 metadata.LogoURI,
-		Scope:                   metadata.Scope,
+		Scope:                   strings.Join(scopes, " "),
 		Contacts:                metadata.Contacts,
 		TermsOfServiceURI:       metadata.TermsOfServiceURI,
 		PolicyURI:               metadata.PolicyURI,
@@ -167,6 +182,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		Jwks:                    metadata.Jwks,
 		SoftwareID:              metadata.SoftwareID,
 		SoftwareVersion:         metadata.SoftwareVersion,
+		Audience:                audience,
 	}
 
 	log.Printf("✅ Registered new client: %s", clientID)
@@ -191,4 +207,14 @@ func splitScope(scope string) []string {
 	// In a real implementation, you would use a proper tokenizer
 	// that handles quoted strings, etc.
 	return strings.Fields(scope)
+}
+
+// Helper function to check if a slice contains a string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
