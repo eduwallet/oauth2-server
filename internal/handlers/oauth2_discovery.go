@@ -1,0 +1,139 @@
+package handlers
+
+import (
+	"encoding/json"
+	"net/http"
+	"oauth2-server/pkg/config"
+)
+
+// OAuth2DiscoveryHandler manages OAuth2 Authorization Server Metadata requests (RFC 8414)
+type OAuth2DiscoveryHandler struct {
+	Configuration *config.Config
+}
+
+// NewOAuth2DiscoveryHandler creates a new OAuth2 discovery handler
+func NewOAuth2DiscoveryHandler(configuration *config.Config) *OAuth2DiscoveryHandler {
+	return &OAuth2DiscoveryHandler{
+		Configuration: configuration,
+	}
+}
+
+// ServeHTTP handles OAuth2 Authorization Server Metadata requests (/.well-known/oauth-authorization-server)
+func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+
+	// Get the effective base URL (proxy-aware)
+	baseURL := h.Configuration.GetEffectiveBaseURL(r)
+
+	// OAuth2 Authorization Server Metadata (RFC 8414)
+	oauth2Metadata := map[string]interface{}{
+		// Required fields
+		"issuer":                 baseURL,
+		"authorization_endpoint": baseURL + "/oauth/authorize",
+		"token_endpoint":         baseURL + "/oauth/token",
+		"jwks_uri":               baseURL + "/.well-known/jwks.json",
+
+		// Optional but recommended fields
+		"registration_endpoint":  baseURL + "/register",
+		"revocation_endpoint":    baseURL + "/oauth/revoke",
+		"introspection_endpoint": baseURL + "/oauth/introspect",
+		"userinfo_endpoint":      baseURL + "/userinfo",
+
+		// Device Flow (RFC 8628)
+		"device_authorization_endpoint": baseURL + "/device/authorize",
+
+		// Supported response types
+		"response_types_supported": []string{
+			"code",
+			"token",
+			"id_token",
+			"code token",
+			"code id_token",
+			"token id_token",
+			"code token id_token",
+		},
+
+		// Supported grant types
+		"grant_types_supported": []string{
+			"authorization_code",
+			"client_credentials",
+			"refresh_token",
+			"urn:ietf:params:oauth:grant-type:device_code",
+			"urn:ietf:params:oauth:grant-type:token-exchange",
+		},
+
+		// Token Exchange specific metadata (RFC 8693)
+		"token_exchange_grant_types_supported": []string{
+			"urn:ietf:params:oauth:grant-type:token-exchange",
+		},
+
+		"subject_token_types_supported": []string{
+			"urn:ietf:params:oauth:token-type:access_token",
+			"urn:ietf:params:oauth:token-type:refresh_token",
+			"urn:ietf:params:oauth:token-type:id_token",
+		},
+
+		"actor_token_types_supported": []string{
+			"urn:ietf:params:oauth:token-type:access_token",
+		},
+
+		// Supported scopes
+		"scopes_supported": []string{
+			"openid",
+			"profile",
+			"email",
+			"offline_access",
+			"api:read",
+			"api:write",
+			"admin",
+		},
+
+		// Token endpoint authentication methods
+		"token_endpoint_auth_methods_supported": []string{
+			"client_secret_basic",
+			"client_secret_post",
+			"private_key_jwt",
+			"client_secret_jwt",
+			"none",
+		},
+
+		// Token endpoint signing algorithms
+		"token_endpoint_auth_signing_alg_values_supported": []string{
+			"RS256",
+			"HS256",
+		},
+
+		// PKCE support
+		"code_challenge_methods_supported": []string{
+			"plain",
+			"S256",
+		},
+
+		// Introspection endpoint authentication methods
+		"introspection_endpoint_auth_methods_supported": []string{
+			"client_secret_basic",
+			"client_secret_post",
+		},
+
+		// Revocation endpoint authentication methods
+		"revocation_endpoint_auth_methods_supported": []string{
+			"client_secret_basic",
+			"client_secret_post",
+		},
+
+		// Additional capabilities
+		"response_modes_supported": []string{
+			"query",
+			"fragment",
+			"form_post",
+		},
+
+		// Service documentation
+		"service_documentation": baseURL + "/docs",
+		"op_policy_uri":         baseURL + "/policy",
+		"op_tos_uri":            baseURL + "/terms",
+	}
+
+	json.NewEncoder(w).Encode(oauth2Metadata)
+}

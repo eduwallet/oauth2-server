@@ -3,3 +3,13 @@ ingress.yaml
 bin/oauth2-server
 main
 server.log
+./server
+./*.log
+server-demo.log
+server-demo.pid
+test_server.log
+bin/oauth2-server
+bin/oauth2-server
+config.yaml
+device_test_server.log
+rfc8693/

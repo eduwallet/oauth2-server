@@ -109,25 +109,55 @@ See `values.yaml` and `docker-compose.yml` for configuration options.
 | Endpoint | Method | Description | RFC |
 |----------|--------|-------------|-----|
 | `/auth` | GET | Authorization endpoint | RFC 6749 |
-| `/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
-| `/device` | POST | Device authorization | RFC 8628 |
-| `/device` | GET/POST | Device verification UI | RFC 8628 |
-| `/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
-| `/userinfo` | GET | UserInfo endpoint | OIDC Core |
+| `/oauth/authorize` | GET | Authorization endpoint (PKCE, browser/curl) | RFC 6749 |
+| `/oauth/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
+| `/device/authorize` | POST | Device authorization | RFC 8628 |
+| `/device` | GET | Device verification UI | RFC 8628 |
+| `/device/verify` | POST | Device code verification | RFC 8628 |
+| `/device/consent` | POST | Device consent | RFC 8628 |
+| `/oauth/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
+| `/oauth/revoke` | POST | Token revocation | RFC 6749 |
+| `/userinfo` | GET | UserInfo endpoint (requires Authorization header) | OIDC Core |
 | `/register` | POST | Dynamic client registration (with audience) |
+| `/claims` | GET | Claims display (interactive) |
+| `/callback` | GET | OAuth2 callback for demo |
+| `/demo` | GET | Interactive PKCE demo page |
 
 ### Discovery & Health
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/.well-known/oauth-authorization-server` | GET | OAuth2 server metadata |
-| `/.well-known/openid_configuration` | GET | OIDC configuration |
-| `/jwks` | GET | JSON Web Key Set |
+| `/.well-known/openid-configuration` | GET | OIDC configuration |
+| `/.well-known/jwks.json` | GET | JSON Web Key Set |
 | `/health` | GET | Health check |
 | `/stats` | GET | Server statistics |
 | `/` | GET | Minimal server info and stats (no docs UI) |
 
 ## Usage Guidelines
+### Unified Login & Authorization UI
+
+Both the device code flow and authorization code flow use a unified, modern login/authorization page. This page adapts to the flow and provides a seamless user experience for browser and device flows.
+
+See `templates/unified_auth.html` for the implementation.
+
+### Interactive Demo Page & Test Users
+
+The `/demo` endpoint provides an interactive PKCE demo for browser and cURL flows. It includes:
+- Example test users for quick login
+- Step-by-step flow visualization
+- Claims display and callback integration
+
+See `templates/demo.html` for details.
+
+### Claims Display & Callback
+
+The `/claims` endpoint displays the claims of the authenticated user interactively. The `/callback` endpoint is used for OAuth2 browser flows and demo integration.
+
+### UserInfo Endpoint
+
+The `/userinfo` endpoint returns OIDC claims for the authenticated user. **Requires an `Authorization: Bearer <access_token>` header**. Used by the demo and claims display pages.
+
 
 ### Client Registration
 
@@ -200,7 +230,7 @@ curl http://localhost:8080/token/stats
 
 ## Minimal Root Page
 
-The root endpoint `/` now returns only server information and statistics in JSON format.  
+The root endpoint `/` returns only server information and statistics in JSON format.  
 There is **no documentation UI** or client management UI.
 
 ---

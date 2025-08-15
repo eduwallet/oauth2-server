@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth2 Server - Authorize Device</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 500px;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            color: #333;
+            margin: 0;
+            font-size: 28px;
+            font-weight: 300;
+        }
+        .device-info {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .device-code {
+            font-family: 'Courier New', monospace;
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+            text-align: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border: 2px solid #007bff;
+            border-radius: 6px;
+        }
+        .client-info {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .client-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .user-info {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #e8f5e8;
+            border-radius: 6px;
+        }
+        .scopes {
+            margin-bottom: 20px;
+        }
+        .scope-item {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 6px 12px;
+            border-radius: 15px;
+            display: inline-block;
+            margin: 4px;
+            font-size: 14px;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn-authorize {
+            background: #28a745;
+            color: white;
+        }
+        .btn-authorize:hover {
+            background: #218838;
+        }
+        .btn-deny {
+            background: #dc3545;
+            color: white;
+        }
+        .btn-deny:hover {
+            background: #c82333;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>🔐 Authorize Device</h1>
+        </div>
+        
+        <div class="device-info">
+            <p><strong>Device Code:</strong></p>
+            <div class="device-code">{{.UserCode}}</div>
+            <p style="text-align: center; margin-top: 15px;">A device is requesting access to your account</p>
+        </div>
+
+        <div class="user-info">
+            <strong>👤 Logged in as: {{.Username}}</strong>
+        </div>
+
+        <div class="warning">
+            <strong>⚠️ Important:</strong> Only authorize devices you trust. This will give the device access to your account.
+        </div>
+
+        <form method="post" action="/device/consent">
+            <input type="hidden" name="user_code" value="{{.UserCode}}">
+            <input type="hidden" name="username" value="{{.Username}}">
+            
+            <div class="button-group">
+                <button type="submit" name="action" value="approve" class="btn btn-authorize">
+                    ✅ Approve Device
+                </button>
+                <button type="submit" name="action" value="deny" class="btn btn-deny">
+                    ❌ Deny Access
+                </button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

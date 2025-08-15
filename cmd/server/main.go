@@ -1,11 +1,14 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
-	"encoding/json"
+
+	"html/template"
+	"os"
+	"path/filepath"
+
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,13 +16,13 @@ import (
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
+	"github.com/ory/fosite/handler/oauth2"
+	"github.com/ory/fosite/handler/rfc8693"
 	"github.com/ory/fosite/storage"
-	"github.com/sirupsen/logrus" // Add this import
 
-	"oauth2-server/internal/auth"
-	"oauth2-server/internal/flows"
+	"github.com/sirupsen/logrus"
+
 	"oauth2-server/internal/handlers"
-	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 )
@@ -29,58 +32,53 @@ var log = logrus.New()
 
 var (
 	// Application configuration
-	cfg *config.Config
+	configuration *config.Config
 
 	// OAuth2 provider and stores
 	oauth2Provider fosite.OAuth2Provider
-	clientStore    *store.ClientStore
-	authCodeStore  *store.AuthCodeStore
-	tokenStore     *store.TokenStore
+	memoryStore    *storage.MemoryStore
 
-	// OAuth2 flows
-	authCodeFlow      *flows.AuthorizationCodeFlow
-	clientCredsFlow   *flows.ClientCredentialsFlow
-	refreshTokenFlow  *flows.RefreshTokenFlow
-	tokenExchangeFlow *flows.TokenExchangeFlow
-	deviceCodeFlow    *flows.DeviceCodeFlow
+	// TokenStrategy
+	AccessTokenStrategy  oauth2.AccessTokenStrategy
+	RefreshTokenStrategy oauth2.RefreshTokenStrategy
 
-	// Token handlers
-	tokenHandlers *handlers.TokenHandlers
+	// Handlers
+	registrationHandler    *handlers.RegistrationHandler
+	deviceCodeHandler      *handlers.DeviceCodeHandler
+	introspectionHandler   *handlers.IntrospectionHandler
+	discoveryHandler       *handlers.DiscoveryHandler
+	statusHandler          *handlers.StatusHandler
+	tokenHandler           *handlers.TokenHandler
+	revokeHandler          *handlers.RevokeHandler
+	jwksHandler            *handlers.JWKSHandler
+	healthHandler          *handlers.HealthHandler
+	oauth2DiscoveryHandler *handlers.OAuth2DiscoveryHandler
+	authorizeHandler       *handlers.AuthorizeHandler
+	claimsHandler          *handlers.ClaimsHandler
 
-	// Registration handler
-	registrationHandlers *handlers.RegistrationHandlers
+	// Templates for rendering HTML responses
+	templates *template.Template
 )
-
-// CompositeStore combines our custom ClientStore with Fosite's MemoryStore
-type CompositeStore struct {
-	*store.ClientStore
-	*storage.MemoryStore
-}
-
-// GetClient implements fosite.ClientManager
-func (c *CompositeStore) GetClient(ctx context.Context, id string) (fosite.Client, error) {
-	return c.ClientStore.GetClient(ctx, id)
-}
 
 func main() {
 	log.Println("🚀 Starting OAuth2 Server...")
 
 	// Load configuration from YAML
 	var err error
-	cfg, err = config.Load()
+	configuration, err = config.Load()
 	if err != nil {
 		log.Fatalf("❌ Failed to load configuration: %v", err)
 	}
 
 	// Validate configuration
-	if err := cfg.Validate(); err != nil {
+	if err := configuration.Validate(); err != nil {
 		log.Fatalf("❌ Invalid configuration: %v", err)
 	}
 
 	// Access logging configuration correctly:
-	logLevel := cfg.Logging.Level          // ✅ Correct
-	logFormat := cfg.Logging.Format        // ✅ Correct
-	enableAudit := cfg.Logging.EnableAudit // ✅ Correct
+	logLevel := configuration.Logging.Level          // ✅ Correct
+	logFormat := configuration.Logging.Format        // ✅ Correct
+	enableAudit := configuration.Logging.EnableAudit // ✅ Correct
 
 	// Initialize logger based on config
 	switch logLevel {
@@ -109,48 +107,105 @@ func main() {
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
 
 	// Initialize stores
-	initializeStores()
-
-	// Load clients from configuration
-	if err := clientStore.LoadClientsFromConfig(cfg.Clients); err != nil {
-		log.Fatalf("❌ Failed to load clients from config: %v", err)
-	}
+	memoryStore = storage.NewMemoryStore()
 
 	// Initialize OAuth2 provider
 	if err := initializeOAuth2Provider(); err != nil {
 		log.Fatalf("❌ Failed to initialize OAuth2 provider: %v", err)
 	}
 
+	// Now initialize clients with the hasher
+	if err := initializeClients(); err != nil {
+		log.Fatalf("❌ Failed to initialize clients: %v", err)
+	}
+
+	// In main() function, after initializing clients
+	if err := initializeUsers(); err != nil {
+		log.Fatalf("❌ Failed to initialize users: %v", err)
+	}
+
+	// Load templates
+	if err := loadTemplates(); err != nil {
+		log.Fatalf("❌ Failed to load templates: %v", err)
+	}
+
 	// Initialize flows
-	initializeFlows()
+	initializeHandlers()
 
 	// Setup routes
 	setupRoutes()
 
 	// Start server
-	log.Printf("🌐 OAuth2 server starting on port %d", cfg.Server.Port)
-	log.Printf("🔗 Authorization endpoint: %s/auth", cfg.Server.BaseURL)
-	log.Printf("🎫 Token endpoint: %s/token", cfg.Server.BaseURL)
-	log.Printf("📱 Device authorization: %s/device_authorization", cfg.Server.BaseURL)
-	log.Printf("🔧 Client registration: %s/register", cfg.Server.BaseURL)
-	log.Printf("🏥 Health check: %s/health", cfg.Server.BaseURL)
+	log.Printf("🌐 OAuth2 server starting on port %d", configuration.Server.Port)
+	log.Printf("🔗 Authorization endpoint: %s/auth", configuration.Server.BaseURL)
+	log.Printf("🎫 Token endpoint: %s/oauth/token", configuration.Server.BaseURL)
+	log.Printf("📱 Device authorization: %s/device/authorize", configuration.Server.BaseURL)
+	log.Printf("🔧 Client registration: %s/register", configuration.Server.BaseURL)
+	log.Printf("🏥 Health check: %s/health", configuration.Server.BaseURL)
 
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.Server.Port), nil); err != nil {
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", configuration.Server.Port), nil); err != nil {
 		log.Fatalf("❌ Server failed to start: %v", err)
 	}
 }
 
-func initializeStores() {
-	clientStore = store.NewClientStore()
-	authCodeStore = store.NewAuthCodeStore()
+func initializeClients() error {
+	// Load clients from config if any
+	if len(configuration.Clients) > 0 {
 
-	// Token store with configurable expiry
-	expiryConfig := map[string]time.Duration{
-		"access_token":       time.Duration(cfg.Security.TokenExpirySeconds) * time.Second,
-		"refresh_token":      time.Duration(cfg.Security.RefreshTokenExpirySeconds) * time.Second,
-		"authorization_code": time.Duration(cfg.Security.AuthorizationCodeExpirySeconds) * time.Second,
+		// Register each client in the memory store
+		for _, client := range configuration.Clients {
+			hashedSecret, err := utils.HashSecret(client.Secret)
+			if err != nil {
+				return fmt.Errorf("failed to hash secret for client %s: %w", client.ID, err)
+			}
+
+			log.Println("Registering client:", client.ID)
+
+			if len(client.Audience) == 0 {
+				client.Audience = []string{client.ID}
+			}
+
+			newClient := &fosite.DefaultClient{
+				ID:            client.ID,
+				Secret:        hashedSecret,
+				RedirectURIs:  client.RedirectURIs,
+				GrantTypes:    client.GrantTypes,
+				ResponseTypes: client.ResponseTypes,
+				Scopes:        client.Scopes,
+				Audience:      client.Audience,
+				Public:        client.Public,
+			}
+
+			memoryStore.Clients[client.ID] = newClient
+		}
 	}
-	tokenStore = store.NewTokenStore(cfg.Server.BaseURL, expiryConfig)
+
+	log.Printf("✅ Stores initialized with %d clients", len(memoryStore.Clients))
+	return nil
+
+}
+
+// Add this function to initialize users
+func initializeUsers() error {
+
+	// Load users from configuration
+	if len(configuration.Users) > 0 {
+		for _, user := range configuration.Users {
+
+			// Make a copy of the user to avoid issues with loop variables
+			newUser := storage.MemoryUserRelation{
+				Username: user.Username,
+				Password: user.Password,
+			}
+
+			memoryStore.Users[user.ID] = newUser
+
+			log.Printf("✅ Registered user: %s (%s)", user.Username, user.ID)
+		}
+	}
+
+	log.Printf("✅ User store initialized with %d users", len(memoryStore.Users))
+	return nil
 }
 
 func initializeOAuth2Provider() error {
@@ -160,727 +215,154 @@ func initializeOAuth2Provider() error {
 		return fmt.Errorf("failed to generate RSA key: %w", err)
 	}
 
-	// Create memory store for non-client data (sessions, codes, etc.)
-	memoryStore := storage.NewMemoryStore()
-
-	// Create a composite store that uses our clientStore for clients
-	// and memoryStore for everything else
-	compositeStore := &CompositeStore{
-		ClientStore: clientStore,
-		MemoryStore: memoryStore,
-	}
-
-	// Configure OAuth2 provider
+	// Configure OAuth2 provider with minimal settings
 	config := &fosite.Config{
-		AccessTokenLifespan:      time.Hour,
-		RefreshTokenLifespan:     time.Hour * 24 * 30,
-		AuthorizeCodeLifespan:    time.Minute * 10,
-		GlobalSecret:             []byte(cfg.Security.JWTSecret + "-padded-to-32-bytes-for-hmac-security"), // Ensure adequate length
-		AccessTokenIssuer:        cfg.Server.BaseURL,
-		ScopeStrategy:            fosite.HierarchicScopeStrategy,
-		AudienceMatchingStrategy: fosite.DefaultAudienceMatchingStrategy,
+		AccessTokenLifespan:   time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
+		RefreshTokenLifespan:  time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
+		AuthorizeCodeLifespan: time.Duration(configuration.Security.AuthorizationCodeExpirySeconds) * time.Second,
+		// Add some important configuration that might be missing
+		ScopeStrategy:              fosite.HierarchicScopeStrategy,
+		AudienceMatchingStrategy:   fosite.DefaultAudienceMatchingStrategy,
+		SendDebugMessagesToClients: true, // Enable debug messages for development
+		// Set the HMAC secret from our configuration
+		GlobalSecret: []byte(configuration.Security.JWTSecret),
+		// Set the ID token issuer
+		IDTokenIssuer: configuration.Server.BaseURL,
+		// RFC 8693
+		TokenExchangeEnabled: true,
+		TokenExchangeTokenTypes: []string{
+			"urn:ietf:params:oauth:token-type:access_token",
+			"urn:ietf:params:oauth:token-type:refresh_token",
+		},
 	}
 
-	// Build OAuth2 provider with all grant types
-	oauth2Provider = compose.Compose(
+	// Setup the RFC8693 handler...
+	AccessTokenStrategy = compose.NewOAuth2HMACStrategy(config)
+	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
+
+	// Create a simple OAuth2 provider without complex strategies
+	oauth2Provider = compose.ComposeAllEnabled(
 		config,
-		compositeStore,
-		&compose.CommonStrategy{
-			CoreStrategy: compose.NewOAuth2HMACStrategy(config),
-			OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(
-				func(ctx context.Context) (interface{}, error) {
-					return privateKey, nil
-				},
-				config,
-			),
-		},
-		compose.OAuth2AuthorizeExplicitFactory,
-		compose.OAuth2ClientCredentialsGrantFactory,
-		compose.OAuth2RefreshTokenGrantFactory,
-		compose.OpenIDConnectExplicitFactory,
-		compose.OAuth2TokenIntrospectionFactory,
-		compose.OAuth2TokenRevocationFactory,
+		memoryStore,
+		privateKey,
 	)
 
+	handler := &rfc8693.Handler{
+		Config:               config,
+		AccessTokenStrategy:  AccessTokenStrategy,
+		RefreshTokenStrategy: RefreshTokenStrategy,
+		AccessTokenStorage:   memoryStore,
+		RefreshTokenStorage:  memoryStore,
+	}
+
+	config.TokenEndpointHandlers.Append(handler)
+
+	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil
 }
 
-func initializeFlows() {
-	// Initialize token handlers
-	tokenHandlers = handlers.NewTokenHandlers(clientStore, tokenStore, cfg)
+func initializeHandlers() {
+	// Initialize OAuth2 handlers
 
-	authCodeFlow = flows.NewAuthorizationCodeFlow(oauth2Provider, cfg)
+	registrationHandler = handlers.NewRegistrationHandler(memoryStore)
+	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
+	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
+	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
+	statusHandler = handlers.NewStatusHandler(configuration)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log)
+	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
+	jwksHandler = handlers.NewJWKSHandler()
+	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
+	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration)
+	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log)
+	claimsHandler = handlers.NewClaimsHandler(configuration, log)
 
-	clientCredsFlow = flows.NewClientCredentialsFlow(clientStore, tokenStore, cfg)
-	refreshTokenFlow = flows.NewRefreshTokenFlow(clientStore, tokenStore, cfg)
-	tokenExchangeFlow = flows.NewTokenExchangeFlow(clientStore, tokenStore, cfg)
-	deviceCodeFlow = flows.NewDeviceCodeFlow(clientStore, tokenStore, cfg)
+	log.Printf("✅ OAuth2 handlers initialized")
+}
 
-	// Start cleanup timer for expired device codes
-	deviceCodeFlow.StartCleanupTimer()
+func loadTemplates() error {
+	templatesDir := "templates"
 
-	// Initialize registration handlers
-	registrationHandlers = handlers.NewRegistrationHandlers(clientStore, cfg)
+	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
+		return fmt.Errorf("templates directory not found: %s", templatesDir)
+	}
 
-	log.Printf("✅ OAuth2 flows initialized")
+	funcMap := template.FuncMap{
+		"split": strings.Split,
+	}
+
+	var err error
+	templates = template.New("").Funcs(funcMap)
+	templates, err = templates.ParseGlob(filepath.Join(templatesDir, "*.html"))
+	if err != nil {
+		return fmt.Errorf("failed to parse templates: %w", err)
+	}
+
+	log.Printf("✅ Templates loaded")
+
+	return nil
 }
 
 func setupRoutes() {
-	// OAuth2 endpoints with proxy awareness
-	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(wellKnownHandler))
-	http.HandleFunc("/.well-known/openid-configuration", proxyAwareMiddleware(wellKnownHandler))
-	http.HandleFunc("/.well-known/jwks.json", proxyAwareMiddleware(jwksHandler))
-	http.HandleFunc("/auth", proxyAwareMiddleware(authHandler))
-	http.HandleFunc("/token", proxyAwareMiddleware(tokenHandler))
-	http.HandleFunc("/userinfo", proxyAwareMiddleware(userInfoHandler))
-	http.HandleFunc("/callback", proxyAwareMiddleware(callbackHandler))
-	http.HandleFunc("/revoke", proxyAwareMiddleware(tokenHandlers.HandleTokenRevocation))
-	http.HandleFunc("/introspect", proxyAwareMiddleware(tokenHandlers.HandleTokenIntrospection))
+	// OAuth2 endpoints - use fosite's built-in handlers
+	http.HandleFunc("/auth", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
+	http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
+	http.HandleFunc("/oauth/token", proxyAwareMiddleware(tokenHandler.ServeHTTP))
+	http.HandleFunc("/oauth/introspect", proxyAwareMiddleware(introspectionHandler.ServeHTTP))
+	http.HandleFunc("/oauth/revoke", proxyAwareMiddleware(revokeHandler.ServeHTTP))
 
-	// Device flow endpoints
-	http.HandleFunc("/device_authorization", proxyAwareMiddleware(deviceAuthHandler))
-	http.HandleFunc("/device", proxyAwareMiddleware(deviceHandler))
+	// Device flow endpoints - use our custom device authorization but store in fosite-compatible format
+	http.HandleFunc("/device/authorize", proxyAwareMiddleware(deviceCodeHandler.HandleDeviceAuthorization))
+	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
+	http.HandleFunc("/device/verify", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
+	http.HandleFunc("/device/consent", proxyAwareMiddleware(deviceCodeHandler.HandleConsent))
 
 	// Registration endpoints
-	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler))
-	http.HandleFunc("/register/", proxyAwareMiddleware(registrationConfigHandler))
+	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler.HandleRegistration))
 
-	// Token management endpointsf Health and utility endpoints
-	http.HandleFunc("/health", proxyAwareMiddleware(healthHandler))
-	http.HandleFunc("/", proxyAwareMiddleware(homeHandler))
+	// Discovery endpoints
+	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(oauth2DiscoveryHandler.ServeHTTP))
+	http.HandleFunc("/.well-known/openid-configuration", proxyAwareMiddleware(discoveryHandler.ServeHTTP))
+	http.HandleFunc("/.well-known/jwks.json", proxyAwareMiddleware(jwksHandler.ServeHTTP))
 
-	// General API endpoints (protected with authentication)
-	http.HandleFunc("/api/", proxyAwareMiddleware(apiHandler))
-
-	// Use the existing tokenHandlers instance initialized in initializeFlows()
-	http.HandleFunc("/token/stats", proxyAwareMiddleware(tokenHandlers.HandleTokenStats))
-
-	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		statsHandler := handlers.StatsHandler{
-			TokenStore:  tokenStore,
-			ClientStore: clientStore,
-			Config:      cfg,
+	// Utility endpoints
+	http.HandleFunc("/userinfo", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		userinfoHandler := handlers.UserInfoHandler{
+			Configuration:  configuration,
+			OAuth2Provider: oauth2Provider,
 		}
-		statsHandler.ServeHTTP(w, r)
+		userinfoHandler.ServeHTTP(w, r)
 	}))
 
-}
-
-// Helper wrapper functions for your existing handlers
-func authHandler(w http.ResponseWriter, r *http.Request) {
-	authCodeFlow.HandleAuthorization(w, r)
-}
-
-func callbackHandler(w http.ResponseWriter, r *http.Request) {
-	authCodeFlow.HandleCallback(w, r)
-}
-
-func deviceAuthHandler(w http.ResponseWriter, r *http.Request) {
-	deviceCodeFlow.HandleAuthorization(w, r)
-}
-
-func registrationHandler(w http.ResponseWriter, r *http.Request) {
-	registrationHandlers.HandleRegistration(w, r)
-}
-
-func registrationConfigHandler(w http.ResponseWriter, r *http.Request) {
-	registrationHandlers.HandleClientConfiguration(w, r)
-}
-
-// Token handler that routes to appropriate flow
-func tokenHandler(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		utils.WriteInvalidRequestError(w, "Failed to parse request")
-		return
-	}
-
-	grantType := r.FormValue("grant_type")
-	log.Printf("🔄 Processing token request with grant_type: %s", grantType)
-
-	switch grantType {
-	case "client_credentials":
-		tokenHandlers.HandleClientCredentials(w, r)
-	case "refresh_token":
-		tokenHandlers.HandleRefreshToken(w, r)
-	case "urn:ietf:params:oauth:grant-type:token-exchange":
-		tokenHandlers.HandleTokenExchange(w, r)
-	case "urn:ietf:params:oauth:grant-type:device_code":
-		deviceCodeFlow.HandleToken(w, r)
-	default:
-		// Handle standard grant types with Fosite
-		handleStandardTokenRequest(w, r)
-	}
-}
-
-func handleStandardTokenRequest(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	accessRequest, err := oauth2Provider.NewAccessRequest(ctx, r, &fosite.DefaultSession{})
-	if err != nil {
-		log.Printf("❌ Error creating access request: %v", err)
-		oauth2Provider.WriteAccessError(ctx, w, accessRequest, err)
-		return
-	}
-
-	response, err := oauth2Provider.NewAccessResponse(ctx, accessRequest)
-	if err != nil {
-		log.Printf("❌ Error creating access response: %v", err)
-		oauth2Provider.WriteAccessError(ctx, w, accessRequest, err)
-		return
-	}
-
-	oauth2Provider.WriteAccessResponse(ctx, w, accessRequest, response)
-}
-
-// Device handler for user verification
-func deviceHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		showDeviceVerificationForm(w, r)
-		return
-	}
-
-	if r.Method == "POST" {
-		handleDeviceVerification(w, r)
-		return
-	}
-
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-}
-
-func showDeviceVerificationForm(w http.ResponseWriter, r *http.Request) {
-	userCode := r.URL.Query().Get("user_code")
-	errorMsg := r.URL.Query().Get("error")
-
-	html := `<!DOCTYPE html>
-<html>
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Device Verification</title>
-	<style>
-		body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
-		.form-group { margin-bottom: 15px; }
-		label { display: block; margin-bottom: 5px; font-weight: bold; }
-		input[type="text"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-		button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-		button:hover { background-color: #0056b3; }
-		.error { color: red; margin-bottom: 15px; }
-		.info { color: #666; margin-bottom: 15px; }
-	</style>
-</head>
-<body>
-	<h2>📱 Device Verification</h2>
-	<div class="info">Please enter the user code displayed on your device and authenticate:</div>`
-
-	if errorMsg != "" {
-		html += fmt.Sprintf(`<div class="error">%s</div>`, errorMsg)
-	}
-
-	html += `
-	<form method="POST">
-		<div class="form-group">
-			<label for="user_code">User Code:</label>
-			<input type="text" id="user_code" name="user_code" value="` + userCode + `" placeholder="Enter user code" required>
-		</div>
-		<div class="form-group">
-			<label for="username">Username:</label>
-			<input type="text" id="username" name="username" placeholder="john.doe" required>
-		</div>
-		<div class="form-group">
-			<label for="password">Password:</label>
-			<input type="password" id="password" name="password" placeholder="password123" required>
-		</div>
-		<button type="submit">Authorize Device</button>
-	</form>
-	
-	<p><a href="/">← Back to Home</a></p>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
-}
-
-func handleDeviceVerification(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		log.Printf("Failed to parse form: %v", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	userCode := r.FormValue("user_code")
-	username := r.FormValue("username")
-	password := r.FormValue("password")
-
-	// Normalize user code - trim, uppercase, and ensure consistent formatting
-	userCode = strings.TrimSpace(strings.ToUpper(userCode))
-
-	// Validate user code format
-	if err := utils.ValidateUserCode(userCode); err != nil {
-		http.Redirect(w, r, "/device?error=Invalid user code format", http.StatusFound)
-		return
-	}
-
-	// Ensure user code has the hyphen format for device flow lookup
-	if len(userCode) == 8 && !strings.Contains(userCode, "-") {
-		userCode = fmt.Sprintf("%s-%s", userCode[:4], userCode[4:])
-	}
-
-	// Authenticate user against configured users
-	user := authenticateUserFromConfig(username, password)
-	if user == nil {
-		http.Redirect(w, r, "/device?error=Invalid username or password", http.StatusFound)
-		return
-	}
-
-	// Authorize the device
-	if deviceCodeFlow.AuthorizeDevice(userCode, user.ID) {
-		showDeviceVerificationSuccess(w, r)
-	} else {
-		http.Redirect(w, r, "/device?error=Invalid or expired user code", http.StatusFound)
-	}
-}
-
-// Add helper function for user authentication
-func authenticateUserFromConfig(username, password string) *config.User {
-	if user, found := cfg.GetUserByUsername(username); found {
-		// In a real implementation, you'd hash and compare passwords properly
-		if user.Password == password {
-			return user
+	// Stats endpoint
+	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		statisticsHandler := handlers.StatisticsHandler{
+			MemoryStore: memoryStore,
 		}
-	}
-	return nil
-}
+		statisticsHandler.ServeHTTP(w, r)
+	}))
 
-func showDeviceVerificationSuccess(w http.ResponseWriter, r *http.Request) {
-	html := `<!DOCTYPE html>
-<html>
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Device Authorized</title>
-	<style>
-		body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
-		.success { color: green; font-size: 24px; margin-bottom: 20px; }
-		.info { color: #666; margin-bottom: 15px; }
-	</style>
-</head>
-<body>
-	<div class="success">✅ Device Successfully Authorized!</div>
-	<div class="info">You can now return to your device. The application should receive the access token shortly.</div>
-	<p><a href="/">← Back to Home</a></p>
-</body>
-</html>`
+	// Health endpoint
+	http.HandleFunc("/health", proxyAwareMiddleware(healthHandler.ServeHTTP))
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
-}
+	// Claims display endpoints
+	http.HandleFunc("/claims", proxyAwareMiddleware(claimsHandler.ServeHTTP))
+	http.HandleFunc("/callback", proxyAwareMiddleware(claimsHandler.HandleCallback))
 
-// Enhanced userinfo handler with proper user lookup
-func userInfoHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract bearer token
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
-		return
-	}
-
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
-		return
-	}
-
-	token := parts[1]
-
-	// Validate the access token (simplified version)
-	if err := auth.ValidateAccessToken(token); err != nil {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		return
-	}
-
-	// For now, return the first user's info or a default user
-	// In a real implementation, you'd extract user ID from the token
-	var userInfo map[string]interface{}
-	if len(cfg.Users) > 0 {
-		user := cfg.Users[0]
-		userInfo = map[string]interface{}{
-			"sub":      user.ID,
-			"name":     user.Name,
-			"email":    user.Email,
-			"username": user.Username,
+	// Demo page
+	http.HandleFunc("/", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmpl, err := template.ParseFiles("templates/demo.html")
+		if err != nil {
+			http.Error(w, "Template error", http.StatusInternalServerError)
+			return
 		}
-	} else {
-		// Fallback if no users configured
-		userInfo = map[string]interface{}{
-			"sub":   "default-user",
-			"name":  "Default User",
-			"email": "default@example.com",
-		}
-	}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		tmpl.Execute(w, nil)
+	}))
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(userInfo)
-}
+	http.HandleFunc("/status", proxyAwareMiddleware(statusHandler.ServeHTTP))
 
-// Well-known handler
-func wellKnownHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-
-	// Get the effective base URL (proxy-aware)
-	baseURL := cfg.GetEffectiveBaseURL(r)
-
-	wellKnown := map[string]interface{}{
-		// OAuth2 Authorization Server Metadata (RFC 8414)
-		"issuer":                 baseURL,
-		"authorization_endpoint": baseURL + "/auth",
-		"token_endpoint":         baseURL + "/token",
-		"userinfo_endpoint":      baseURL + "/userinfo",
-		"jwks_uri":               baseURL + "/.well-known/jwks.json",
-		"registration_endpoint":  baseURL + "/register",
-		"revocation_endpoint":    baseURL + "/revoke",
-		"introspection_endpoint": baseURL + "/introspect",
-
-		// Device Flow (RFC 8628)
-		"device_authorization_endpoint":    baseURL + "/device_authorization",
-		"device_verification_uri":          baseURL + "/device",
-		"device_verification_uri_complete": baseURL + "/device?user_code={user_code}",
-
-		// Supported scopes
-		"scopes_supported": []string{
-			"openid", "profile", "email", "offline_access",
-			"api:read", "api:write", "admin",
-		},
-
-		// Supported response types
-		"response_types_supported": []string{
-			"code", "token", "id_token",
-			"code token", "code id_token", "token id_token",
-			"code token id_token",
-		},
-
-		// Supported grant types
-		"grant_types_supported": []string{
-			"authorization_code",
-			"client_credentials",
-			"refresh_token",
-			"urn:ietf:params:oauth:grant-type:device_code",
-			"urn:ietf:params:oauth:grant-type:token-exchange",
-		},
-
-		// Token endpoint authentication methods
-		"token_endpoint_auth_methods_supported": []string{
-			"client_secret_basic",
-			"client_secret_post",
-			"private_key_jwt",
-			"client_secret_jwt",
-			"none",
-		},
-
-		// Token endpoint signing algorithms
-		"token_endpoint_auth_signing_alg_values_supported": []string{
-			"RS256", "HS256",
-		},
-
-		// PKCE support
-		"code_challenge_methods_supported": []string{
-			"plain", "S256",
-		},
-
-		// OpenID Connect specific metadata
-		"subject_types_supported": []string{
-			"public", "pairwise",
-		},
-
-		"id_token_signing_alg_values_supported": []string{
-			"RS256", "HS256",
-		},
-
-		"id_token_encryption_alg_values_supported": []string{
-			"RSA1_5", "RSA-OAEP", "A128KW", "A192KW", "A256KW",
-		},
-
-		"id_token_encryption_enc_values_supported": []string{
-			"A128CBC-HS256", "A192CBC-HS384", "A256CBC-HS512",
-			"A128GCM", "A192GCM", "A256GCM",
-		},
-
-		"userinfo_signing_alg_values_supported": []string{
-			"RS256", "HS256",
-		},
-
-		"request_object_signing_alg_values_supported": []string{
-			"RS256", "HS256",
-		},
-
-		"response_modes_supported": []string{
-			"query", "fragment", "form_post",
-		},
-
-		"claims_supported": []string{
-			"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
-			"name", "given_name", "family_name", "middle_name", "nickname",
-			"preferred_username", "profile", "picture", "website",
-			"email", "email_verified", "gender", "birthdate", "zoneinfo",
-			"locale", "phone_number", "phone_number_verified", "address",
-			"updated_at",
-		},
-
-		"claims_parameter_supported":            true,
-		"request_parameter_supported":           true,
-		"request_uri_parameter_supported":       false,
-		"require_request_uri_registration":      false,
-		"claims_locales_supported":              []string{"en-US", "en-GB", "de-DE", "fr-FR"},
-		"ui_locales_supported":                  []string{"en-US", "en-GB", "de-DE", "fr-FR"},
-		"display_values_supported":              []string{"page", "popup", "touch", "wap"},
-		"acr_values_supported":                  []string{"0", "1", "2"},
-		"frontchannel_logout_supported":         true,
-		"frontchannel_logout_session_supported": true,
-		"backchannel_logout_supported":          false,
-		"backchannel_logout_session_supported":  false,
-
-		// Additional OAuth2 features
-		"introspection_endpoint_auth_methods_supported": []string{
-			"client_secret_basic", "client_secret_post",
-		},
-
-		"revocation_endpoint_auth_methods_supported": []string{
-			"client_secret_basic", "client_secret_post",
-		},
-
-		// Token Exchange (RFC 8693)
-		"token_exchange_grant_types_supported": []string{
-			"urn:ietf:params:oauth:grant-type:token-exchange",
-		},
-
-		"op_policy_uri": baseURL + "/policy",
-		"op_tos_uri":    baseURL + "/terms",
-	}
-
-	json.NewEncoder(w).Encode(wellKnown)
-}
-
-// JWKS handler
-func jwksHandler(w http.ResponseWriter, r *http.Request) {
-	jwks := map[string]interface{}{
-		"keys": []map[string]interface{}{
-			{
-				"kty": "RSA",
-				"use": "sig",
-				"kid": "oauth2-server-key",
-				"alg": "RS256",
-				"n":   "example-modulus",
-				"e":   "AQAB",
-			},
-		},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	json.NewEncoder(w).Encode(jwks)
-}
-
-// Health handler
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	response := map[string]interface{}{
-		"status":    "healthy",
-		"timestamp": time.Now().Unix(),
-		"version":   "1.0.0",
-		"base_url":  cfg.Server.BaseURL,
-		"clients":   len(clientStore.ListClients()),
-	}
-
-	json.NewEncoder(w).Encode(response)
-}
-
-// Home handler
-func homeHandler(w http.ResponseWriter, r *http.Request) {
-	// Generate user list from configuration
-	var userListHTML strings.Builder
-	if len(cfg.Users) > 0 {
-		userListHTML.WriteString("<h3>👥 Available Test Users:</h3><ul>")
-		for _, user := range cfg.Users {
-			userListHTML.WriteString(fmt.Sprintf(
-				"<li><strong>%s</strong> (%s) - Password: <code>%s</code></li>",
-				user.Username, user.Name, user.Password))
-		}
-		userListHTML.WriteString("</ul>")
-	} else {
-		userListHTML.WriteString("<p><em>No test users configured in YAML</em></p>")
-	}
-
-	// Generate client list from configuration
-	var clientListHTML strings.Builder
-	if len(cfg.Clients) > 0 {
-		clientListHTML.WriteString("<h3>🔑 Configured Clients:</h3><ul>")
-		for _, client := range cfg.Clients {
-			clientListHTML.WriteString(fmt.Sprintf(
-				"<li><strong>%s</strong> - %s<br><small>Grant Types: %s</small></li>",
-				client.ID, client.Name, strings.Join(client.GrantTypes, ", ")))
-		}
-		clientListHTML.WriteString("</ul>")
-	} else {
-		clientListHTML.WriteString("<p><em>No clients configured in YAML</em></p>")
-	}
-
-	homeHTML := fmt.Sprintf(`
-<!DOCTYPE html>
-<html>
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>OAuth2 Server</title>
-	<style>
-		body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
-		.container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-		h1 { color: #333; text-align: center; margin-bottom: 30px; }
-		.section { margin-bottom: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 6px; }
-		.btn { display: inline-block; padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; }
-		.btn:hover { background-color: #0056b3; }
-		.endpoint { font-family: monospace; background-color: #e9ecef; padding: 8px; border-radius: 3px; }
-		ul { margin: 10px 0; }
-		li { margin: 8px 0; }
-		code { background-color: #f1f3f4; padding: 2px 4px; border-radius: 2px; }
-	</style>
-</head>
-<body>
-	<div class="container">
-		<h1>🚀 OAuth2 Authorization Server</h1>
-		
-		<div class="section">
-			<h2>📋 Server Information</h2>
-			<p><strong>Base URL:</strong> %s</p>
-			<p><strong>Version:</strong> Development</p>
-			<p><strong>Status:</strong> ✅ Running</p>
-		</div>
-
-		<div class="section">
-			<h3>📚 API Endpoints</h3>
-			<ul>
-				<li><span class="endpoint">GET /.well-known/oauth-authorization-server</span> - OAuth2 Discovery</li>
-				<li><span class="endpoint">GET /.well-known/openid-configuration</span> - OIDC Discovery</li>
-				<li><span class="endpoint">GET /.well-known/jwks.json</span> - JWKS</li>
-				<li><span class="endpoint">GET /health</span> - Health</li>
-				<li><span class="endpoint">GET /stats</span> - Server Stats</li>
-			</ul>
-		</div>
-
-		<!-- Fancy Server Stats Section -->
-		<div class="stats-section" style="margin-top:30px;">
-		  <h2 style="text-align:center;">🚦 Server Stats</h2>
-		  <div id="stats-cards" style="display:flex; gap:24px; justify-content:center; flex-wrap:wrap; margin-top:20px;">
-		    <div class="stat-card" id="stat-tokens">
-		      <div class="stat-icon">🔑</div>
-		      <div class="stat-label">Tokens</div>
-		      <div class="stat-value" id="stats-tokens-value">...</div>
-		    </div>
-		    <div class="stat-card" id="stat-clients">
-		      <div class="stat-icon">🧩</div>
-		      <div class="stat-label">Clients</div>
-		      <div class="stat-value" id="stats-clients-value">...</div>
-		    </div>
-		    <div class="stat-card" id="stat-users">
-		      <div class="stat-icon">👤</div>
-		      <div class="stat-label">Users</div>
-		      <div class="stat-value" id="stats-users-value">...</div>
-		    </div>
-		  </div>
-		</div>
-		<style>
-		  .stat-card {
-		    background: #fff;
-		    border-radius: 12px;
-		    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-		    padding: 24px 32px;
-		    min-width: 140px;
-		    text-align: center;
-		    transition: box-shadow 0.2s;
-		  }
-		  .stat-card:hover {
-		    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
-		  }
-		  .stat-icon {
-		    font-size: 2.2em;
-		    margin-bottom: 8px;
-		  }
-		  .stat-label {
-		    font-size: 1.1em;
-		    color: #555;
-		    margin-bottom: 6px;
-		    font-weight: 500;
-		  }
-		  .stat-value {
-		    font-size: 2em;
-		    font-weight: bold;
-		    color: #007bff;
-		  }
-		</style>
-		<script>
-		function loadStats() {
-		  fetch('/stats')
-		    .then(r => r.json())
-		    .then(stats => {
-		      // Use the correct attribute for tokens
-		      document.getElementById('stats-tokens-value').innerText =
-		        stats.tokens?.tokens?.total ?? (typeof stats.tokens.tokens.total === "number" ? stats.tokens.tokens.total : "—");
-		      document.getElementById('stats-clients-value').innerText =
-		        stats.clients?.total ?? (typeof stats.clients === "number" ? stats.clients : "—");
-		      document.getElementById('stats-users-value').innerText =
-		        stats.users?.total ?? (typeof stats.users === "number" ? stats.users : stats.users ?? "—");
-		    })
-		    .catch(() => {
-		      document.getElementById('stats-tokens-value').innerText = '—';
-		      document.getElementById('stats-clients-value').innerText = '—';
-		      document.getElementById('stats-users-value').innerText = '—';
-		    });
-		}
-		document.addEventListener('DOMContentLoaded', loadStats);
-		</script>
-	</div>
-</body>
-</html>`, cfg.Server.BaseURL)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(homeHTML))
-}
-
-// API handler with authentication
-func apiHandler(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Access token required", http.StatusUnauthorized)
-		return
-	}
-
-	token, err := auth.ExtractBearerToken(authHeader)
-	if err != nil {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		return
-	}
-
-	if err := auth.ValidateAccessToken(token); err != nil {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		return
-	}
-
-	response := map[string]interface{}{
-		"message": "Hello from protected API!",
-		"token":   token[:20] + "...",
-		"time":    time.Now().Unix(),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	log.Printf("✅ Routes set up successfully")
 }
 
 // Middleware for proxy awareness
@@ -928,12 +410,12 @@ func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 
 		// Update the config's BaseURL for this request if needed
 		if r.URL.Scheme != "" && r.Host != "" {
-			originalBaseURL := cfg.Server.BaseURL
-			cfg.Server.BaseURL = r.URL.Scheme + "://" + r.Host
+			originalBaseURL := configuration.Server.BaseURL
+			configuration.Server.BaseURL = r.URL.Scheme + "://" + r.Host
 
 			// Restore original BaseURL after request
 			defer func() {
-				cfg.Server.BaseURL = originalBaseURL
+				configuration.Server.BaseURL = originalBaseURL
 			}()
 		}
 
