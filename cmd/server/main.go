@@ -17,6 +17,7 @@ import (
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
 	"github.com/ory/fosite/handler/oauth2"
+	"github.com/ory/fosite/handler/rfc8693"
 	"github.com/ory/fosite/storage"
 
 	"github.com/sirupsen/logrus"
@@ -24,7 +25,6 @@ import (
 	"oauth2-server/internal/handlers"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
-	"oauth2-server/rfc8693"
 )
 
 // Create a logger instance

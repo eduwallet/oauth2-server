@@ -38,8 +38,8 @@ cloud.google.com/go/storage v1.14.0/go.mod h1:GrKmX003DSIwi9o29oFT7YDnHYwZoctc3f
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
-github.com/HarryKodden/fosite v0.0.0-20250805080439-60d35288beef h1:zdP5fATakk3a4luxQJdlYCoTpjM1NFfriRpC8WikQ04=
-github.com/HarryKodden/fosite v0.0.0-20250805080439-60d35288beef/go.mod h1:kMVCL1lPY/UlAuu9QtqQ7GVM0eUZzQPEGdKAR6jb+1g=
+github.com/HarryKodden/fosite v0.0.0-20250815115621-20549a20dc22 h1:wuFHiJEia/YqpUrpui6bg8RqQFFY6BsP3uOUifdJs7Q=
+github.com/HarryKodden/fosite v0.0.0-20250815115621-20549a20dc22/go.mod h1:kMVCL1lPY/UlAuu9QtqQ7GVM0eUZzQPEGdKAR6jb+1g=
 github.com/Masterminds/semver/v3 v3.1.1/go.mod h1:VPu/7SZ7ePZ3QOrcuXROw5FAcLl4a0cBrbBpGY/8hQs=
 github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 h1:DklsrG3dyBCFEj5IhUbnKptjxatkF07cF2ak3yi77so=
 github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2/go.mod h1:WaHUgvxTVq04UNunO+XhnAqY/wQc+bxr74GqbsZ/Jqw=
