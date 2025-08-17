@@ -67,9 +67,9 @@ func main() {
 
 	var err error
 
-	err = godotenv.Load()
+	_ = godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		log.Printf("No .env file loaded")
 	}
 
 	// Load configuration from YAML
