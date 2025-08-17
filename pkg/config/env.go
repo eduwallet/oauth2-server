@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 func (c *Config) LoadFromEnv() {
 	// Server configuration overrides
 	if baseURL := os.Getenv("PUBLIC_BASE_URL"); baseURL != "" {
+		fmt.Println("Using PUBLIC_BASE_URL from environment:", baseURL)
 		c.BaseURL = baseURL
 		c.Server.BaseURL = baseURL
 		if c.YAMLConfig != nil {

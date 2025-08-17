@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
 	"github.com/ory/fosite/handler/oauth2"
@@ -63,8 +65,14 @@ var (
 func main() {
 	log.Println("🚀 Starting OAuth2 Server...")
 
-	// Load configuration from YAML
 	var err error
+
+	err = godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	// Load configuration from YAML
 	configuration, err = config.Load()
 	if err != nil {
 		log.Fatalf("❌ Failed to load configuration: %v", err)

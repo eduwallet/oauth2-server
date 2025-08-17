@@ -1,7 +1,7 @@
 # OAuth2 Server Configuration
 
 server:
-  base_url: "http://localhost:8080"
+  base_url: ""
   port: 8080
   host: "localhost"
   read_timeout: 30
@@ -19,7 +19,6 @@ security:
 
 proxy:
   trust_headers: true
-  public_base_url: "" # Leave empty to auto-detect
   force_https: false
   trusted_proxies:
   - "10.0.0.0/8"
