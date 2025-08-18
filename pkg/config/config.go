@@ -106,9 +106,8 @@ type YAMLConfig struct {
 
 // ProxyConfig holds proxy-related configuration
 type ProxyConfig struct {
-	TrustHeaders  bool   `yaml:"trust_headers"`
-	PublicBaseURL string `yaml:"public_base_url"`
-	ForceHTTPS    bool   `yaml:"force_https"`
+	TrustHeaders bool `yaml:"trust_headers"`
+	ForceHTTPS   bool `yaml:"force_https"`
 }
 
 // ValidateRedirectURI validates a redirect URI against this client's registered URIs
@@ -172,7 +171,7 @@ type User = UserConfig
 
 // GetEffectiveBaseURL returns the effective base URL considering proxy headers
 func (c *Config) GetEffectiveBaseURL(r *http.Request) string {
-	return utils.GetEffectiveBaseURL(c.PublicBaseURL, r)
+	return utils.GetEffectiveBaseURL(c.Server.BaseURL, r)
 }
 
 // GetClientByID returns a client by ID

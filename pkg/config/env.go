@@ -48,7 +48,7 @@ func (c *Config) LoadFromEnv() {
 	if publicBaseURL := os.Getenv("PUBLIC_BASE_URL"); publicBaseURL != "" {
 		c.PublicBaseURL = publicBaseURL
 		if c.YAMLConfig != nil && c.YAMLConfig.Proxy != nil {
-			c.YAMLConfig.Proxy.PublicBaseURL = publicBaseURL
+			c.YAMLConfig.Server.BaseURL = publicBaseURL
 		}
 	}
 
