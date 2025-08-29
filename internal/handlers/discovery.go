@@ -29,13 +29,13 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	wellKnown := map[string]interface{}{
 		// OAuth2 Authorization Server Metadata (RFC 8414)
 		"issuer":                 baseURL,
-		"authorization_endpoint": baseURL + "/auth",
-		"token_endpoint":         baseURL + "/token",
-		"userinfo_endpoint":      baseURL + "/userinfo",
+		"authorization_endpoint": baseURL + "/oauth/authorize",
+		"token_endpoint":         baseURL + "/oauth/token",
 		"jwks_uri":               baseURL + "/.well-known/jwks.json",
 		"registration_endpoint":  baseURL + "/register",
-		"revocation_endpoint":    baseURL + "/revoke",
-		"introspection_endpoint": baseURL + "/introspect",
+		"revocation_endpoint":    baseURL + "/oauth/revoke",
+		"introspection_endpoint": baseURL + "/oauth/introspect",
+		"userinfo_endpoint":      baseURL + "/userinfo",
 
 		// Device Flow (RFC 8628)
 		"device_authorization_endpoint":    baseURL + "/device_authorization",
