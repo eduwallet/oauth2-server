@@ -1,6 +1,6 @@
 module oauth2-server
 
-go 1.22
+go 1.25
 
 toolchain go1.24.5
 

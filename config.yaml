@@ -64,6 +64,7 @@ clients:
   redirect_uris:
   - "/callback"
   - "/claims"
+  - "https://oauth2-server.docker.orb.local/callback"
   grant_types:
   - "authorization_code"
   - "refresh_token"

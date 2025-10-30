@@ -296,6 +296,11 @@ test-script:
 	rm -f server-test.log; \
 	exit $$result
 
+# Test coverage
+test-coverage:
+	go test -race -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
 # Help target
 help:
 	@echo "Available targets:"
@@ -309,6 +314,7 @@ help:
 	@echo "  test               - Run all test scripts with server lifecycle"
 	@echo "  test-verbose       - Run tests with verbose output and logs"
 	@echo "  test-script        - Run specific test script (SCRIPT=filename)"
+	@echo "  test-coverage      - Run tests and generate coverage report"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt                - Format Go code"
