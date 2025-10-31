@@ -69,8 +69,14 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// let's see what scopes the user gave consent to
-	for _, scope := range r.PostForm["scopes"] {
-		ar.GrantScope(scope)
+	queryScopes := r.URL.Query()["scope"]
+	if len(queryScopes) > 0 {
+		for _, scope := range queryScopes {
+			ar.GrantScope(scope)
+		}
+	} else {
+		// Default to openid scope when no scope query parameter is provided
+		ar.GrantScope("openid")
 	}
 
 	// Now that the user is authorized, we set up a session using the proper newSession helper:

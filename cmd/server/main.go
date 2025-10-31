@@ -255,15 +255,16 @@ func initializeOAuth2Provider() error {
 		privateKey,
 	)
 
-	handler := &rfc8693.Handler{
+	// Initialize RFC8693 handler but don't append it to all token requests
+	// The token exchange functionality should be handled by the default fosite provider
+	// when TokenExchangeEnabled is true in the config
+	_ = &rfc8693.Handler{
 		Config:               config,
 		AccessTokenStrategy:  AccessTokenStrategy,
 		RefreshTokenStrategy: RefreshTokenStrategy,
 		AccessTokenStorage:   memoryStore,
 		RefreshTokenStorage:  memoryStore,
 	}
-
-	config.TokenEndpointHandlers.Append(handler)
 
 	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil

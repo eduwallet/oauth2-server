@@ -37,8 +37,7 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Use fosite's introspection to validate the token
 	ctx := r.Context()
-	// We require the "openid" scope to allow access to this endpoint.
-	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &openid.DefaultSession{}, "openid")
+	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &openid.DefaultSession{})
 	if err != nil {
 		log.Printf("❌ UserInfo: Token introspection failed: %v", err)
 
