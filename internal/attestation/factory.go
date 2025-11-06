@@ -27,11 +27,11 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 			break
 		}
 	}
-	
+
 	if clientConfig == nil {
 		return nil, fmt.Errorf("no attestation configuration found for client: %s", clientID)
 	}
-	
+
 	// Check if the method is allowed for this client
 	methodAllowed := false
 	for _, allowedMethod := range clientConfig.AllowedMethods {
@@ -40,23 +40,23 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 			break
 		}
 	}
-	
+
 	if !methodAllowed {
 		return nil, fmt.Errorf("attestation method %s not allowed for client %s", method, clientID)
 	}
-	
+
 	// Create verifier based on method
 	switch method {
 	case "attest_jwt_client_auth":
 		return NewJWTVerifier(clientID, clientConfig.TrustAnchors)
-		
+
 	case "attest_tls_client_auth":
 		return NewTLSVerifier(clientID, clientConfig.TrustAnchors)
-		
+
 	case "mock":
 		// For testing/development
 		return NewMockVerifier(clientID), nil
-		
+
 	default:
 		return nil, fmt.Errorf("unsupported attestation method: %s", method)
 	}
@@ -69,7 +69,7 @@ func (f *VerifierFactory) GetSupportedMethods(clientID string) ([]string, error)
 			return client.AllowedMethods, nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("client not found: %s", clientID)
 }
 
@@ -80,7 +80,7 @@ func (f *VerifierFactory) IsAttestationEnabled(clientID string) bool {
 			return len(client.AllowedMethods) > 0
 		}
 	}
-	
+
 	return false
 }
 
@@ -91,7 +91,7 @@ func (f *VerifierFactory) ValidateClientConfig(clientID string) error {
 			return client.Validate()
 		}
 	}
-	
+
 	return fmt.Errorf("client not found: %s", clientID)
 }
 
@@ -102,7 +102,7 @@ func (f *VerifierFactory) GetClientConfig(clientID string) (*config.ClientAttest
 			return &client, nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("client not found: %s", clientID)
 }
 
@@ -112,18 +112,18 @@ func (f *VerifierFactory) CreateVerifierForAllMethods(clientID string) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	
+
 	verifiers := make(map[string]interface{})
-	
+
 	for _, method := range clientConfig.AllowedMethods {
 		verifier, err := f.CreateVerifier(clientID, method)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create verifier for method %s: %w", method, err)
 		}
-		
+
 		verifiers[method] = verifier
 	}
-	
+
 	return verifiers, nil
 }
 
@@ -149,19 +149,19 @@ func (m *VerifierManager) GetVerifier(clientID, method string) (interface{}, err
 			return verifier, nil
 		}
 	}
-	
+
 	// Create new verifier
 	verifier, err := m.factory.CreateVerifier(clientID, method)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Store verifier for future use
 	if m.verifiers[clientID] == nil {
 		m.verifiers[clientID] = make(map[string]interface{})
 	}
 	m.verifiers[clientID][method] = verifier
-	
+
 	return verifier, nil
 }
 
@@ -171,12 +171,12 @@ func (m *VerifierManager) PreloadVerifiers() error {
 		for _, method := range client.AllowedMethods {
 			_, err := m.GetVerifier(client.ClientID, method)
 			if err != nil {
-				return fmt.Errorf("failed to preload verifier for client %s, method %s: %w", 
+				return fmt.Errorf("failed to preload verifier for client %s, method %s: %w",
 					client.ClientID, method, err)
 			}
 		}
 	}
-	
+
 	return nil
 }
 

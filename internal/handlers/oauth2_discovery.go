@@ -157,20 +157,20 @@ func (h *OAuth2DiscoveryHandler) getTokenEndpointAuthMethods() []string {
 // getAttestationMethods returns the supported attestation authentication methods
 func (h *OAuth2DiscoveryHandler) getAttestationMethods() []string {
 	var methods []string
-	
+
 	// Collect all unique attestation methods from configured clients
 	methodSet := make(map[string]bool)
-	
+
 	for _, client := range h.Configuration.Attestation.Clients {
 		for _, method := range client.AllowedMethods {
 			methodSet[method] = true
 		}
 	}
-	
+
 	// Convert set to slice
 	for method := range methodSet {
 		methods = append(methods, method)
 	}
-	
+
 	return methods
 }

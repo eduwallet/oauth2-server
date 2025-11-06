@@ -20,17 +20,17 @@ type TLSAttestationVerifier interface {
 // AttestationResult contains the result of attestation verification
 // AttestationResult represents the result of attestation verification
 type AttestationResult struct {
-	Valid         bool                   `json:"valid"`
-	ClientID      string                 `json:"client_id"`
-	Issuer        string                 `json:"issuer,omitempty"`
-	Subject       string                 `json:"subject,omitempty"`
-	Audiences     []string               `json:"audiences,omitempty"`
-	IssuedAt      time.Time              `json:"issued_at"`
-	ExpiresAt     time.Time              `json:"expires_at"`
-	Claims        map[string]interface{} `json:"claims,omitempty"`
-	TrustLevel    string                 `json:"trust_level"`
-	Confirmation  interface{}            `json:"confirmation,omitempty"`
-	ErrorMessage  string                 `json:"error_message,omitempty"`
+	Valid        bool                   `json:"valid"`
+	ClientID     string                 `json:"client_id"`
+	Issuer       string                 `json:"issuer,omitempty"`
+	Subject      string                 `json:"subject,omitempty"`
+	Audiences    []string               `json:"audiences,omitempty"`
+	IssuedAt     time.Time              `json:"issued_at"`
+	ExpiresAt    time.Time              `json:"expires_at"`
+	Claims       map[string]interface{} `json:"claims,omitempty"`
+	TrustLevel   string                 `json:"trust_level"`
+	Confirmation interface{}            `json:"confirmation,omitempty"`
+	ErrorMessage string                 `json:"error_message,omitempty"`
 }
 
 // TrustAnchor represents a trusted certificate authority for attestation verification
@@ -48,20 +48,20 @@ type AttestationConfig struct {
 	Experimental bool          `yaml:"experimental" json:"experimental"`
 	TrustAnchors []TrustAnchor `yaml:"trust_anchors" json:"trust_anchors"`
 	Verification struct {
-		ClockSkewToleranceSeconds   int  `yaml:"clock_skew_tolerance_seconds" json:"clock_skew_tolerance_seconds"`
-		NonceCacheDurationSeconds   int  `yaml:"nonce_cache_duration_seconds" json:"nonce_cache_duration_seconds"`
-		RequireFreshAttestation     bool `yaml:"require_fresh_attestation" json:"require_fresh_attestation"`
-		MaxAttestationAgeSeconds    int  `yaml:"max_attestation_age_seconds" json:"max_attestation_age_seconds"`
+		ClockSkewToleranceSeconds int  `yaml:"clock_skew_tolerance_seconds" json:"clock_skew_tolerance_seconds"`
+		NonceCacheDurationSeconds int  `yaml:"nonce_cache_duration_seconds" json:"nonce_cache_duration_seconds"`
+		RequireFreshAttestation   bool `yaml:"require_fresh_attestation" json:"require_fresh_attestation"`
+		MaxAttestationAgeSeconds  int  `yaml:"max_attestation_age_seconds" json:"max_attestation_age_seconds"`
 	} `yaml:"verification" json:"verification"`
 	SupportedFormats []string `yaml:"supported_formats" json:"supported_formats"`
 }
 
 // ClientAttestationConfig represents attestation configuration for a specific client
 type ClientAttestationConfig struct {
-	AttestorType            string   `yaml:"attestor_type" json:"attestor_type"`
-	TrustAnchor             string   `yaml:"trust_anchor" json:"trust_anchor"`
-	RequiredClaims          []string `yaml:"required_claims" json:"required_claims"`
-	AllowDebugAttestation   bool     `yaml:"allow_debug_attestation" json:"allow_debug_attestation"`
+	AttestorType          string   `yaml:"attestor_type" json:"attestor_type"`
+	TrustAnchor           string   `yaml:"trust_anchor" json:"trust_anchor"`
+	RequiredClaims        []string `yaml:"required_claims" json:"required_claims"`
+	AllowDebugAttestation bool     `yaml:"allow_debug_attestation" json:"allow_debug_attestation"`
 }
 
 // AttestationError represents attestation-specific errors
@@ -84,27 +84,27 @@ var (
 		Code:    "invalid_attestation_format",
 		Message: "The attestation format is not supported or malformed",
 	}
-	
+
 	ErrAttestationExpired = &AttestationError{
 		Code:    "attestation_expired",
 		Message: "The attestation has expired",
 	}
-	
+
 	ErrInvalidSignature = &AttestationError{
 		Code:    "invalid_signature",
 		Message: "The attestation signature is invalid",
 	}
-	
+
 	ErrUntrustedAttestor = &AttestationError{
 		Code:    "untrusted_attestor",
 		Message: "The attestation is not from a trusted source",
 	}
-	
+
 	ErrMissingRequiredClaims = &AttestationError{
 		Code:    "missing_required_claims",
 		Message: "The attestation is missing required claims",
 	}
-	
+
 	ErrNonceReplayDetected = &AttestationError{
 		Code:    "nonce_replay_detected",
 		Message: "The attestation nonce has been used before",

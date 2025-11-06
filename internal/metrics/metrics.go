@@ -13,25 +13,25 @@ import (
 // MetricsCollector holds all Prometheus metrics for the OAuth2 server
 type MetricsCollector struct {
 	// HTTP request metrics
-	httpRequestsTotal    *prometheus.CounterVec
-	httpRequestDuration  *prometheus.HistogramVec
+	httpRequestsTotal   *prometheus.CounterVec
+	httpRequestDuration *prometheus.HistogramVec
 
 	// OAuth2 operation metrics
-	authRequestsTotal    *prometheus.CounterVec
-	tokenRequestsTotal   *prometheus.CounterVec
+	authRequestsTotal       *prometheus.CounterVec
+	tokenRequestsTotal      *prometheus.CounterVec
 	introspectRequestsTotal *prometheus.CounterVec
-	userinfoRequestsTotal *prometheus.CounterVec
+	userinfoRequestsTotal   *prometheus.CounterVec
 
 	// Token metrics
-	tokensIssuedTotal    *prometheus.CounterVec
-	activeTokens         prometheus.Gauge
+	tokensIssuedTotal *prometheus.CounterVec
+	activeTokens      prometheus.Gauge
 
 	// Client and user metrics
-	registeredClients    prometheus.Gauge
-	registeredUsers      prometheus.Gauge
+	registeredClients prometheus.Gauge
+	registeredUsers   prometheus.Gauge
 
 	// Error metrics
-	errorsTotal          *prometheus.CounterVec
+	errorsTotal *prometheus.CounterVec
 
 	// Business metrics
 	authorizationCodesIssued prometheus.Counter

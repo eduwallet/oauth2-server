@@ -33,6 +33,6 @@ func (m *MockVerifier) VerifyAttestation(token string) (*AttestationResult, erro
 			"token":     token,
 		},
 	}
-	
+
 	return result, nil
 }

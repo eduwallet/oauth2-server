@@ -196,7 +196,7 @@ func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) error {
 		return fosite.ErrInvalidClient.WithHint("Invalid attestation")
 	}
 
-	h.Log.Printf("✅ Attestation verification successful - Client: %s, Trust Level: %s", 
+	h.Log.Printf("✅ Attestation verification successful - Client: %s, Trust Level: %s",
 		result.ClientID, result.TrustLevel)
 
 	// Store attestation result in request context for later use
