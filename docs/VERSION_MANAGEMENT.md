@@ -123,13 +123,13 @@ tags: |
 
 ```bash
 # Pull specific version
-docker pull ghcr.io/username/oauth2-server:v1.2.3
+docker pull ghcr.io/harrykodden/oauth2-server:v1.2.3
 
 # Pull latest
-docker pull ghcr.io/username/oauth2-server:latest
+docker pull ghcr.io/harrykodden/oauth2-server:latest
 
 # Pull major version
-docker pull ghcr.io/username/oauth2-server:v1
+docker pull ghcr.io/harrykodden/oauth2-server:v1
 ```
 
 ## Build Targets
@@ -234,9 +234,9 @@ docs: update API documentation
 # docker-compose.yml - Use specific versions in production
 services:
   oauth2-server:
-    image: ghcr.io/username/oauth2-server:v1.2.3  # Pin to specific version
+    image: ghcr.io/harrykodden/oauth2-server:v1.2.3  # Pin to specific version
     # OR for latest stable
-    image: ghcr.io/username/oauth2-server:v1      # Major version
+    image: ghcr.io/harrykodden/oauth2-server:v1      # Major version
 ```
 
 ## Troubleshooting
@@ -271,7 +271,7 @@ make build-version
 # Check if image was pushed
 gh run view --log | grep "docker push"
 # Verify registry
-docker pull ghcr.io/username/oauth2-server:v1.2.3
+docker pull ghcr.io/harrykodden/oauth2-server:v1.2.3
 ```
 
 ## Scripts and Tools
@@ -296,7 +296,7 @@ spec:
     spec:
       containers:
       - name: oauth2-server
-        image: ghcr.io/username/oauth2-server:v1.2.3
+        image: ghcr.io/harrykodden/oauth2-server:v1.2.3
         command: ["./oauth2-server", "-version"]  # Check version on startup
 ```
 

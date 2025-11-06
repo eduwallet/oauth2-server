@@ -1,6 +1,7 @@
 services:
   oauth2-server:
-    build: .
+    build: .  # For development - builds from local source
+    # image: ghcr.io/harrykodden/oauth2-server:latest  # For production - use published image
     ports:
       - "8081:8080"
     environment:
