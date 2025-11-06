@@ -34,6 +34,11 @@ func Load() (*Config, error) {
 	// 3. Normalize redirect URIs with the final base URL
 	cfg.NormalizeAllClientRedirectURIs()
 
+	// 4. Validate configuration
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
+
 	cfg.BaseURL = cfg.Server.BaseURL
 	cfg.Port = fmt.Sprintf("%d", cfg.Server.Port)
 	cfg.Host = cfg.Server.Host

@@ -10,6 +10,93 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// AttestationConfig represents the global attestation configuration
+type AttestationConfig struct {
+	Enabled bool                        `yaml:"enabled"`
+	Clients []ClientAttestationConfig   `yaml:"clients"`
+}
+
+// ClientAttestationConfig represents attestation configuration for a specific client
+type ClientAttestationConfig struct {
+	ClientID       string   `yaml:"client_id"`
+	AllowedMethods []string `yaml:"allowed_methods"`
+	TrustAnchors   []string `yaml:"trust_anchors"`
+	RequiredLevel  string   `yaml:"required_level,omitempty"`
+}
+
+// Validate validates the client attestation configuration
+func (c *ClientAttestationConfig) Validate() error {
+	if c.ClientID == "" {
+		return fmt.Errorf("client_id is required for attestation config")
+	}
+	
+	if len(c.AllowedMethods) == 0 {
+		return fmt.Errorf("at least one allowed_method is required")
+	}
+	
+	validMethods := []string{"attest_jwt_client_auth", "attest_tls_client_auth", "mock"}
+	for _, method := range c.AllowedMethods {
+		found := false
+		for _, valid := range validMethods {
+			if method == valid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("invalid attestation method: %s", method)
+		}
+	}
+	
+	if len(c.TrustAnchors) == 0 {
+		return fmt.Errorf("at least one trust anchor is required")
+	}
+	
+	if c.RequiredLevel != "" {
+		validLevels := []string{"low", "medium", "high"}
+		found := false
+		for _, level := range validLevels {
+			if c.RequiredLevel == level {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("invalid required_level: %s", c.RequiredLevel)
+		}
+	}
+	
+	return nil
+}
+
+// Validate validates the global attestation configuration
+func (a *AttestationConfig) Validate() error {
+	if !a.Enabled {
+		return nil // No validation needed when disabled
+	}
+	
+	if len(a.Clients) == 0 {
+		return fmt.Errorf("at least one client must be configured when attestation is enabled")
+	}
+	
+	// Validate each client configuration
+	clientIDs := make(map[string]bool)
+	for _, client := range a.Clients {
+		// Check for duplicate client IDs
+		if clientIDs[client.ClientID] {
+			return fmt.Errorf("duplicate client_id in attestation config: %s", client.ClientID)
+		}
+		clientIDs[client.ClientID] = true
+		
+		// Validate individual client config
+		if err := client.Validate(); err != nil {
+			return fmt.Errorf("invalid attestation config for client %s: %w", client.ClientID, err)
+		}
+	}
+	
+	return nil
+}
+
 // Config holds the application configuration
 type Config struct {
 	// Server configuration
@@ -30,6 +117,9 @@ type Config struct {
 
 	// Users loaded from YAML
 	Users []UserConfig
+
+	// Attestation configuration
+	Attestation *AttestationConfig
 
 	// Reverse Proxy Configuration (can be overridden by YAML)
 	TrustProxyHeaders bool
@@ -68,18 +158,20 @@ type LoggingConfig struct {
 
 // ClientConfig represents a client configuration from YAML
 type ClientConfig struct {
-	ID                      string   `yaml:"id"`
-	Secret                  string   `yaml:"secret"`
-	Name                    string   `yaml:"name"`
-	Description             string   `yaml:"description"`
-	RedirectURIs            []string `yaml:"redirect_uris"`
-	GrantTypes              []string `yaml:"grant_types"`
-	ResponseTypes           []string `yaml:"response_types"`
-	Scopes                  []string `yaml:"scopes"`
-	Audience                []string `yaml:"audience"`
-	TokenEndpointAuthMethod string   `yaml:"token_endpoint_auth_method"`
-	Public                  bool     `yaml:"public"`
-	EnabledFlows            []string `yaml:"enabled_flows"`
+	ID                      string                              `yaml:"id"`
+	Secret                  string                              `yaml:"secret"`
+	Name                    string                              `yaml:"name"`
+	Description             string                              `yaml:"description"`
+	RedirectURIs            []string                            `yaml:"redirect_uris"`
+	GrantTypes              []string                            `yaml:"grant_types"`
+	ResponseTypes           []string                            `yaml:"response_types"`
+	Scopes                  []string                            `yaml:"scopes"`
+	Audience                []string                            `yaml:"audience"`
+	TokenEndpointAuthMethod string                              `yaml:"token_endpoint_auth_method"`
+	Public                  bool                                `yaml:"public"`
+	EnabledFlows            []string                            `yaml:"enabled_flows"`
+	Enabled                 *bool                        `yaml:"enabled,omitempty"` // Pointer to distinguish between false and unset
+	AttestationConfig       *ClientAttestationConfig     `yaml:"attestation_config,omitempty"`
 }
 
 // ConfigClient is an alias for ClientConfig for backward compatibility
@@ -96,18 +188,33 @@ type UserConfig struct {
 
 // YAMLConfig represents the raw YAML configuration structure
 type YAMLConfig struct {
-	Server   ServerConfig   `yaml:"server"`
-	Security SecurityConfig `yaml:"security"`
-	Logging  LoggingConfig  `yaml:"logging"`
-	Clients  []ClientConfig `yaml:"clients"`
-	Users    []UserConfig   `yaml:"users"`
-	Proxy    *ProxyConfig   `yaml:"proxy,omitempty"`
+	Server      ServerConfig                     `yaml:"server"`
+	Security    SecurityConfig                   `yaml:"security"`
+	Logging     LoggingConfig                    `yaml:"logging"`
+	Clients     []ClientConfig                   `yaml:"clients"`
+	Users       []UserConfig                     `yaml:"users"`
+	Proxy       *ProxyConfig          `yaml:"proxy,omitempty"`
+	Attestation *AttestationConfig    `yaml:"attestation,omitempty"`
 }
 
 // ProxyConfig holds proxy-related configuration
 type ProxyConfig struct {
 	TrustHeaders bool `yaml:"trust_headers"`
 	ForceHTTPS   bool `yaml:"force_https"`
+}
+
+// IsEnabled returns whether this client is enabled (defaults to true if not specified)
+func (c ClientConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true // Default to enabled if not specified
+	}
+	return *c.Enabled
+}
+
+// HasAttestationAuth returns whether this client uses attestation-based authentication
+func (c ClientConfig) HasAttestationAuth() bool {
+	return c.TokenEndpointAuthMethod == "attest_jwt_client_auth" || 
+		   c.TokenEndpointAuthMethod == "attest_tls_client_auth"
 }
 
 // ValidateRedirectURI validates a redirect URI against this client's registered URIs
@@ -135,8 +242,14 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("client %d: client ID is required", i)
 		}
 
+		// Skip disabled clients
+		if !client.IsEnabled() {
+			continue
+		}
+
 		// Public clients don't need secrets, but confidential clients do
-		if !client.Public && client.Secret == "" {
+		// Exception: attestation-based auth doesn't require secrets
+		if !client.Public && client.Secret == "" && !client.HasAttestationAuth() {
 			return fmt.Errorf("client %s: client secret is required for confidential clients", client.ID)
 		}
 
@@ -144,6 +257,21 @@ func (c *Config) Validate() error {
 		for _, grantType := range client.GrantTypes {
 			if !isValidGrantType(grantType) {
 				return fmt.Errorf("client %s: invalid grant type: %s", client.ID, grantType)
+			}
+		}
+
+		// Validate token endpoint auth method
+		if !isValidTokenEndpointAuthMethod(client.TokenEndpointAuthMethod) {
+			return fmt.Errorf("client %s: invalid token endpoint auth method: %s", client.ID, client.TokenEndpointAuthMethod)
+		}
+
+		// Validate attestation configuration if using attestation auth
+		if client.HasAttestationAuth() {
+			if client.AttestationConfig == nil {
+				return fmt.Errorf("client %s: attestation configuration required for attestation-based auth", client.ID)
+			}
+			if err := c.validateAttestationConfig(client); err != nil {
+				return fmt.Errorf("client %s: %w", client.ID, err)
 			}
 		}
 
@@ -163,7 +291,23 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate attestation configuration if present
+	if c.Attestation != nil {
+		if err := c.Attestation.Validate(); err != nil {
+			return fmt.Errorf("attestation configuration: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// validateAttestationConfig validates attestation configuration for a client
+func (c *Config) validateAttestationConfig(client ClientConfig) error {
+	if client.AttestationConfig == nil {
+		return fmt.Errorf("attestation config is nil")
+	}
+	
+	return client.AttestationConfig.Validate()
 }
 
 // Type alias for backward compatibility
@@ -258,4 +402,17 @@ func isValidGrantType(grantType string) bool {
 		"urn:ietf:params:oauth:grant-type:token-exchange",
 	}
 	return contains(validGrantTypes, grantType)
+}
+
+func isValidTokenEndpointAuthMethod(method string) bool {
+	validMethods := []string{
+		"client_secret_basic",
+		"client_secret_post",
+		"client_secret_jwt",
+		"private_key_jwt",
+		"none",
+		"attest_jwt_client_auth",  // New attestation method
+		"attest_tls_client_auth",  // New attestation method
+	}
+	return contains(validMethods, method)
 }

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"oauth2-server/internal/metrics"
 
 	"github.com/ory/fosite/storage"
 )
@@ -10,11 +11,15 @@ import (
 // StatisticsHandler handles statistics requests
 type StatisticsHandler struct {
 	MemoryStore *storage.MemoryStore
+	Metrics     *metrics.MetricsCollector
 }
 
 // ServeHTTP implements http.Handler (updated for struct return)
 func (h *StatisticsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
+		if h.Metrics != nil {
+			h.Metrics.RecordHTTPRequest(r.Method, "stats", http.StatusMethodNotAllowed, 0)
+		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

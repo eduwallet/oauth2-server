@@ -3,18 +3,21 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"oauth2-server/internal/attestation"
 	"oauth2-server/pkg/config"
 )
 
 // OAuth2DiscoveryHandler manages OAuth2 Authorization Server Metadata requests (RFC 8414)
 type OAuth2DiscoveryHandler struct {
-	Configuration *config.Config
+	Configuration      *config.Config
+	AttestationManager *attestation.VerifierManager
 }
 
 // NewOAuth2DiscoveryHandler creates a new OAuth2 discovery handler
-func NewOAuth2DiscoveryHandler(configuration *config.Config) *OAuth2DiscoveryHandler {
+func NewOAuth2DiscoveryHandler(configuration *config.Config, attestationManager *attestation.VerifierManager) *OAuth2DiscoveryHandler {
 	return &OAuth2DiscoveryHandler{
-		Configuration: configuration,
+		Configuration:      configuration,
+		AttestationManager: attestationManager,
 	}
 }
 
@@ -90,13 +93,7 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		},
 
 		// Token endpoint authentication methods
-		"token_endpoint_auth_methods_supported": []string{
-			"client_secret_basic",
-			"client_secret_post",
-			"private_key_jwt",
-			"client_secret_jwt",
-			"none",
-		},
+		"token_endpoint_auth_methods_supported": h.getTokenEndpointAuthMethods(),
 
 		// Token endpoint signing algorithms
 		"token_endpoint_auth_signing_alg_values_supported": []string{
@@ -136,4 +133,44 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	json.NewEncoder(w).Encode(oauth2Metadata)
+}
+
+// getTokenEndpointAuthMethods returns the supported token endpoint authentication methods
+func (h *OAuth2DiscoveryHandler) getTokenEndpointAuthMethods() []string {
+	methods := []string{
+		"client_secret_basic",
+		"client_secret_post",
+		"private_key_jwt",
+		"client_secret_jwt",
+		"none",
+	}
+
+	// Add attestation methods if attestation is enabled
+	if h.Configuration.Attestation.Enabled && h.AttestationManager != nil {
+		attestationMethods := h.getAttestationMethods()
+		methods = append(methods, attestationMethods...)
+	}
+
+	return methods
+}
+
+// getAttestationMethods returns the supported attestation authentication methods
+func (h *OAuth2DiscoveryHandler) getAttestationMethods() []string {
+	var methods []string
+	
+	// Collect all unique attestation methods from configured clients
+	methodSet := make(map[string]bool)
+	
+	for _, client := range h.Configuration.Attestation.Clients {
+		for _, method := range client.AllowedMethods {
+			methodSet[method] = true
+		}
+	}
+	
+	// Convert set to slice
+	for method := range methodSet {
+		methods = append(methods, method)
+	}
+	
+	return methods
 }

@@ -36,6 +36,12 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - Tokens include an `aud` claim (array of strings) in both the token and introspection response
 - Audience is validated on token issuance and refresh
 
+### 🔒 OAuth 2.0 Attestation-Based Client Authentication
+- **Enterprise Security**: Hardware-backed client authentication for mobile and IoT devices
+- **Trust Levels**: Configurable trust requirements based on attestation strength
+- **Multiple Methods**: Support for JWT-based and TLS certificate-based attestation
+- **Standards Compliance**: Follows draft-ietf-oauth-attestation-based-client-auth-07
+
 ### OAuth2 Grant Types
 - ✅ Authorization Code
 - ✅ Client Credentials
@@ -50,6 +56,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - ✅ **RFC 7591** - Dynamic Client Registration
 - ✅ **RFC 8414** - Authorization Server Metadata
 - ✅ **OpenID Connect Core 1.0**
+- ✅ **draft-ietf-oauth-attestation-based-client-auth-07** - OAuth 2.0 Attestation-Based Client Authentication
 
 ### Production Features
 - ✅ Kubernetes native
@@ -63,6 +70,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 
 - **cmd/server/main.go**: Entry point of the application. Initializes the server and sets up routes and middleware.
 - **internal/auth/**: Authentication and authorization logic for OAuth2 flows.
+- **internal/attestation/**: OAuth 2.0 Attestation-Based Client Authentication implementation.
 - **internal/flows/**: Implements various OAuth2 flows.
 - **internal/handlers/**: Defines HTTP handlers for API endpoints.
 - **internal/models/**: Data models used in the application.
@@ -79,6 +87,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 ## Features
 
 - **OAuth2 Authorization Flows**: Authorization Code, Client Credentials, Device Authorization, Refresh Token, Token Exchange
+- **Attestation-Based Authentication**: Hardware-backed client authentication with JWT and TLS certificate support
 - **Security**: JWT-based tokens, PKCE, HTTPS, proxy-aware, rate limiting, CORS
 - **Management**: Dynamic client registration via API (with audience support)
 - **Token Introspection**: `/introspect` endpoint returns all standard fields, including `aud` as a JSON array
@@ -109,6 +118,194 @@ helm install oauth2-server ./helm/oauth2-server -n oauth2-server --set config.se
 ## Configuration
 
 See `values.yaml` and `docker-compose.yml` for configuration options.
+
+## OAuth 2.0 Attestation-Based Client Authentication
+
+This server implements OAuth 2.0 Attestation-Based Client Authentication as specified in [draft-ietf-oauth-attestation-based-client-auth-07](https://datatracker.ietf.org/doc/draft-ietf-oauth-attestation-based-client-auth/). This provides enterprise-grade security for mobile applications, IoT devices, and other clients that can provide cryptographic proof of their integrity and authenticity.
+
+### Overview
+
+Attestation-based authentication allows clients to authenticate using hardware-backed cryptographic attestations instead of traditional client secrets. This is particularly valuable for:
+
+- **Mobile Applications**: Apps running on devices with hardware security modules (HSM) or secure enclaves
+- **IoT Devices**: Hardware devices with embedded secure elements or TPMs
+- **High-Security Environments**: Applications requiring cryptographic proof of client integrity
+
+### Supported Attestation Methods
+
+#### 1. JWT-Based Attestation (`attest_jwt_client_auth`)
+
+Clients authenticate using signed JWT tokens that contain attestation claims:
+
+```json
+{
+  "iss": "attestor-service",
+  "sub": "client_id",
+  "aud": ["https://oauth2-server.example.com"],
+  "iat": 1699275600,
+  "exp": 1699279200,
+  "cnf": {
+    "jwk": { "kty": "RSA", "n": "...", "e": "AQAB" }
+  },
+  "att_type": "android_safetynet",
+  "att_level": "high",
+  "att_hardware_backed": true,
+  "att_device_integrity": "verified"
+}
+```
+
+#### 2. TLS Certificate-Based Attestation (`attest_tls_client_auth`)
+
+Clients authenticate using X.509 client certificates with attestation extensions:
+
+```bash
+# Example client certificate request with attestation
+curl -X POST https://oauth2-server.example.com/oauth/token \
+  --cert client-cert.pem \
+  --key client-key.pem \
+  -d "grant_type=client_credentials&client_id=attested-client"
+```
+
+### Configuration
+
+Enable attestation in your `config.yaml`:
+
+```yaml
+attestation:
+  enabled: true
+  clients:
+    - client_id: "mobile-banking-app"
+      allowed_methods:
+        - "attest_jwt_client_auth"
+        - "attest_tls_client_auth"
+      trust_anchors:
+        - |
+          -----BEGIN CERTIFICATE-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+          -----END CERTIFICATE-----
+      required_level: "high"
+    
+    - client_id: "iot-sensor-network"
+      allowed_methods:
+        - "attest_tls_client_auth"
+      trust_anchors:
+        - |
+          -----BEGIN CERTIFICATE-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+          -----END CERTIFICATE-----
+      required_level: "medium"
+```
+
+### Client Configuration
+
+Clients using attestation must be configured with attestation settings:
+
+```yaml
+clients:
+  - id: "mobile-banking-app"
+    name: "Mobile Banking Application"
+    grant_types: ["client_credentials", "authorization_code"]
+    token_endpoint_auth_method: "attest_jwt_client_auth"
+    attestation_config:
+      client_id: "mobile-banking-app"
+      allowed_methods: ["attest_jwt_client_auth"]
+      trust_anchors: ["attestation-ca-cert"]
+      required_level: "high"
+```
+
+### Trust Levels
+
+The system supports three trust levels based on attestation strength:
+
+- **`high`**: Hardware-backed keys, secure enclaves, verified boot chains
+- **`medium`**: Software-based attestation with device integrity checks
+- **`low`**: Basic attestation without hardware backing
+
+### Discovery Support
+
+The OAuth2 discovery endpoint automatically advertises supported attestation methods:
+
+```bash
+curl https://oauth2-server.example.com/.well-known/oauth-authorization-server | jq '.token_endpoint_auth_methods_supported'
+```
+
+```json
+[
+  "client_secret_basic",
+  "client_secret_post",
+  "private_key_jwt",
+  "client_secret_jwt",
+  "none",
+  "attest_jwt_client_auth",
+  "attest_tls_client_auth"
+]
+```
+
+### Usage Examples
+
+#### JWT Attestation
+
+```bash
+# Generate or obtain an attestation JWT
+ATTESTATION_JWT="eyJhbGciOiJSUzI1NiIsIng1YyI6WyJNSUlCLi4uIl19.eyJpc3MiOi..."
+
+# Use in token request
+curl -X POST https://oauth2-server.example.com/oauth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
+  -d "client_assertion=${ATTESTATION_JWT}"
+```
+
+#### TLS Certificate Attestation
+
+```bash
+# Use client certificate for attestation
+curl -X POST https://oauth2-server.example.com/oauth/token \
+  --cert client-attestation.crt \
+  --key client-attestation.key \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=iot-device-001"
+```
+
+### Security Considerations
+
+1. **Certificate Validation**: All attestation certificates are validated against configured trust anchors
+2. **Revocation Checking**: Certificate revocation status is verified when possible
+3. **Timestamp Validation**: Attestation timestamps are checked for freshness
+4. **Hardware Requirements**: High trust levels require hardware-backed key storage
+5. **Audit Logging**: All attestation attempts are logged for security monitoring
+
+### Monitoring and Metrics
+
+Attestation events are tracked in Prometheus metrics:
+
+```promql
+# Attestation verification attempts
+oauth2_attestation_verifications_total{client_id="mobile-app", method="jwt", result="success"}
+
+# Trust level distribution
+oauth2_attestation_trust_level{level="high", client_id="mobile-app"}
+
+# Verification latency
+oauth2_attestation_verification_duration_seconds{method="jwt"}
+```
+
+### Development and Testing
+
+For development and testing, a mock verifier is available:
+
+```yaml
+attestation:
+  enabled: true
+  clients:
+    - client_id: "test-client"
+      allowed_methods: ["mock"]
+      trust_anchors: ["mock-anchor"]
+      required_level: "medium"
+```
+
+The mock verifier accepts any token and always returns a successful verification result.
 
 ## API Endpoints
 

@@ -30,6 +30,40 @@ logging:
   format: "json"
   enable_audit: true
 
+# OAuth 2.0 Attestation-Based Client Authentication
+# https://datatracker.ietf.org/doc/html/draft-ietf-oauth-attestation-based-client-auth-07
+attestation:
+  enabled: false  # Start disabled for backward compatibility
+  experimental: true  # Mark as experimental feature
+  
+  # Trust anchor configuration for verifying attestations
+  trust_anchors:
+    - name: "example_tpm_ca"
+      type: "tpm"
+      certificate_path: "/certs/tpm_ca.pem"
+      enabled: false
+      description: "Example TPM manufacturer CA certificate"
+    
+    - name: "example_hsm_ca" 
+      type: "hsm"
+      certificate_path: "/certs/hsm_ca.pem"
+      enabled: false
+      description: "Example HSM root CA certificate"
+  
+  # Verification settings
+  verification:
+    clock_skew_tolerance_seconds: 300  # 5 minutes tolerance for time differences
+    nonce_cache_duration_seconds: 3600  # 1 hour nonce replay protection
+    require_fresh_attestation: true  # Require new attestation for each auth
+    max_attestation_age_seconds: 600  # 10 minutes max attestation age
+  
+  # Supported attestation formats
+  supported_formats:
+    - "tpm"      # TPM 2.0 attestations
+    - "hsm"      # Hardware Security Module attestations
+    - "android"  # Android hardware attestation
+    - "ios"      # iOS App Attestation
+
 clients:
 # Frontend SPA Client
 - id: "frontend-app"
@@ -178,6 +212,38 @@ clients:
   token_endpoint_auth_method: "client_secret_basic"
   enabled_flows:
   - "device_code"
+
+# Example Attestation-Enabled Client (disabled by default)
+- id: "attested-mobile-app"
+  name: "Attested Mobile Application"
+  description: "Mobile app with hardware attestation support"
+  redirect_uris:
+  - "/oauth/callback"
+  grant_types:
+  - "authorization_code"
+  - "refresh_token"
+  response_types:
+  - "code"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "attest_jwt_client_auth"  # New attestation method
+  public: true
+  enabled_flows:
+  - "authorization_code"
+  enabled: false  # Disabled until attestation feature is implemented
+  attestation_config:
+    attestor_type: "android"  # Type of attestation hardware
+    trust_anchor: "example_hsm_ca"  # Reference to trust anchor
+    required_claims:
+      - "hwid"          # Hardware identifier
+      - "boot_state"    # Verified boot state
+      - "app_integrity" # Application integrity
+    allow_debug_attestation: false  # Reject debug/development attestations
 
 users:
 # Test users for development and testing

@@ -15,16 +15,18 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/ory/fosite/storage"
+	"github.com/sirupsen/logrus"
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
 	"github.com/ory/fosite/handler/oauth2"
 	"github.com/ory/fosite/handler/rfc8693"
-	"github.com/ory/fosite/storage"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/sirupsen/logrus"
-
+	"oauth2-server/internal/attestation"
 	"oauth2-server/internal/handlers"
+	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 )
@@ -58,7 +60,13 @@ var (
 	authorizeHandler       *handlers.AuthorizeHandler
 	claimsHandler          *handlers.ClaimsHandler
 
-	// Templates for rendering HTML responses
+	// Metrics collector
+	metricsCollector *metrics.MetricsCollector
+
+	// Attestation manager
+	attestationManager *attestation.VerifierManager
+
+	// Templates
 	templates *template.Template
 )
 
@@ -84,9 +92,9 @@ func main() {
 	}
 
 	// Access logging configuration correctly:
-	logLevel := configuration.Logging.Level          // ✅ Correct
-	logFormat := configuration.Logging.Format        // ✅ Correct
-	enableAudit := configuration.Logging.EnableAudit // ✅ Correct
+	logLevel := configuration.Logging.Level
+	logFormat := configuration.Logging.Format
+	enableAudit := configuration.Logging.EnableAudit
 
 	// Initialize logger based on config
 	switch logLevel {
@@ -113,6 +121,19 @@ func main() {
 
 	log.Printf("✅ Configuration loaded successfully")
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
+
+	// Initialize metrics collector
+	metricsCollector = metrics.NewMetricsCollector()
+	log.Printf("✅ Metrics collector initialized")
+
+	// Initialize attestation manager if attestation is enabled
+	if configuration.Attestation != nil && configuration.Attestation.Enabled {
+		attestationManager = attestation.NewVerifierManager(configuration.Attestation)
+		if err := attestationManager.PreloadVerifiers(); err != nil {
+			log.Fatalf("❌ Failed to preload attestation verifiers: %v", err)
+		}
+		log.Printf("✅ Attestation manager initialized with %d clients", len(configuration.Attestation.Clients))
+	}
 
 	// Initialize stores
 	memoryStore = storage.NewMemoryStore()
@@ -150,6 +171,9 @@ func main() {
 	log.Printf("📱 Device authorization: %s/device/authorize", configuration.Server.BaseURL)
 	log.Printf("🔧 Client registration: %s/register", configuration.Server.BaseURL)
 	log.Printf("🏥 Health check: %s/health", configuration.Server.BaseURL)
+	log.Printf("📊 Metrics endpoint: %s/metrics", configuration.Server.BaseURL)
+	log.Printf("📈 Status endpoint: %s/stats", configuration.Server.BaseURL)
+	log.Printf("✅ Server is ready to accept requests")
 
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", configuration.Server.Port), nil); err != nil {
 		log.Fatalf("❌ Server failed to start: %v", err)
@@ -189,6 +213,10 @@ func initializeClients() error {
 	}
 
 	log.Printf("✅ Stores initialized with %d clients", len(memoryStore.Clients))
+
+	// Update metrics with initial client count
+	metricsCollector.UpdateRegisteredClients(float64(len(memoryStore.Clients)))
+
 	return nil
 
 }
@@ -213,6 +241,10 @@ func initializeUsers() error {
 	}
 
 	log.Printf("✅ User store initialized with %d users", len(memoryStore.Users))
+
+	// Update metrics with initial user count
+	metricsCollector.UpdateRegisteredUsers(float64(len(memoryStore.Users)))
+
 	return nil
 }
 
@@ -278,12 +310,12 @@ func initializeHandlers() {
 	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
 	statusHandler = handlers.NewStatusHandler(configuration)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	jwksHandler = handlers.NewJWKSHandler()
 	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
-	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration)
-	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log)
+	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)
+	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector)
 	claimsHandler = handlers.NewClaimsHandler(configuration, log)
 
 	log.Printf("✅ OAuth2 handlers initialized")
@@ -313,72 +345,64 @@ func loadTemplates() error {
 }
 
 func setupRoutes() {
+	// Metrics endpoint - register first
+	http.Handle("/metrics", proxyAwareMiddleware(promhttp.Handler()))
+
 	// OAuth2 endpoints - use fosite's built-in handlers
-	http.HandleFunc("/auth", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
-	http.HandleFunc("/oauth/authorize", proxyAwareMiddleware(authorizeHandler.ServeHTTP))
-	http.HandleFunc("/oauth/token", proxyAwareMiddleware(tokenHandler.ServeHTTP))
-	http.HandleFunc("/oauth/introspect", proxyAwareMiddleware(introspectionHandler.ServeHTTP))
-	http.HandleFunc("/oauth/revoke", proxyAwareMiddleware(revokeHandler.ServeHTTP))
+	http.Handle("/auth", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
+	http.Handle("/oauth/authorize", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
+	http.Handle("/oauth/token", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(tokenHandler.ServeHTTP))))
+	http.Handle("/oauth/introspect", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(introspectionHandler.ServeHTTP))))
+	http.Handle("/oauth/revoke", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(revokeHandler.ServeHTTP))))
 
 	// Device flow endpoints - use our custom device authorization but store in fosite-compatible format
-	http.HandleFunc("/device/authorize", proxyAwareMiddleware(deviceCodeHandler.HandleDeviceAuthorization))
-	http.HandleFunc("/device", proxyAwareMiddleware(deviceCodeHandler.ShowVerificationPage))
-	http.HandleFunc("/device/verify", proxyAwareMiddleware(deviceCodeHandler.HandleVerification))
-	http.HandleFunc("/device/consent", proxyAwareMiddleware(deviceCodeHandler.HandleConsent))
+	http.Handle("/device/authorize", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleDeviceAuthorization))))
+	http.Handle("/device", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.ShowVerificationPage))))
+	http.Handle("/device/verify", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleVerification))))
+	http.Handle("/device/consent", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleConsent))))
 
 	// Registration endpoints
-	http.HandleFunc("/register", proxyAwareMiddleware(registrationHandler.HandleRegistration))
+	http.Handle("/register", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
 
 	// Discovery endpoints
-	http.HandleFunc("/.well-known/oauth-authorization-server", proxyAwareMiddleware(oauth2DiscoveryHandler.ServeHTTP))
-	http.HandleFunc("/.well-known/openid-configuration", proxyAwareMiddleware(discoveryHandler.ServeHTTP))
-	http.HandleFunc("/.well-known/jwks.json", proxyAwareMiddleware(jwksHandler.ServeHTTP))
+	http.Handle("/.well-known/oauth-authorization-server", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(oauth2DiscoveryHandler.ServeHTTP))))
+	http.Handle("/.well-known/openid-configuration", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(discoveryHandler.ServeHTTP))))
+	http.Handle("/.well-known/jwks.json", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(jwksHandler.ServeHTTP))))
 
 	// Utility endpoints
-	http.HandleFunc("/userinfo", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	http.Handle("/userinfo", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userinfoHandler := handlers.UserInfoHandler{
 			Configuration:  configuration,
 			OAuth2Provider: oauth2Provider,
+			Metrics:        metricsCollector,
 		}
 		userinfoHandler.ServeHTTP(w, r)
-	}))
+	}))))
 
 	// Stats endpoint
-	http.HandleFunc("/stats", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	http.Handle("/stats", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		statisticsHandler := handlers.StatisticsHandler{
 			MemoryStore: memoryStore,
+			Metrics:     metricsCollector,
 		}
 		statisticsHandler.ServeHTTP(w, r)
-	}))
+	}))))
 
 	// Health endpoint
-	http.HandleFunc("/health", proxyAwareMiddleware(healthHandler.ServeHTTP))
+	http.Handle("/health", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(healthHandler.ServeHTTP))))
 
 	// Claims display endpoints
-	http.HandleFunc("/claims", proxyAwareMiddleware(claimsHandler.ServeHTTP))
-	http.HandleFunc("/callback", proxyAwareMiddleware(claimsHandler.HandleCallback))
+	http.Handle("/claims", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(claimsHandler.ServeHTTP))))
+	http.Handle("/callback", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(claimsHandler.HandleCallback))))
 
-	// Demo page
-	http.HandleFunc("/", proxyAwareMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmpl, err := template.ParseFiles("templates/demo.html")
-		if err != nil {
-			http.Error(w, "Template error", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.Execute(w, map[string]interface{}{
-			"BaseURL": configuration.Server.BaseURL,
-		})
-	}))
-
-	http.HandleFunc("/status", proxyAwareMiddleware(statusHandler.ServeHTTP))
+	http.Handle("/status", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(statusHandler.ServeHTTP))))
 
 	log.Printf("✅ Routes set up successfully")
 }
 
 // Middleware for proxy awareness
-func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func proxyAwareMiddleware(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Store original values
 		originalHost := r.Host
 		originalScheme := r.URL.Scheme
@@ -434,6 +458,6 @@ func proxyAwareMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 		log.Printf("🔄 Proxy-aware request: %s %s (Original: %s://%s, Forwarded: %s://%s)",
 			r.Method, r.RequestURI, originalScheme, originalHost, r.URL.Scheme, r.Host)
 
-		handler(w, r)
-	}
+		handler.ServeHTTP(w, r)
+	})
 }

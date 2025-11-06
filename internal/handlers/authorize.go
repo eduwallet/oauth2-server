@@ -3,6 +3,7 @@ package handlers
 import (
 	"html/template"
 	"net/http"
+	"oauth2-server/internal/metrics"
 	"oauth2-server/pkg/config"
 	"path/filepath"
 
@@ -15,14 +16,16 @@ type AuthorizeHandler struct {
 	OAuth2Provider fosite.OAuth2Provider
 	Configuration  *config.Config
 	Log            *logrus.Logger
+	Metrics        *metrics.MetricsCollector
 }
 
 // NewAuthorizeHandler creates a new authorization handler
-func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *config.Config, log *logrus.Logger) *AuthorizeHandler {
+func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *config.Config, log *logrus.Logger, metricsCollector *metrics.MetricsCollector) *AuthorizeHandler {
 	return &AuthorizeHandler{
 		OAuth2Provider: oauth2Provider,
 		Configuration:  configuration,
 		Log:            log,
+		Metrics:        metricsCollector,
 	}
 }
 
@@ -47,6 +50,9 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ar, err := h.OAuth2Provider.NewAuthorizeRequest(ctx, r)
 	if err != nil {
 		h.Log.Printf("❌ Error occurred in NewAuthorizeRequest: %v", err)
+		if h.Metrics != nil {
+			h.Metrics.RecordAuthRequest("unknown", "unknown", "error")
+		}
 		h.OAuth2Provider.WriteAuthorizeError(ctx, w, ar, err)
 		return
 	}
@@ -159,6 +165,16 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.Log.Printf("🔍 Fosite error hint: %s", fositeErr.HintField)
 		}
 
+		// Record authorization error metrics
+		if h.Metrics != nil {
+			clientID := ar.GetClient().GetID()
+			responseType := ""
+			if len(ar.GetResponseTypes()) > 0 {
+				responseType = ar.GetResponseTypes()[0]
+			}
+			h.Metrics.RecordAuthRequest(clientID, responseType, "error")
+		}
+
 		h.OAuth2Provider.WriteAuthorizeError(ctx, w, ar, authErr)
 		return
 	}
@@ -173,6 +189,16 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Last but not least, send the response!
 	h.OAuth2Provider.WriteAuthorizeResponse(ctx, w, ar, response)
+
+	// Record successful authorization metrics
+	if h.Metrics != nil {
+		clientID := ar.GetClient().GetID()
+		responseType := ""
+		if len(ar.GetResponseTypes()) > 0 {
+			responseType = ar.GetResponseTypes()[0]
+		}
+		h.Metrics.RecordAuthRequest(clientID, responseType, "success")
+	}
 
 	h.Log.Printf("🔍 WriteAuthorizeResponse completed")
 	h.Log.Printf("🔍 HTTP response headers after WriteAuthorizeResponse: %+v", w.Header())
