@@ -18,18 +18,16 @@ COPY . .
 
 # Build arguments
 ARG VERSION=dev
-ARG COMMIT_SHA=unknown
-ARG BUILD_TIME
-ARG GO_VERSION
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
 
 # Build the application with optimizations
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a -installsuffix cgo \
     -ldflags="-s -w -extldflags '-static' \
-              -X main.version=${VERSION} \
-              -X main.commit=${COMMIT_SHA} \
-              -X main.buildTime=${BUILD_TIME} \
-              -X main.goVersion=${GO_VERSION}" \
+              -X main.Version=${VERSION} \
+              -X main.GitCommit=${GIT_COMMIT} \
+              -X main.BuildTime=${BUILD_TIME}" \
     -o oauth2-server \
     cmd/server/main.go
 

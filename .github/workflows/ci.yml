@@ -105,13 +105,24 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
+            # Branch-based tags
             type=ref,event=branch
             type=ref,event=pr
+            # Semantic versioning tags
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            # Git commit tags
             type=sha,prefix=${{ github.ref_name }}-
+            # Latest tag for main branch
             type=raw,value=latest,enable={{is_default_branch}}
+            # Date-based tag for easier tracking
+            type=schedule,pattern={{date 'YYYYMMDD'}}
+          labels: |
+            org.opencontainers.image.title=OAuth2 Server
+            org.opencontainers.image.description=Enterprise OAuth2 Authorization Server with Attestation Support
+            org.opencontainers.image.vendor=HarryKodden
+            org.opencontainers.image.licenses=MIT
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -123,6 +134,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.run_id }}
 
   release:
     name: Create Release

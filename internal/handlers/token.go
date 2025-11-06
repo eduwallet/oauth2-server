@@ -200,7 +200,7 @@ func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) error {
 		result.ClientID, result.TrustLevel)
 
 	// Store attestation result in request context for later use
-	r = r.WithContext(attestation.WithAttestationResult(r.Context(), result))
+	*r = *r.WithContext(attestation.WithAttestationResult(r.Context(), result))
 
 	return nil
 }

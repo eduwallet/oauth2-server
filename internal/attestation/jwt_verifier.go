@@ -162,7 +162,7 @@ func (v *JWTVerifier) VerifyAttestation(token string) (*AttestationResult, error
 	}
 
 	// Extract cnf claim for confirmation
-	cnf, _ := claims["cnf"]
+	cnf := claims["cnf"]
 
 	// Extract attestation-specific claims
 	attClaims := make(map[string]interface{})

@@ -70,13 +70,13 @@ lint: fmt vet
 	@echo "🔍 Running staticcheck..."
 	@if command -v staticcheck >/dev/null 2>&1; then \
 		staticcheck ./...; \
-	#elif [ -f "$(shell go env GOPATH)/bin/staticcheck" ]; then \
-	#	$(shell go env GOPATH)/bin/staticcheck ./...; \
-	#else \
-	#	echo "Installing staticcheck..."; \
-	#	go install honnef.co/go/tools/cmd/staticcheck@latest; \
-	#	$(shell go env GOPATH)/bin/staticcheck ./...; \
-	#fi
+	elif [ -f "$(shell go env GOPATH)/bin/staticcheck" ]; then \
+		$(shell go env GOPATH)/bin/staticcheck ./...; \
+	else \
+		echo "Installing staticcheck..."; \
+		go install honnef.co/go/tools/cmd/staticcheck@latest; \
+		$(shell go env GOPATH)/bin/staticcheck ./...; \
+	fi
 	@echo "✅ All linting completed"
 
 # Install all development tools with proper PATH setup
@@ -305,10 +305,16 @@ test-coverage:
 help:
 	@echo "Available targets:"
 	@echo "  build              - Build the OAuth2 server binary"
+	@echo "  build-version      - Build with embedded version information"
 	@echo "  run                - Build and run the server"
 	@echo "  dev                - Run in development mode with auto-reload"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  tidy               - Tidy and vendor Go modules"
+	@echo ""
+	@echo "Version Management:"
+	@echo "  tag                - Create and push a new version tag"
+	@echo "  version            - Show version information"
+	@echo "  release            - Trigger GitHub release workflow"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test               - Run all test scripts with server lifecycle"
@@ -335,12 +341,49 @@ help:
 	@echo "  build-all          - Build for multiple platforms"
 	@echo ""
 	@echo "Examples:"
+	@echo "  make tag                               - Create a new version tag"
 	@echo "  make test                              - Run all tests"
 	@echo "  make test-script SCRIPT=test_device_native.sh  - Run specific test"
 	@echo "  make test-verbose                      - Run tests with detailed output"
 
 # Update .PHONY to include new targets
-.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script help
+.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script help tag version release
+
+# Version management targets
+tag:
+	@echo "🏷️  Creating a new version tag..."
+	@./scripts/tag-version.sh
+
+version:
+	@echo "📋 Version information:"
+	@if [ -f "bin/oauth2-server" ]; then \
+		./bin/oauth2-server -version; \
+	else \
+		echo "⚠️  Binary not found. Run 'make build' first."; \
+	fi
+
+# Build with version information
+build-version:
+	@echo "🔨 Building OAuth2 server with version info..."
+	@mkdir -p bin
+	@VERSION=$$(git describe --tags --exact-match 2>/dev/null || git describe --tags 2>/dev/null || echo "dev"); \
+	GIT_COMMIT=$$(git rev-parse --short HEAD); \
+	BUILD_TIME=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	go build -ldflags "-s -w -X main.Version=$$VERSION -X main.GitCommit=$$GIT_COMMIT -X main.BuildTime=$$BUILD_TIME" \
+		-o bin/oauth2-server cmd/server/main.go
+	@echo "✅ Build completed: bin/oauth2-server"
+
+# Manual release (for testing)
+release:
+	@echo "🚀 Triggering release workflow..."
+	@if ! command -v gh >/dev/null 2>&1; then \
+		echo "❌ GitHub CLI (gh) is required for releases"; \
+		echo "Install with: brew install gh"; \
+		exit 1; \
+	fi
+	@read -p "Enter version (e.g., v1.2.3): " VERSION; \
+	gh workflow run release.yml -f version=$$VERSION
+	@echo "✅ Release workflow triggered. Check GitHub Actions for progress."
 
 # Update existing targets to use the new patterns
 # Pre-commit checks with better tool handling

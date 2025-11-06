@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
+	"flag"
 
 	"html/template"
 	"os"
@@ -29,6 +30,13 @@ import (
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
+)
+
+// Version information - set during build
+var (
+	Version   = "dev"
+	GitCommit = "unknown"
+	BuildTime = "unknown"
 )
 
 // Create a logger instance
@@ -59,6 +67,7 @@ var (
 	oauth2DiscoveryHandler *handlers.OAuth2DiscoveryHandler
 	authorizeHandler       *handlers.AuthorizeHandler
 	claimsHandler          *handlers.ClaimsHandler
+	versionHandler         *handlers.VersionHandler
 
 	// Metrics collector
 	metricsCollector *metrics.MetricsCollector
@@ -71,7 +80,19 @@ var (
 )
 
 func main() {
-	log.Println("🚀 Starting OAuth2 Server...")
+	// Handle version flag
+	var showVersion = flag.Bool("version", false, "Show version information")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("OAuth2 Server\n")
+		fmt.Printf("Version: %s\n", Version)
+		fmt.Printf("Git Commit: %s\n", GitCommit)
+		fmt.Printf("Build Time: %s\n", BuildTime)
+		return
+	}
+
+	log.Printf("🚀 Starting OAuth2 Server v%s (commit: %s)", Version, GitCommit)
 
 	var err error
 
@@ -305,6 +326,9 @@ func initializeOAuth2Provider() error {
 func initializeHandlers() {
 	// Initialize OAuth2 handlers
 
+	// Set version information in the handlers package
+	handlers.SetVersionInfo(Version, GitCommit, BuildTime)
+
 	registrationHandler = handlers.NewRegistrationHandler(memoryStore)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
 	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
@@ -317,6 +341,7 @@ func initializeHandlers() {
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector)
 	claimsHandler = handlers.NewClaimsHandler(configuration, log)
+	versionHandler = handlers.NewVersionHandler()
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }
@@ -390,6 +415,9 @@ func setupRoutes() {
 
 	// Health endpoint
 	http.Handle("/health", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(healthHandler.ServeHTTP))))
+
+	// Version endpoint
+	http.Handle("/version", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(versionHandler.ServeHTTP))))
 
 	// Claims display endpoints
 	http.Handle("/claims", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(claimsHandler.ServeHTTP))))

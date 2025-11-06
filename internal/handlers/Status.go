@@ -47,7 +47,7 @@ func (h *StatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		<div class="section">
 			<h2>📋 Server Information</h2>
 			<p><strong>Base URL:</strong> %s</p>
-			<p><strong>Version:</strong> Development</p>
+			<p><strong>Version:</strong> <a href="/version" class="btn">Check Version</a></p>
 			<p><strong>Status:</strong> ✅ Running</p>
 		</div>
 
