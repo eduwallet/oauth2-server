@@ -74,8 +74,15 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git tag -a "${{ github.event.inputs.version }}" -m "Release ${{ github.event.inputs.version }}"
-          git push origin "${{ github.event.inputs.version }}"
+          
+          # Check if tag already exists
+          if git rev-parse "${{ github.event.inputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ github.event.inputs.version }} already exists, skipping creation"
+          else
+            echo "Creating tag ${{ github.event.inputs.version }}"
+            git tag -a "${{ github.event.inputs.version }}" -m "Release ${{ github.event.inputs.version }}"
+            git push origin "${{ github.event.inputs.version }}"
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
