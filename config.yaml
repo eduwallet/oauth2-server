@@ -33,7 +33,7 @@ logging:
 # OAuth 2.0 Attestation-Based Client Authentication
 # https://datatracker.ietf.org/doc/html/draft-ietf-oauth-attestation-based-client-auth-07
 attestation:
-  enabled: false  # Start disabled for backward compatibility
+  enabled: true  # Enable attestation feature for demo
   experimental: true  # Mark as experimental feature
   
   # Trust anchor configuration for verifying attestations
@@ -46,9 +46,16 @@ attestation:
     
     - name: "example_hsm_ca" 
       type: "hsm"
-      certificate_path: "/certs/hsm_ca.pem"
-      enabled: false
+      certificate_path: "/tmp/certs/hsm_ca.pem"
+      enabled: true  # Enable for demo
       description: "Example HSM root CA certificate"
+  
+  # Client-specific attestation configurations (required when attestation enabled)
+  clients:
+    - client_id: "hsm-attestation-wallet-demo"
+      allowed_methods: ["mock"]  # Only use mock for demo
+      trust_anchors: ["example_hsm_ca"]
+      required_level: "medium"
   
   # Verification settings
   verification:
@@ -212,6 +219,44 @@ clients:
   token_endpoint_auth_method: "client_secret_basic"
   enabled_flows:
   - "device_code"
+
+# HSM Attestation Wallet Demo Client
+- id: "hsm-attestation-wallet-demo"
+  secret: "demo-secret-12345"
+  name: "HSM Attestation Wallet Demo"
+  description: "Browser-based HSM attestation wallet demonstration"
+  redirect_uris:
+  - "http://localhost:8001/callback"
+  - "http://localhost:8001/callback.html"
+  - "http://localhost:8001"
+  - "http://127.0.0.1:8001/callback"
+  - "http://127.0.0.1:8001/callback.html"
+  - "http://127.0.0.1:8001"
+  grant_types:
+  - "authorization_code"
+  - "refresh_token"
+  response_types:
+  - "code"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "wallet:read"
+  - "wallet:write"
+  - "api:read"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "attest_jwt_client_auth"  # Use JWT attestation
+  public: false
+  enabled_flows:
+  - "authorization_code"
+  enabled: true
+  attestation_config:
+    client_id: "hsm-attestation-wallet-demo"  # Client ID for attestation verification
+    allowed_methods:      # Use only mock method for demo
+      - "mock"
+    trust_anchors:        # Reference to configured trust anchor
+      - "example_hsm_ca"
 
 # Example Attestation-Enabled Client (disabled by default)
 - id: "attested-mobile-app"

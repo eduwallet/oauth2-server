@@ -38,7 +38,7 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"userinfo_endpoint":      baseURL + "/userinfo",
 
 		// Device Flow (RFC 8628)
-		"device_authorization_endpoint":    baseURL + "/device_authorization",
+		"device_authorization_endpoint":    baseURL + "/device/authorize",
 		"device_verification_uri":          baseURL + "/device",
 		"device_verification_uri_complete": baseURL + "/device?user_code={user_code}",
 

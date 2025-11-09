@@ -28,6 +28,7 @@ import (
 	"oauth2-server/internal/attestation"
 	"oauth2-server/internal/handlers"
 	"oauth2-server/internal/metrics"
+	"oauth2-server/internal/middleware"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 )
@@ -373,12 +374,12 @@ func setupRoutes() {
 	// Metrics endpoint - register first
 	http.Handle("/metrics", proxyAwareMiddleware(promhttp.Handler()))
 
-	// OAuth2 endpoints - use fosite's built-in handlers
-	http.Handle("/auth", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
-	http.Handle("/oauth/authorize", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
-	http.Handle("/oauth/token", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(tokenHandler.ServeHTTP))))
-	http.Handle("/oauth/introspect", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(introspectionHandler.ServeHTTP))))
-	http.Handle("/oauth/revoke", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(revokeHandler.ServeHTTP))))
+	// OAuth2 endpoints - use fosite's built-in handlers with CORS support
+	http.Handle("/auth", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
+	http.Handle("/oauth/authorize", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
+	http.Handle("/oauth/token", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(tokenHandler.ServeHTTP))))
+	http.Handle("/oauth/introspect", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(introspectionHandler.ServeHTTP))))
+	http.Handle("/oauth/revoke", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(revokeHandler.ServeHTTP))))
 
 	// Device flow endpoints - use our custom device authorization but store in fosite-compatible format
 	http.Handle("/device/authorize", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleDeviceAuthorization))))
@@ -389,10 +390,10 @@ func setupRoutes() {
 	// Registration endpoints
 	http.Handle("/register", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
 
-	// Discovery endpoints
-	http.Handle("/.well-known/oauth-authorization-server", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(oauth2DiscoveryHandler.ServeHTTP))))
-	http.Handle("/.well-known/openid-configuration", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(discoveryHandler.ServeHTTP))))
-	http.Handle("/.well-known/jwks.json", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(jwksHandler.ServeHTTP))))
+	// Discovery endpoints with CORS support
+	http.Handle("/.well-known/oauth-authorization-server", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(oauth2DiscoveryHandler.ServeHTTP))))
+	http.Handle("/.well-known/openid-configuration", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(discoveryHandler.ServeHTTP))))
+	http.Handle("/.well-known/jwks.json", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(jwksHandler.ServeHTTP))))
 
 	// Utility endpoints
 	http.Handle("/userinfo", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -426,6 +427,13 @@ func setupRoutes() {
 	http.Handle("/status", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(statusHandler.ServeHTTP))))
 
 	log.Printf("✅ Routes set up successfully")
+}
+
+// Combined middleware for all HTTP endpoints
+func corsAndProxyMiddleware(handler http.Handler) http.Handler {
+	return middleware.CORS(func(w http.ResponseWriter, r *http.Request) {
+		proxyAwareMiddleware(handler).ServeHTTP(w, r)
+	})
 }
 
 // Middleware for proxy awareness
