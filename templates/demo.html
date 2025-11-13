@@ -192,6 +192,9 @@
                 
                 <div class="config-label">Response Type:</div>
                 <div class="config-value">code</div>
+                
+                <div class="config-label">Issuer State:</div>
+                <div class="config-value">demo-issuer-state-[timestamp]</div>
             </div>
 
             <div class="warning">
@@ -202,8 +205,9 @@
                     <li>User authentication</li>
                     <li>Consent granting</li>
                     <li>Authorization code exchange</li>
-                    <li>User claims display</li>
+                    <li>User claims display with issuer_state</li>
                 </ul>
+                <strong>Note:</strong> The demo includes an <code>issuer_state</code> parameter that will be returned in the UserInfo response.
             </div>
         </div>
 
@@ -363,6 +367,9 @@
                 sessionStorage.setItem('pkce_verifier', codeVerifier);
                 sessionStorage.setItem('oauth_state', state);
                 
+                // Generate issuer state for demo
+                const issuerState = 'demo-issuer-state-' + Date.now();
+                
                 // Build authorization URL
                 const authUrl = new URL(`${config.baseUrl}/auth`);
                 authUrl.searchParams.set('response_type', 'code');
@@ -372,11 +379,13 @@
                 authUrl.searchParams.set('state', state);
                 authUrl.searchParams.set('code_challenge', codeChallenge);
                 authUrl.searchParams.set('code_challenge_method', 'S256');
+                authUrl.searchParams.set('issuer_state', issuerState);
                 
                 console.log('Starting OAuth2 flow...');
                 console.log('Code Verifier:', codeVerifier);
                 console.log('Code Challenge:', codeChallenge);
                 console.log('State:', state);
+                console.log('Issuer State:', issuerState);
                 console.log('Authorization URL:', authUrl.toString());
                 
                 // Redirect to authorization server
@@ -402,9 +411,10 @@
 CODE_VERIFIER="${codeVerifier}"
 CODE_CHALLENGE="${codeChallenge}"
 STATE="${state}"
+ISSUER_STATE="demo-issuer-state-${Date.now()}"
 
 # 2. Start authorization flow (copy this URL to browser):
-${config.baseUrl}/auth?response_type=code&client_id=${config.clientId}&redirect_uri=${encodeURIComponent(config.redirectUri)}&scope=${encodeURIComponent(config.scope)}&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256
+${config.baseUrl}/auth?response_type=code&client_id=${config.clientId}&redirect_uri=${encodeURIComponent(config.redirectUri)}&scope=${encodeURIComponent(config.scope)}&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256&issuer_state=${encodeURIComponent('demo-issuer-state-' + Date.now())}
 
 # 3. After receiving authorization code, exchange for tokens:
 curl -X POST "${config.baseUrl}/oauth/token" \\
@@ -412,7 +422,7 @@ curl -X POST "${config.baseUrl}/oauth/token" \\
   -H "Authorization: Basic $(echo -n '${config.clientId}:web-app-secret' | base64)" \\
   -d "grant_type=authorization_code&code=YOUR_AUTH_CODE&redirect_uri=${config.redirectUri}&code_verifier=${codeVerifier}"
 
-# 4. Test UserInfo endpoint with access token:
+# 4. Test UserInfo endpoint with access token (should include issuer_state claim):
 curl -X GET "${config.baseUrl}/userinfo" \\
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
                 `.trim();

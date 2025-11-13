@@ -1,33 +1,57 @@
+
 services:
-  oauth2-server:
-    build: .  # For development - builds from local source
-    # image: ghcr.io/harrykodden/oauth2-server:latest  # For production - use published image
-    ports:
-      - "8081:8080"
-    environment:
-      - PUBLIC_BASE_URL=http://localhost:8081
-      - PORT=8080
-      - TEST_USER_USERNAME=john.doe
-      - TEST_USER_PASSWORD=password123
-    depends_on:
-      - redis
-      - postgres
-
-  redis:
-    image: redis:7-alpine
-#   ports:
-#     - "6379:6379"
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_DB=oauth2_server
-      - POSTGRES_USER=oauth2_user
-      - POSTGRES_PASSWORD=your-db-password
-#   ports:
-#     - "5432:5432"
+  init-certs:
+    image: alpine:latest
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - certs:/tmp/certs
+      - ./init-certs.sh:/init-certs.sh
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache openssl && /init-certs.sh"]
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/certs/hsm_ca.pem"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
+  oauth2-server:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PUBLIC_BASE_URL=http://localhost:8080
+      - PORT=8080
+      - UPSTREAM_PROVIDER_URL=${UPSTREAM_PROVIDER_URL}
+      - UPSTREAM_CLIENT_ID=${UPSTREAM_CLIENT_ID}
+      - UPSTREAM_CLIENT_SECRET=${UPSTREAM_CLIENT_SECRET}
+      - UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
+    volumes:
+      - certs:/tmp/certs
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      init-certs:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:8080/health | grep -q '\"status\":\"healthy\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  demo-app:
+    image: python:3.11-alpine
+    working_dir: /app
+    volumes:
+      - certs:/tmp/certs
+      - ./examples/hsm-attestation-wallet:/app
+      - ./examples/hsm-attestation-wallet/generate-config.sh:/app/generate-config.sh
+    command: ["/bin/sh", "-c", "chmod +x /app/generate-config.sh && /app/generate-config.sh && python3 -m http.server 8080"]
+    environment:
+      - HSM_DEMO_SERVER_URL=${HSM_DEMO_SERVER_URL:-http://localhost:8080}
+    depends_on:
+      init-certs:
+        condition: service_completed_successfully
+      oauth2-server:
+        condition: service_started
+        
 volumes:
-  postgres_data:
+  certs:

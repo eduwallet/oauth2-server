@@ -36,10 +36,17 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - Tokens include an `aud` claim (array of strings) in both the token and introspection response
 - Audience is validated on token issuance and refresh
 
+### 🆔 OpenID 4 Verifiable Credentials
+- **issuer_state Support**: Full implementation of `issuer_state` parameter for verifiable credential issuance flows
+- **State Persistence**: Maintains authorization state through OAuth2 proxy flows
+- **UserInfo Integration**: Returns `issuer_state` in userinfo responses when present in original authorization request
+
 ### 🔒 OAuth 2.0 Attestation-Based Client Authentication
 - **Enterprise Security**: Hardware-backed client authentication for mobile and IoT devices
 - **Trust Levels**: Configurable trust requirements based on attestation strength
 - **Multiple Methods**: Support for JWT-based and TLS certificate-based attestation
+- **Proxy Mode Support**: Attestation verification in proxy flows before upstream communication
+- **Comprehensive Debugging**: Detailed logging for attestation verification steps
 - **Standards Compliance**: Follows draft-ietf-oauth-attestation-based-client-auth-07
 
 ### OAuth2 Grant Types
@@ -57,6 +64,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - ✅ **RFC 8414** - Authorization Server Metadata
 - ✅ **OpenID Connect Core 1.0**
 - ✅ **draft-ietf-oauth-attestation-based-client-auth-07** - OAuth 2.0 Attestation-Based Client Authentication
+- ✅ **OpenID 4 Verifiable Credential Issuance 1.0** - `issuer_state` parameter support
 
 ### Production Features
 - ✅ Kubernetes native
@@ -70,7 +78,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 
 - **cmd/server/main.go**: Entry point of the application. Initializes the server and sets up routes and middleware.
 - **internal/auth/**: Authentication and authorization logic for OAuth2 flows.
-- **internal/attestation/**: OAuth 2.0 Attestation-Based Client Authentication implementation.
+- **internal/attestation/**: OAuth 2.0 Attestation-Based Client Authentication implementation with JWT and TLS certificate verification, comprehensive debugging, and proxy mode support.
 - **internal/flows/**: Implements various OAuth2 flows.
 - **internal/handlers/**: Defines HTTP handlers for API endpoints.
 - **internal/models/**: Data models used in the application.
@@ -87,7 +95,8 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 ## Features
 
 - **OAuth2 Authorization Flows**: Authorization Code, Client Credentials, Device Authorization, Refresh Token, Token Exchange
-- **Attestation-Based Authentication**: Hardware-backed client authentication with JWT and TLS certificate support
+- **Attestation-Based Authentication**: Hardware-backed client authentication with JWT and TLS certificate support, proxy mode verification, and comprehensive debugging
+- **OpenID 4 Verifiable Credentials**: Full `issuer_state` parameter support for verifiable credential issuance flows
 - **Security**: JWT-based tokens, PKCE, HTTPS, proxy-aware, rate limiting, CORS
 - **Management**: Dynamic client registration via API (with audience support)
 - **Token Introspection**: `/introspect` endpoint returns all standard fields, including `aud` as a JSON array
@@ -117,7 +126,57 @@ helm install oauth2-server ./helm/oauth2-server -n oauth2-server --set config.se
 
 ## Configuration
 
-See `values.yaml` and `docker-compose.yml` for configuration options.
+### Environment Variables
+
+The server supports configuration via environment variables for security-sensitive settings:
+
+#### Upstream Provider Configuration (Proxy Mode)
+
+When these environment variables are set, the server runs in proxy mode and ignores user details from `config.yaml`:
+
+```bash
+# Required for proxy mode
+UPSTREAM_PROVIDER_URL=https://accounts.google.com
+UPSTREAM_CLIENT_ID=your-client-id
+UPSTREAM_CLIENT_SECRET=your-client-secret
+```
+
+**Security Note**: Upstream provider configuration has been moved from `config.yaml` to environment variables only to prevent storing sensitive credentials in configuration files.
+
+#### Other Environment Variables
+
+```bash
+# Server configuration
+PUBLIC_BASE_URL=https://your-domain.com
+PORT=8080
+HOST=localhost
+
+# Security
+JWT_SIGNING_KEY=your-jwt-secret
+
+# Proxy settings
+TRUST_PROXY_HEADERS=true
+FORCE_HTTPS=false
+```
+
+### Configuration Files
+
+See `values.yaml` and `docker-compose.yml` for additional configuration options.
+
+### Proxy Mode
+
+When upstream provider environment variables are configured, the server operates in proxy mode:
+
+1. **Client Authentication**: Accepts requests from downstream clients
+2. **Token Issuance**: Issues proxy-controlled access tokens instead of passing through upstream tokens
+3. **UserInfo Proxying**: Maps proxy tokens back to upstream tokens for userinfo requests
+4. **Security**: Upstream tokens are never exposed to downstream clients
+
+**Token Flow in Proxy Mode:**
+- Downstream client requests token → Server validates with upstream → Server issues proxy token
+- Downstream client calls userinfo with proxy token → Server maps to upstream token → Server proxies userinfo call
+
+This provides an additional security layer where upstream access tokens are never exposed to client applications.
 
 ## OAuth 2.0 Attestation-Based Client Authentication
 
@@ -135,7 +194,15 @@ Attestation-based authentication allows clients to authenticate using hardware-b
 
 #### 1. JWT-Based Attestation (`attest_jwt_client_auth`)
 
-Clients authenticate using signed JWT tokens that contain attestation claims:
+Clients authenticate using signed JWT tokens that contain attestation claims and X.509 certificate chains:
+
+```json
+{
+  "alg": "ES256",
+  "x5c": ["MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."],
+  "typ": "JWT"
+}
+```
 
 ```json
 {
@@ -173,43 +240,54 @@ Enable attestation in your `config.yaml`:
 ```yaml
 attestation:
   enabled: true
+  experimental: true
+  trust_anchors:
+    - name: "hsm_ca"
+      type: "hsm"
+      certificate_path: "/tmp/certs/hsm_ca.pem"
+      enabled: true
+      description: "HSM root CA certificate"
+  
   clients:
-    - client_id: "mobile-banking-app"
-      allowed_methods:
-        - "attest_jwt_client_auth"
-        - "attest_tls_client_auth"
-      trust_anchors:
-        - |
-          -----BEGIN CERTIFICATE-----
-          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
-          -----END CERTIFICATE-----
+    - client_id: "hsm-attestation-wallet-demo"
+      allowed_methods: ["attest_jwt_client_auth"]
+      trust_anchors: ["hsm_ca"]
       required_level: "high"
     
-    - client_id: "iot-sensor-network"
-      allowed_methods:
-        - "attest_tls_client_auth"
-      trust_anchors:
-        - |
-          -----BEGIN CERTIFICATE-----
-          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
-          -----END CERTIFICATE-----
-      required_level: "medium"
+    - client_id: "mobile-banking-app"
+      allowed_methods: ["attest_jwt_client_auth", "attest_tls_client_auth"]
+      trust_anchors: ["mobile_ca"]
+      required_level: "high"
 ```
+
+### Proxy Mode Attestation Verification
+
+When running in proxy mode, attestation verification occurs **before** proxying requests to upstream providers:
+
+1. **Client Authentication**: Downstream client sends token request with attestation
+2. **Attestation Verification**: Server verifies JWT assertion and certificate chain
+3. **Proxy Only After Success**: Only successful attestation allows upstream communication
+4. **Clean Proxying**: Attestation parameters are removed before upstream requests
+
+**Security Flow:**
+- **Downstream (HSM Demo)**: `client_id` + JWT client assertion attestation
+- **Upstream (Google OAuth2)**: `client_id` + `client_secret` (standard OAuth2)
 
 ### Client Configuration
 
-Clients using attestation must be configured with attestation settings:
+Clients using attestation must be configured as public clients with attestation settings:
 
 ```yaml
 clients:
-  - id: "mobile-banking-app"
-    name: "Mobile Banking Application"
-    grant_types: ["client_credentials", "authorization_code"]
-    token_endpoint_auth_method: "attest_jwt_client_auth"
+  - id: "hsm-attestation-wallet-demo"
+    name: "HSM Attestation Wallet Demo"
+    public: true
+    token_endpoint_auth_method: "none"
+    grant_types: ["authorization_code", "refresh_token"]
     attestation_config:
-      client_id: "mobile-banking-app"
+      client_id: "hsm-attestation-wallet-demo"
       allowed_methods: ["attest_jwt_client_auth"]
-      trust_anchors: ["attestation-ca-cert"]
+      trust_anchors: ["hsm_ca"]
       required_level: "high"
 ```
 
@@ -268,6 +346,88 @@ curl -X POST https://oauth2-server.example.com/oauth/token \
   -d "grant_type=client_credentials&client_id=iot-device-001"
 ```
 
+### HSM Attestation Demo
+
+The included HSM attestation wallet demo showcases real-world attestation authentication:
+
+**Demo Components:**
+- **HSM Demo App**: Browser-based wallet application (`examples/hsm-attestation-wallet/`)
+- **Docker Setup**: Complete environment with certificate generation and HSM simulation
+- **Real Attestation**: Uses JWT client assertions with X.509 certificate chains
+
+**Demo Flow:**
+1. **Certificate Generation**: Docker container generates HSM CA and client certificates
+2. **JWT Creation**: Demo app creates signed JWT with attestation claims and certificate chain
+3. **Attestation Verification**: Server validates JWT signature and certificate chain
+4. **Proxy Authentication**: Only after successful attestation, request proxies to upstream Google OAuth2
+
+**Running the Demo:**
+
+```bash
+# Start the complete demo environment
+docker compose up
+
+# Access the demo app at http://localhost:8001
+# The app will demonstrate attestation-based authentication
+```
+
+**Demo Configuration:**
+```yaml
+# HSM demo client configuration
+clients:
+  - id: "hsm-attestation-wallet-demo"
+    name: "HSM Attestation Wallet Demo"
+    public: true
+    token_endpoint_auth_method: "none"
+    grant_types: ["authorization_code", "refresh_token"]
+    attestation_config:
+      client_id: "hsm-attestation-wallet-demo"
+      allowed_methods: ["attest_jwt_client_auth"]
+      trust_anchors: ["/tmp/certs/hsm_ca.pem"]
+      required_level: "high"
+```
+
+### OpenID 4 Verifiable Credential Issuance Support
+
+The server implements `issuer_state` parameter support as specified in [OpenID 4 Verifiable Credential Issuance 1.0](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-issuer_state).
+
+#### issuer_state Parameter
+
+The `issuer_state` parameter allows credential issuers to maintain state across the OAuth2 authorization flow:
+
+- **Authorization Request**: Include `issuer_state` in the authorization URL
+- **State Persistence**: Server maintains the original `issuer_state` through proxy flows
+- **UserInfo Response**: Returns `issuer_state` in userinfo responses when present
+- **Proxy Mode**: Properly handles `issuer_state` in upstream provider proxy scenarios
+
+#### Usage Example
+
+```bash
+# Authorization request with issuer_state
+GET /auth?response_type=code&client_id=vc-wallet&redirect_uri=https://wallet.example.com/callback&scope=openid&issuer_state=abc123def456
+
+# UserInfo response includes issuer_state
+{
+  "sub": "user123",
+  "iss": "https://oauth2-server.example.com",
+  "aud": "vc-wallet",
+  "issuer_state": "abc123def456",
+  "iat": 1640995200,
+  "exp": 1640998800
+}
+```
+
+#### Proxy Mode issuer_state Handling
+
+When running in proxy mode, the server:
+
+1. **Captures issuer_state**: Extracts `issuer_state` from downstream authorization requests
+2. **Persists State**: Stores mapping between authorization codes and `issuer_state`
+3. **Returns in UserInfo**: Includes `issuer_state` in userinfo responses for the authenticated user
+4. **Clean State Management**: Properly manages state cleanup after token exchange
+
+This enables verifiable credential wallets and issuers to maintain session state across complex OAuth2 proxy architectures.
+
 ### Security Considerations
 
 1. **Certificate Validation**: All attestation certificates are validated against configured trust anchors
@@ -275,6 +435,40 @@ curl -X POST https://oauth2-server.example.com/oauth/token \
 3. **Timestamp Validation**: Attestation timestamps are checked for freshness
 4. **Hardware Requirements**: High trust levels require hardware-backed key storage
 5. **Audit Logging**: All attestation attempts are logged for security monitoring
+6. **Proxy Mode Security**: Attestation verification occurs before upstream communication
+
+### Debugging and Monitoring
+
+The attestation system provides comprehensive debug logging for troubleshooting:
+
+```bash
+# JWT attestation verification logs
+[DEBUG] JWT attestation verification starting for client: hsm-attestation-wallet-demo
+[DEBUG] Leaf certificate parsed successfully - Subject: ..., Issuer: ...
+[DEBUG] JWT signature verification successful
+[DEBUG] Subject validation successful
+[DEBUG] Attestation verification completed successfully
+
+# Proxy mode attestation logs
+[PROXY] Attestation required for client: hsm-attestation-wallet-demo
+[PROXY] Attestation verification successful for client: hsm-attestation-wallet-demo
+[PROXY] Removed attestation parameters from request before proxying
+```
+
+### Monitoring and Metrics
+
+Attestation events are tracked in Prometheus metrics:
+
+```promql
+# Attestation verification attempts
+oauth2_attestation_verifications_total{client_id="hsm-demo", method="jwt", result="success"}
+
+# Trust level distribution
+oauth2_attestation_trust_level{level="high", client_id="hsm-demo"}
+
+# Verification latency
+oauth2_attestation_verification_duration_seconds{method="jwt"}
+```
 
 ### Monitoring and Metrics
 
@@ -290,22 +484,6 @@ oauth2_attestation_trust_level{level="high", client_id="mobile-app"}
 # Verification latency
 oauth2_attestation_verification_duration_seconds{method="jwt"}
 ```
-
-### Development and Testing
-
-For development and testing, a mock verifier is available:
-
-```yaml
-attestation:
-  enabled: true
-  clients:
-    - client_id: "test-client"
-      allowed_methods: ["mock"]
-      trust_anchors: ["mock-anchor"]
-      required_level: "medium"
-```
-
-The mock verifier accepts any token and always returns a successful verification result.
 
 ## API Endpoints
 
@@ -361,7 +539,7 @@ The `/claims` endpoint displays the claims of the authenticated user interactive
 
 ### UserInfo Endpoint
 
-The `/userinfo` endpoint returns OIDC claims for the authenticated user. **Requires an `Authorization: Bearer <access_token>` header**. Used by the demo and claims display pages.
+The `/userinfo` endpoint returns OIDC claims for the authenticated user. **Requires an `Authorization: Bearer <access_token>` header**. Used by the demo and claims display pages. **Returns `issuer_state` in responses when present in the original authorization request** (OpenID 4 Verifiable Credentials support).
 
 
 ### Client Registration

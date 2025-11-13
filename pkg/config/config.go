@@ -6,8 +6,6 @@ import (
 	"oauth2-server/internal/utils"
 	"os"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // AttestationConfig represents the global attestation configuration
@@ -34,7 +32,7 @@ func (c *ClientAttestationConfig) Validate() error {
 		return fmt.Errorf("at least one allowed_method is required")
 	}
 
-	validMethods := []string{"attest_jwt_client_auth", "attest_tls_client_auth", "mock"}
+	validMethods := []string{"attest_jwt_client_auth", "attest_tls_client_auth"}
 	for _, method := range c.AllowedMethods {
 		found := false
 		for _, valid := range validMethods {
@@ -100,26 +98,26 @@ func (a *AttestationConfig) Validate() error {
 // Config holds the application configuration
 type Config struct {
 	// Server configuration
-	Server   ServerConfig
-	Security SecurityConfig
-	Logging  LoggingConfig
+	Server   ServerConfig   `yaml:"server"`
+	Security SecurityConfig `yaml:"security"`
+	Logging  LoggingConfig  `yaml:"logging"`
 
 	// Legacy fields for backward compatibility
 	BaseURL string
 	Port    string
 	Host    string
 
-	// Dynamic configuration from YAML
-	YAMLConfig *YAMLConfig
-
 	// Clients loaded from YAML
-	Clients []ClientConfig
+	Clients []ClientConfig `yaml:"clients"`
 
-	// Users loaded from YAML
-	Users []UserConfig
+	// Users loaded from YAML (only used in "local" mode)
+	Users []UserConfig `yaml:"users"`
+
+	// Upstream Provider (only used in "proxy" mode)
+	UpstreamProvider UpstreamProviderConfig
 
 	// Attestation configuration
-	Attestation *AttestationConfig
+	Attestation *AttestationConfig `yaml:"attestation,omitempty"`
 
 	// Reverse Proxy Configuration (can be overridden by YAML)
 	TrustProxyHeaders bool
@@ -186,21 +184,13 @@ type UserConfig struct {
 	Name     string `yaml:"name"`
 }
 
-// YAMLConfig represents the raw YAML configuration structure
-type YAMLConfig struct {
-	Server      ServerConfig       `yaml:"server"`
-	Security    SecurityConfig     `yaml:"security"`
-	Logging     LoggingConfig      `yaml:"logging"`
-	Clients     []ClientConfig     `yaml:"clients"`
-	Users       []UserConfig       `yaml:"users"`
-	Proxy       *ProxyConfig       `yaml:"proxy,omitempty"`
-	Attestation *AttestationConfig `yaml:"attestation,omitempty"`
-}
-
-// ProxyConfig holds proxy-related configuration
-type ProxyConfig struct {
-	TrustHeaders bool `yaml:"trust_headers"`
-	ForceHTTPS   bool `yaml:"force_https"`
+// UpstreamProviderConfig represents configuration for an upstream OAuth2 provider
+type UpstreamProviderConfig struct {
+	ProviderURL  string
+	ClientID     string
+	ClientSecret string
+	CallbackURL  string
+	Metadata     map[string]interface{}
 }
 
 // IsEnabled returns whether this client is enabled (defaults to true if not specified)
@@ -234,6 +224,25 @@ func (c *Config) Validate() error {
 
 	if c.Server.Host == "" {
 		return fmt.Errorf("server host is required")
+	}
+
+	// Validate mode-specific configuration
+	if c.IsLocalMode() {
+		if len(c.Users) == 0 {
+			return fmt.Errorf("local mode requires at least one user to be configured")
+		}
+		if c.UpstreamProvider.ProviderURL != "" {
+			return fmt.Errorf("upstream_provider should not be configured in local mode")
+		}
+	} else if c.IsProxyMode() {
+		// Check if upstream provider is configured either in YAML (legacy) or environment variables (new)
+		hasYAMLConfig := c.UpstreamProvider.ProviderURL != "" && c.UpstreamProvider.ProviderURL != "https://example.com"
+		hasEnvConfig := os.Getenv("UPSTREAM_PROVIDER_URL") != ""
+
+		if !hasYAMLConfig && !hasEnvConfig {
+			return fmt.Errorf("proxy mode requires upstream_provider.provider_url to be configured either in config.yaml or via UPSTREAM_PROVIDER_URL environment variable")
+		}
+		// Users can be configured in proxy mode but will be ignored
 	}
 
 	// Validate clients
@@ -356,31 +365,19 @@ func (c *Config) GetFirstClient() (*ClientConfig, bool) {
 	return nil, false
 }
 
-// GetFirstUser returns the first configured user (useful for testing)
-func (c *Config) GetFirstUser() (*UserConfig, bool) {
-	if len(c.Users) > 0 {
-		return &c.Users[0], true
+// IsProxyMode returns true if the server is configured to proxy to an upstream provider
+func (c *Config) IsProxyMode() bool {
+	// Check if upstream provider is configured via environment variables
+	if os.Getenv("UPSTREAM_PROVIDER_URL") != "" {
+		return true
 	}
-	return nil, false
+	// Check if upstream provider is configured in YAML (legacy support)
+	return c.UpstreamProvider.ProviderURL != "" && c.UpstreamProvider.ProviderURL != "https://example.com"
 }
 
-// LoadYAMLConfig loads YAML configuration from a file
-func LoadYAMLConfig(configPath string) (*YAMLConfig, error) {
-	if configPath == "" {
-		configPath = "config.yaml"
-	}
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read YAML config file: %w", err)
-	}
-
-	var yamlConfig YAMLConfig
-	if err := yaml.Unmarshal(data, &yamlConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML config: %w", err)
-	}
-
-	return &yamlConfig, nil
+// IsLocalMode returns true if the server is configured to use local users
+func (c *Config) IsLocalMode() bool {
+	return !c.IsProxyMode()
 }
 
 // Helper functions

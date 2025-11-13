@@ -31,8 +31,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o oauth2-server \
     cmd/server/main.go
 
-# Final stage - use distroless for security
-FROM gcr.io/distroless/static:nonroot
+# Final stage - use alpine for healthcheck capabilities
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS calls
+RUN apk add --no-cache ca-certificates curl
 
 # Copy binary from builder stage
 COPY --from=builder /app/oauth2-server /app/oauth2-server
@@ -44,8 +47,15 @@ COPY --from=builder /app/templates /app/templates
 # Set working directory
 WORKDIR /app
 
-# Use non-root user (already set in distroless/static:nonroot)
-USER nonroot:nonroot
+# Create non-root user
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Change ownership of app directory
+RUN chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8080

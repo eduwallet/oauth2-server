@@ -2,18 +2,26 @@ package attestation
 
 import (
 	"fmt"
+	"io/ioutil"
 	"oauth2-server/pkg/config"
+
+	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 )
 
 // VerifierFactory creates attestation verifiers based on configuration
 type VerifierFactory struct {
-	config *config.AttestationConfig
+	config       *config.AttestationConfig
+	trustAnchors map[string]string // name -> certificate PEM content
+	logger       *logrus.Logger
 }
 
 // NewVerifierFactory creates a new verifier factory
-func NewVerifierFactory(config *config.AttestationConfig) *VerifierFactory {
+func NewVerifierFactory(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger) *VerifierFactory {
 	return &VerifierFactory{
-		config: config,
+		config:       config,
+		trustAnchors: trustAnchorFiles,
+		logger:       logger,
 	}
 }
 
@@ -48,14 +56,28 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 	// Create verifier based on method
 	switch method {
 	case "attest_jwt_client_auth":
-		return NewJWTVerifier(clientID, clientConfig.TrustAnchors)
+		// Load trust anchor certificates
+		var certPEMs []string
+		for _, anchorName := range clientConfig.TrustAnchors {
+			if certPEM, exists := f.trustAnchors[anchorName]; exists {
+				certPEMs = append(certPEMs, certPEM)
+			} else {
+				return nil, fmt.Errorf("trust anchor not found: %s", anchorName)
+			}
+		}
+		return NewJWTVerifier(clientID, certPEMs, f.logger)
 
 	case "attest_tls_client_auth":
-		return NewTLSVerifier(clientID, clientConfig.TrustAnchors)
-
-	case "mock":
-		// For testing/development
-		return NewMockVerifier(clientID), nil
+		// Load trust anchor certificates
+		var certPEMs []string
+		for _, anchorName := range clientConfig.TrustAnchors {
+			if certPEM, exists := f.trustAnchors[anchorName]; exists {
+				certPEMs = append(certPEMs, certPEM)
+			} else {
+				return nil, fmt.Errorf("trust anchor not found: %s", anchorName)
+			}
+		}
+		return NewTLSVerifier(clientID, certPEMs)
 
 	default:
 		return nil, fmt.Errorf("unsupported attestation method: %s", method)
@@ -134,11 +156,53 @@ type VerifierManager struct {
 }
 
 // NewVerifierManager creates a new verifier manager
-func NewVerifierManager(config *config.AttestationConfig) *VerifierManager {
+func NewVerifierManager(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger) *VerifierManager {
 	return &VerifierManager{
-		factory:   NewVerifierFactory(config),
+		factory:   NewVerifierFactory(config, trustAnchorFiles, logger),
 		verifiers: make(map[string]map[string]interface{}),
 	}
+}
+
+// LoadTrustAnchorsFromConfig loads trust anchor certificates from the configuration
+func LoadTrustAnchorsFromConfig(configPath string) (map[string]string, error) {
+	// Read the YAML config file
+	data, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Parse the YAML to get trust anchors
+	var fullConfig struct {
+		Attestation struct {
+			TrustAnchors []struct {
+				Name            string `yaml:"name"`
+				Type            string `yaml:"type"`
+				CertificatePath string `yaml:"certificate_path"`
+				Enabled         bool   `yaml:"enabled"`
+			} `yaml:"trust_anchors"`
+		} `yaml:"attestation"`
+	}
+
+	if err := yaml.Unmarshal(data, &fullConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Load certificate files
+	trustAnchors := make(map[string]string)
+	for _, anchor := range fullConfig.Attestation.TrustAnchors {
+		if !anchor.Enabled {
+			continue
+		}
+
+		certPEM, err := ioutil.ReadFile(anchor.CertificatePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read certificate for %s: %w", anchor.Name, err)
+		}
+
+		trustAnchors[anchor.Name] = string(certPEM)
+	}
+
+	return trustAnchors, nil
 }
 
 // GetVerifier gets or creates a verifier for the specified client and method

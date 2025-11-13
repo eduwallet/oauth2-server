@@ -7,6 +7,18 @@ import (
 	"github.com/ory/fosite/token/jwt"
 )
 
+// UpstreamSessionData represents the session data for proxying OAuth2 flows
+type UpstreamSessionData struct {
+	OriginalIssuerState   string
+	OriginalState         string
+	OriginalNonce         string
+	OriginalRedirectURI   string
+	OriginalCodeChallenge string
+	ProxyState            string
+	ProxyNonce            string
+	ProxyCodeChallenge    string
+}
+
 func userSession(issuer, user string, audience []string) *openid.DefaultSession {
 	return &openid.DefaultSession{
 		Claims: &jwt.IDTokenClaims{
@@ -21,6 +33,10 @@ func userSession(issuer, user string, audience []string) *openid.DefaultSession 
 		Headers: &jwt.Headers{
 			Extra: make(map[string]interface{}),
 		},
+		// CRITICAL: Set Subject and Username at the session level
+		// fosite uses these fields for GetSubject() and GetUsername()
+		Subject:  user,
+		Username: user,
 	}
 }
 

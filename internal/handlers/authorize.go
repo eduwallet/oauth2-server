@@ -3,34 +3,47 @@ package handlers
 import (
 	"html/template"
 	"net/http"
+	"net/url"
 	"oauth2-server/internal/metrics"
+	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"path/filepath"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
 
 // AuthorizeHandler manages OAuth2 authorization requests
 type AuthorizeHandler struct {
-	OAuth2Provider fosite.OAuth2Provider
-	Configuration  *config.Config
-	Log            *logrus.Logger
-	Metrics        *metrics.MetricsCollector
+	OAuth2Provider     fosite.OAuth2Provider
+	Configuration      *config.Config
+	Log                *logrus.Logger
+	Metrics            *metrics.MetricsCollector
+	MemoryStore        *storage.MemoryStore
+	UpstreamSessionMap *map[string]UpstreamSessionData
 }
 
 // NewAuthorizeHandler creates a new authorization handler
-func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *config.Config, log *logrus.Logger, metricsCollector *metrics.MetricsCollector) *AuthorizeHandler {
+func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *config.Config, log *logrus.Logger, metricsCollector *metrics.MetricsCollector, memoryStore *storage.MemoryStore, upstreamSessionMap *map[string]UpstreamSessionData) *AuthorizeHandler {
 	return &AuthorizeHandler{
-		OAuth2Provider: oauth2Provider,
-		Configuration:  configuration,
-		Log:            log,
-		Metrics:        metricsCollector,
+		OAuth2Provider:     oauth2Provider,
+		Configuration:      configuration,
+		Log:                log,
+		Metrics:            metricsCollector,
+		MemoryStore:        memoryStore,
+		UpstreamSessionMap: upstreamSessionMap,
 	}
 }
 
 // ServeHTTP handles authorization requests following fosite-example patterns
 func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Check if proxy mode is enabled
+	if h.Configuration.IsProxyMode() {
+		h.handleProxyAuthorize(w, r)
+		return
+	}
+
 	// Add panic recovery to catch any internal fosite panics
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -87,6 +100,17 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Now that the user is authorized, we set up a session using the proper newSession helper:
 	mySessionData := userSession(h.Configuration.BaseURL, username, []string{})
+
+	// Store the original state from the authorization request in the session
+	// This will be available during userinfo requests
+	issuerState := r.URL.Query().Get("issuer_state")
+	if issuerState != "" {
+		if mySessionData.Headers.Extra == nil {
+			mySessionData.Headers.Extra = make(map[string]interface{})
+		}
+		mySessionData.Headers.Extra["issuer_state"] = issuerState
+		h.Log.Printf("🔍 Stored issuer state in session: %s", issuerState)
+	}
 
 	// Debug: Log session creation
 	h.Log.Printf("✅ Created session for user: %s", username)
@@ -145,8 +169,14 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// NewAuthorizeResponse is capable of running multiple response type handlers which in turn enables this library
 		// to support open id connect.
 		h.Log.Printf("🔍 Calling NewAuthorizeResponse with context and session...")
+		h.Log.Printf("🔍 Session pointer address: %p", mySessionData)
+		h.Log.Printf("🔍 Session GetSubject(): %s", mySessionData.GetSubject())
 		response, authErr = h.OAuth2Provider.NewAuthorizeResponse(ctx, ar, mySessionData)
 		h.Log.Printf("🔍 NewAuthorizeResponse completed - response: %+v, error: %v", response, authErr)
+		if response != nil {
+			h.Log.Printf("🔍 Response parameters: %+v", response.GetParameters())
+			h.Log.Printf("🔍 Response code (if any): %s", response.GetParameters().Get("code"))
+		}
 	}()
 
 	// Catch any errors, e.g.:
@@ -264,4 +294,70 @@ func (h *AuthorizeHandler) showAuthorizationTemplate(w http.ResponseWriter, r *h
 		http.Error(w, "Template execution error", http.StatusInternalServerError)
 		return
 	}
+}
+
+// handleProxyAuthorize proxies /authorize requests to the upstream provider,
+// mapping state/nonce/pkce to internal proxy values so we can correlate the
+// upstream callback back to the original client redirect.
+func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.Request) {
+	if h.Configuration.UpstreamProvider.Metadata == nil {
+		http.Error(w, "upstream provider not configured", http.StatusBadGateway)
+		return
+	}
+
+	q := r.URL.Query()
+	clientID := q.Get("client_id")
+	redirectURI := q.Get("redirect_uri")
+
+	// Validate client exists in our memory store
+	if _, ok := h.MemoryStore.Clients[clientID]; !ok {
+		http.Error(w, "unknown or unregistered client_id", http.StatusBadRequest)
+		return
+	}
+
+	originalState := q.Get("state")
+	originalNonce := q.Get("nonce")
+	originalIssuerState := q.Get("issuer_state")
+	originalCodeChallenge := q.Get("code_challenge")
+
+	proxyState := utils.GenerateState()
+	proxyNonce := utils.GenerateNonce()
+	proxyCodeChallenge := originalCodeChallenge
+
+	sessionID := proxyState
+
+	(*h.UpstreamSessionMap)[sessionID] = UpstreamSessionData{
+		OriginalIssuerState:   originalIssuerState,
+		OriginalState:         originalState,
+		OriginalNonce:         originalNonce,
+		OriginalRedirectURI:   redirectURI,
+		OriginalCodeChallenge: originalCodeChallenge,
+		ProxyState:            proxyState,
+		ProxyNonce:            proxyNonce,
+		ProxyCodeChallenge:    proxyCodeChallenge,
+	}
+
+	// Build upstream authorization URL
+	authzEndpoint, _ := h.Configuration.UpstreamProvider.Metadata["authorization_endpoint"].(string)
+	if authzEndpoint == "" {
+		http.Error(w, "upstream authorization_endpoint not available", http.StatusBadGateway)
+		return
+	}
+
+	vals := make(url.Values)
+	vals.Set("client_id", h.Configuration.UpstreamProvider.ClientID)
+	vals.Set("redirect_uri", h.Configuration.UpstreamProvider.CallbackURL)
+	vals.Set("response_type", q.Get("response_type"))
+	vals.Set("scope", q.Get("scope"))
+	vals.Set("state", proxyState)
+	vals.Set("nonce", proxyNonce)
+	if originalCodeChallenge != "" {
+		vals.Set("code_challenge", proxyCodeChallenge)
+		if m := q.Get("code_challenge_method"); m != "" {
+			vals.Set("code_challenge_method", m)
+		}
+	}
+
+	upstreamURL := authzEndpoint + "?" + vals.Encode()
+	http.Redirect(w, r, upstreamURL, http.StatusFound)
 }

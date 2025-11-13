@@ -21,26 +21,39 @@ func NewOAuth2DiscoveryHandler(configuration *config.Config, attestationManager 
 	}
 }
 
+// TODO: More granular merging of upstream and local metadata if needed
+
 // ServeHTTP handles OAuth2 Authorization Server Metadata requests (/.well-known/oauth-authorization-server)
 func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	// Get the effective base URL (proxy-aware)
+	var upstream map[string]interface{} = nil
+
+	// Check if proxy mode is enabled
+	if h.Configuration.IsProxyMode() {
+		upstream = h.Configuration.UpstreamProvider.Metadata
+		if upstream == nil {
+			http.Error(w, "upstream provider not configured", http.StatusBadGateway)
+			return
+		}
+	}
+
+	// Start with our local OAuth2 discovery metadata
 	baseURL := h.Configuration.GetEffectiveBaseURL(r)
 
 	// OAuth2 Authorization Server Metadata (RFC 8414)
 	oauth2Metadata := map[string]interface{}{
 		// Required fields
 		"issuer":                 baseURL,
-		"authorization_endpoint": baseURL + "/oauth/authorize",
-		"token_endpoint":         baseURL + "/oauth/token",
+		"authorization_endpoint": baseURL + "/authorize",
+		"token_endpoint":         baseURL + "/token",
 		"jwks_uri":               baseURL + "/.well-known/jwks.json",
 
 		// Optional but recommended fields
 		"registration_endpoint":  baseURL + "/register",
-		"revocation_endpoint":    baseURL + "/oauth/revoke",
-		"introspection_endpoint": baseURL + "/oauth/introspect",
+		"revocation_endpoint":    baseURL + "/revoke",
+		"introspection_endpoint": baseURL + "/introspect",
 		"userinfo_endpoint":      baseURL + "/userinfo",
 
 		// Device Flow (RFC 8628)
@@ -81,7 +94,7 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			"urn:ietf:params:oauth:token-type:access_token",
 		},
 
-		// Supported scopes
+		// Supported scopes - TAKEN FROM UPSTREAM
 		"scopes_supported": []string{
 			"openid",
 			"profile",
@@ -95,13 +108,13 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		// Token endpoint authentication methods
 		"token_endpoint_auth_methods_supported": h.getTokenEndpointAuthMethods(),
 
-		// Token endpoint signing algorithms
+		// Token endpoint signing algorithms - TAKEN FROM UPSTREAM
 		"token_endpoint_auth_signing_alg_values_supported": []string{
 			"RS256",
 			"HS256",
 		},
 
-		// PKCE support
+		// PKCE support - TAKEN FROM UPSTREAM
 		"code_challenge_methods_supported": []string{
 			"plain",
 			"S256",
@@ -132,6 +145,24 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		"op_tos_uri":            baseURL + "/terms",
 	}
 
+	if upstream != nil {
+		// scopes_supported
+		if upstreamScopes, ok := upstream["scopes_supported"]; ok {
+			oauth2Metadata["scopes_supported"] = upstreamScopes
+		}
+
+		// code_challenge_methods_supported
+		if upstreamPKCE, ok := upstream["code_challenge_methods_supported"]; ok {
+			oauth2Metadata["code_challenge_methods_supported"] = upstreamPKCE
+		}
+
+		// token_endpoint_auth_signing_alg_values_supported
+		if upstreamSigningAlgs, ok := upstream["token_endpoint_auth_signing_alg_values_supported"]; ok {
+			oauth2Metadata["token_endpoint_auth_signing_alg_values_supported"] = upstreamSigningAlgs
+		}
+	}
+
+	// Return the merged OAuth2 discovery metadata
 	json.NewEncoder(w).Encode(oauth2Metadata)
 }
 

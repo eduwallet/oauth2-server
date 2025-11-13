@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -11,97 +10,65 @@ import (
 func (c *Config) LoadFromEnv() {
 	// Server configuration overrides
 	if baseURL := os.Getenv("PUBLIC_BASE_URL"); baseURL != "" {
-		fmt.Println("Using PUBLIC_BASE_URL from environment:", baseURL)
 		c.BaseURL = baseURL
 		c.Server.BaseURL = baseURL
-		if c.YAMLConfig != nil {
-			c.YAMLConfig.Server.BaseURL = baseURL
-		}
 	}
 
 	if port := os.Getenv("PORT"); port != "" {
 		c.Port = port
 		if portInt, err := strconv.Atoi(port); err == nil {
 			c.Server.Port = portInt
-			if c.YAMLConfig != nil {
-				c.YAMLConfig.Server.Port = portInt
-			}
 		}
 	}
 
 	if host := os.Getenv("HOST"); host != "" {
 		c.Host = host
 		c.Server.Host = host
-		if c.YAMLConfig != nil {
-			c.YAMLConfig.Server.Host = host
-		}
 	}
 
 	// Proxy configuration overrides
 	if trustHeaders := os.Getenv("TRUST_PROXY_HEADERS"); trustHeaders != "" {
 		c.TrustProxyHeaders = GetEnvBool("TRUST_PROXY_HEADERS", true)
-		if c.YAMLConfig != nil && c.YAMLConfig.Proxy != nil {
-			c.YAMLConfig.Proxy.TrustHeaders = c.TrustProxyHeaders
-		}
 	}
 
 	if publicBaseURL := os.Getenv("PUBLIC_BASE_URL"); publicBaseURL != "" {
 		c.PublicBaseURL = publicBaseURL
-		if c.YAMLConfig != nil && c.YAMLConfig.Proxy != nil {
-			c.YAMLConfig.Server.BaseURL = publicBaseURL
-		}
 	}
 
 	if forceHTTPS := os.Getenv("FORCE_HTTPS"); forceHTTPS != "" {
 		c.ForceHTTPS = GetEnvBool("FORCE_HTTPS", false)
-		if c.YAMLConfig != nil && c.YAMLConfig.Proxy != nil {
-			c.YAMLConfig.Proxy.ForceHTTPS = c.ForceHTTPS
-		}
 	}
 
 	if trustedProxies := os.Getenv("TRUSTED_PROXIES"); trustedProxies != "" {
 		c.TrustedProxies = trustedProxies
-		// Note: Store in main config as ProxyConfig doesn't have TrustedProxies field
 	}
+
+	// Upstream provider configuration (moved from config.yaml for security)
+	c.loadUpstreamProviderFromEnv()
 
 	// Security configuration overrides
 	if jwtKey := os.Getenv("JWT_SIGNING_KEY"); jwtKey != "" {
-		c.Security.JWTSecret = jwtKey // Fix: use JWTSecret instead of JWTSigningKey
-		if c.YAMLConfig != nil {
-			c.YAMLConfig.Security.JWTSecret = jwtKey
-		}
+		c.Security.JWTSecret = jwtKey
 	}
 
 	if tokenExpiry := os.Getenv("TOKEN_EXPIRY_SECONDS"); tokenExpiry != "" {
 		if expiry := GetEnvInt("TOKEN_EXPIRY_SECONDS", 3600); expiry > 0 {
-			c.Security.TokenExpirySeconds = expiry // Fix: use TokenExpirySeconds instead of TokenExpiry
-			if c.YAMLConfig != nil {
-				c.YAMLConfig.Security.TokenExpirySeconds = expiry
-			}
+			c.Security.TokenExpirySeconds = expiry
 		}
 	}
 
 	if refreshExpiry := os.Getenv("REFRESH_TOKEN_EXPIRY_SECONDS"); refreshExpiry != "" {
 		if expiry := GetEnvInt("REFRESH_TOKEN_EXPIRY_SECONDS", 86400); expiry > 0 {
-			c.Security.RefreshTokenExpirySeconds = expiry // Fix: use RefreshTokenExpirySeconds instead of RefreshTokenExpiry
-			if c.YAMLConfig != nil {
-				c.YAMLConfig.Security.RefreshTokenExpirySeconds = expiry
-			}
+			c.Security.RefreshTokenExpirySeconds = expiry
 		}
 	}
 
 	if requireHTTPS := os.Getenv("REQUIRE_HTTPS"); requireHTTPS != "" {
 		c.Security.RequireHTTPS = GetEnvBool("REQUIRE_HTTPS", false)
-		if c.YAMLConfig != nil {
-			c.YAMLConfig.Security.RequireHTTPS = c.Security.RequireHTTPS
-		}
 	}
 
 	if enablePKCE := os.Getenv("ENABLE_PKCE"); enablePKCE != "" {
 		c.Security.EnablePKCE = GetEnvBool("ENABLE_PKCE", true)
-		if c.YAMLConfig != nil {
-			c.YAMLConfig.Security.EnablePKCE = c.Security.EnablePKCE
-		}
 	}
 
 	// Add support for dynamic client configuration via environment variables
@@ -269,10 +236,16 @@ func GetEnvString(key string, defaultValue string) string {
 	return defaultValue
 }
 
-// GetEnvStringSlice gets an environment variable as string slice (comma-separated) with default
-func GetEnvStringSlice(key string, defaultValue []string) []string {
-	if value := os.Getenv(key); value != "" {
-		return filterEmpty(strings.Split(value, ","))
+// loadUpstreamProviderFromEnv loads upstream provider configuration from environment variables
+func (c *Config) loadUpstreamProviderFromEnv() {
+	// Check if upstream provider is configured via environment variables
+	providerURL := os.Getenv("UPSTREAM_PROVIDER_URL")
+	if providerURL != "" {
+		c.UpstreamProvider = UpstreamProviderConfig{
+			ProviderURL:  providerURL,
+			ClientID:     GetEnvString("UPSTREAM_CLIENT_ID", ""),
+			ClientSecret: GetEnvString("UPSTREAM_CLIENT_SECRET", ""),
+			CallbackURL:  GetEnvString("UPSTREAM_CALLBACK_URL", ""),
+		}
 	}
-	return defaultValue
 }

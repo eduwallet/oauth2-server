@@ -53,9 +53,9 @@ attestation:
   # Client-specific attestation configurations (required when attestation enabled)
   clients:
     - client_id: "hsm-attestation-wallet-demo"
-      allowed_methods: ["mock"]  # Only use mock for demo
+      allowed_methods: ["attest_jwt_client_auth"]  # Real HSM attestation for demo
       trust_anchors: ["example_hsm_ca"]
-      required_level: "medium"
+      required_level: "high"
   
   # Verification settings
   verification:
@@ -125,6 +125,31 @@ clients:
   - "authorization_code"
   - "refresh_token"
 
+# reva Client
+- id: "reva-client"
+  secret: "reva-client-secret"
+  name: "Reva Application Client"
+  description: "Reva application client supporting authorization code flow with PKCE"
+  redirect_uris:
+  - "https://revad.docker.orb.local/oidc/callback"
+  grant_types:
+  - "authorization_code"
+  - "refresh_token"
+  response_types:
+  - "code"
+  scopes:
+  - "openid"
+  - "profile"
+  - "email"
+  - "api:read"
+  - "offline_access"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  public: false
+  enabled_flows:
+  - "authorization_code"
+  - "refresh_token"
 # Backend Service Client
 - id: "backend-client"
   secret: "backend-client-secret"
@@ -222,7 +247,7 @@ clients:
 
 # HSM Attestation Wallet Demo Client
 - id: "hsm-attestation-wallet-demo"
-  secret: "demo-secret-12345"
+  secret: "my-secret"  # No secret needed - attestation provides authentication
   name: "HSM Attestation Wallet Demo"
   description: "Browser-based HSM attestation wallet demonstration"
   redirect_uris:
@@ -232,9 +257,12 @@ clients:
   - "http://127.0.0.1:8001/callback"
   - "http://127.0.0.1:8001/callback.html"
   - "http://127.0.0.1:8001"
+  - "http://localhost:8001/oauth2/callback"
+  - "https://demo-app.oauth2-server.orb.local/callback.html"
   grant_types:
   - "authorization_code"
   - "refresh_token"
+  - "client_credentials"
   response_types:
   - "code"
   scopes:
@@ -246,17 +274,17 @@ clients:
   - "api:read"
   audience:
   - "api-service"
-  token_endpoint_auth_method: "attest_jwt_client_auth"  # Use JWT attestation
+  token_endpoint_auth_method: "client_secret_basic"
   public: false
   enabled_flows:
   - "authorization_code"
   enabled: true
   attestation_config:
     client_id: "hsm-attestation-wallet-demo"  # Client ID for attestation verification
-    allowed_methods:      # Use only mock method for demo
-      - "mock"
+    allowed_methods:
+      - "attest_jwt_client_auth"
     trust_anchors:        # Reference to configured trust anchor
-      - "example_hsm_ca"
+      - "/tmp/certs/hsm_ca.pem"
 
 # Example Attestation-Enabled Client (disabled by default)
 - id: "attested-mobile-app"

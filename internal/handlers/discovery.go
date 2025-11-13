@@ -23,18 +23,29 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	// Get the effective base URL (proxy-aware)
+	var upstream map[string]interface{} = nil
+
+	// Check if proxy mode is enabled
+	if h.Configuration.IsProxyMode() {
+		upstream = h.Configuration.UpstreamProvider.Metadata
+		if upstream == nil {
+			http.Error(w, "Internal server error: No upstream metadata", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Start with our local discovery metadata
 	baseURL := h.Configuration.GetEffectiveBaseURL(r)
 
 	wellKnown := map[string]interface{}{
 		// OAuth2 Authorization Server Metadata (RFC 8414)
 		"issuer":                 baseURL,
-		"authorization_endpoint": baseURL + "/oauth/authorize",
-		"token_endpoint":         baseURL + "/oauth/token",
+		"authorization_endpoint": baseURL + "/authorize",
+		"token_endpoint":         baseURL + "/token",
 		"jwks_uri":               baseURL + "/.well-known/jwks.json",
 		"registration_endpoint":  baseURL + "/register",
-		"revocation_endpoint":    baseURL + "/oauth/revoke",
-		"introspection_endpoint": baseURL + "/oauth/introspect",
+		"revocation_endpoint":    baseURL + "/revoke",
+		"introspection_endpoint": baseURL + "/introspect",
 		"userinfo_endpoint":      baseURL + "/userinfo",
 
 		// Device Flow (RFC 8628)
@@ -42,7 +53,7 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"device_verification_uri":          baseURL + "/device",
 		"device_verification_uri_complete": baseURL + "/device?user_code={user_code}",
 
-		// Supported scopes
+		// Supported scopes - TAKEN FROM UPSTREAM
 		"scopes_supported": []string{
 			"openid", "profile", "email", "offline_access",
 			"api:read", "api:write", "admin",
@@ -88,12 +99,12 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"none",
 		},
 
-		// Token endpoint signing algorithms
+		// Token endpoint signing algorithms - TAKEN FROM UPSTREAM
 		"token_endpoint_auth_signing_alg_values_supported": []string{
 			"RS256", "HS256",
 		},
 
-		// PKCE support
+		// PKCE support - TAKEN FROM UPSTREAM
 		"code_challenge_methods_supported": []string{
 			"plain", "S256",
 		},
@@ -163,5 +174,28 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"op_tos_uri":    baseURL + "/terms",
 	}
 
+	if upstream != nil {
+		// scopes_supported
+		if upstreamScopes, ok := upstream["scopes_supported"]; ok {
+			wellKnown["scopes_supported"] = upstreamScopes
+		}
+
+		// code_challenge_methods_supported
+		if upstreamPKCE, ok := upstream["code_challenge_methods_supported"]; ok {
+			wellKnown["code_challenge_methods_supported"] = upstreamPKCE
+		}
+
+		// subject_types_supported
+		if upstreamSubjectTypes, ok := upstream["subject_types_supported"]; ok {
+			wellKnown["subject_types_supported"] = upstreamSubjectTypes
+		}
+
+		// token_endpoint_auth_signing_alg_values_supported
+		if upstreamSigningAlgs, ok := upstream["token_endpoint_auth_signing_alg_values_supported"]; ok {
+			wellKnown["token_endpoint_auth_signing_alg_values_supported"] = upstreamSigningAlgs
+		}
+	}
+
+	// Return the merged discovery metadata
 	json.NewEncoder(w).Encode(wellKnown)
 }

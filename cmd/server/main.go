@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 
 	"html/template"
@@ -69,6 +71,8 @@ var (
 	authorizeHandler       *handlers.AuthorizeHandler
 	claimsHandler          *handlers.ClaimsHandler
 	versionHandler         *handlers.VersionHandler
+	userinfoHandler        *handlers.UserInfoHandler
+	callbackHandler        *handlers.CallbackHandler
 
 	// Metrics collector
 	metricsCollector *metrics.MetricsCollector
@@ -79,6 +83,10 @@ var (
 	// Templates
 	templates *template.Template
 )
+
+// Maps for persisting original authorization state through the OAuth2 flow in proxy mode
+var authCodeToStateMap = make(map[string]string) // authorization_code -> original_state
+var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData)
 
 func main() {
 	// Handle version flag
@@ -144,13 +152,130 @@ func main() {
 	log.Printf("✅ Configuration loaded successfully")
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
 
+	if configuration.IsProxyMode() {
+		log.Printf("🔄 Identity Provider Mode: PROXY (upstream provider)")
+		if configuration.UpstreamProvider.ProviderURL != "" {
+			log.Printf("🔗 Upstream OAuth2 Provider configured: %s", configuration.UpstreamProvider.ProviderURL)
+		}
+	} else {
+		log.Printf("🏠 Identity Provider Mode: LOCAL (local users)")
+	}
+
+	// Fetch and cache upstream OIDC discovery if upstream provider is configured
+	if configuration.IsProxyMode() && configuration.UpstreamProvider.ProviderURL != "" && configuration.UpstreamProvider.ProviderURL != "https://example.com" {
+		log.Printf("📡 Fetching upstream OIDC discovery from: %s", configuration.UpstreamProvider.ProviderURL+"/.well-known/openid-configuration")
+
+		resp, err := http.Get(configuration.UpstreamProvider.ProviderURL + "/.well-known/openid-configuration")
+		if err != nil {
+			log.Fatalf("❌ Failed to fetch upstream OIDC discovery: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Fatalf("❌ Upstream OIDC discovery returned status: %d", resp.StatusCode)
+		}
+
+		var upstreamMetadata map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&upstreamMetadata); err != nil {
+			log.Fatalf("❌ Failed to decode upstream OIDC discovery: %v", err)
+		}
+
+		// Store the metadata in the config
+		configuration.UpstreamProvider.Metadata = upstreamMetadata
+
+		log.Printf("✅ Fetched upstream OIDC discovery with %d metadata fields", len(upstreamMetadata))
+
+		// Auto-register as client with upstream if no credentials provided and registration endpoint exists
+		if configuration.UpstreamProvider.ClientID == "" && configuration.UpstreamProvider.ClientSecret == "" {
+			if registrationEndpoint, ok := upstreamMetadata["registration_endpoint"].(string); ok && registrationEndpoint != "" {
+				log.Printf("🔧 No upstream client credentials provided, attempting auto-registration with upstream provider")
+
+				// Get supported scopes, default to openid if not available
+				upstreamScopes := []string{"openid"}
+				if scopesSupported, ok := upstreamMetadata["scopes_supported"].([]interface{}); ok {
+					upstreamScopes = make([]string, len(scopesSupported))
+					for i, scope := range scopesSupported {
+						if scopeStr, ok := scope.(string); ok {
+							upstreamScopes[i] = scopeStr
+						}
+					}
+				}
+
+				registrationRequest := map[string]interface{}{
+					"redirect_uris":              []string{configuration.Server.BaseURL + "/callback"},
+					"client_name":                "OAuth2 Federation OP",
+					"grant_types":                []string{"authorization_code"},
+					"scope":                      strings.Join(upstreamScopes, " "),
+					"response_types":             []string{"code"},
+					"token_endpoint_auth_method": "client_secret_basic",
+				}
+
+				requestBody, err := json.Marshal(registrationRequest)
+				if err != nil {
+					log.Fatalf("❌ Failed to marshal client registration request: %v", err)
+				}
+
+				regReq, err := http.NewRequest("POST", registrationEndpoint, bytes.NewReader(requestBody))
+				if err != nil {
+					log.Fatalf("❌ Failed to create client registration request: %v", err)
+				}
+				regReq.Header.Set("Content-Type", "application/json")
+
+				client := &http.Client{}
+				regResp, err := client.Do(regReq)
+				if err != nil {
+					log.Fatalf("❌ Failed to register client with upstream provider: %v", err)
+				}
+				defer regResp.Body.Close()
+
+				if regResp.StatusCode != http.StatusCreated && regResp.StatusCode != http.StatusOK {
+					log.Fatalf("❌ Upstream client registration failed with status: %d", regResp.StatusCode)
+				}
+
+				var registrationResponse map[string]interface{}
+				if err := json.NewDecoder(regResp.Body).Decode(&registrationResponse); err != nil {
+					log.Fatalf("❌ Failed to decode client registration response: %v", err)
+				}
+
+				if clientID, ok := registrationResponse["client_id"].(string); ok && clientID != "" {
+					configuration.UpstreamProvider.ClientID = clientID
+					log.Printf("✅ Auto-registered client ID: %s", clientID)
+				} else {
+					log.Fatalf("❌ Client registration response missing client_id")
+				}
+
+				if clientSecret, ok := registrationResponse["client_secret"].(string); ok && clientSecret != "" {
+					configuration.UpstreamProvider.ClientSecret = clientSecret
+					log.Printf("✅ Auto-registered client secret")
+				} else {
+					log.Fatalf("❌ Client registration response missing client_secret")
+				}
+
+				log.Printf("✅ Successfully auto-registered as client with upstream provider")
+			} else {
+				log.Printf("⚠️  No upstream client credentials provided and no registration_endpoint found in upstream discovery")
+			}
+		} else {
+			log.Printf("✅ Using provided upstream client credentials")
+		}
+	} else if configuration.UpstreamProvider.ProviderURL == "https://example.com" {
+		log.Printf("⚠️  Upstream provider URL is example placeholder - skipping OIDC discovery fetch")
+	}
+
 	// Initialize metrics collector
 	metricsCollector = metrics.NewMetricsCollector()
 	log.Printf("✅ Metrics collector initialized")
 
 	// Initialize attestation manager if attestation is enabled
 	if configuration.Attestation != nil && configuration.Attestation.Enabled {
-		attestationManager = attestation.NewVerifierManager(configuration.Attestation)
+		// Load trust anchor certificates from config file
+		trustAnchors, err := attestation.LoadTrustAnchorsFromConfig("config.yaml")
+		if err != nil {
+			log.Fatalf("❌ Failed to load trust anchors: %v", err)
+		}
+		log.Printf("✅ Loaded %d trust anchors", len(trustAnchors))
+
+		attestationManager = attestation.NewVerifierManager(configuration.Attestation, trustAnchors, log)
 		if err := attestationManager.PreloadVerifiers(); err != nil {
 			log.Fatalf("❌ Failed to preload attestation verifiers: %v", err)
 		}
@@ -171,8 +296,12 @@ func main() {
 	}
 
 	// In main() function, after initializing clients
-	if err := initializeUsers(); err != nil {
-		log.Fatalf("❌ Failed to initialize users: %v", err)
+	if configuration.IsLocalMode() {
+		if err := initializeUsers(); err != nil {
+			log.Fatalf("❌ Failed to initialize users: %v", err)
+		}
+	} else {
+		log.Printf("🔄 Proxy mode: skipping local user initialization")
 	}
 
 	// Load templates
@@ -188,10 +317,6 @@ func main() {
 
 	// Start server
 	log.Printf("🌐 OAuth2 server starting on port %d", configuration.Server.Port)
-	log.Printf("🔗 Authorization endpoint: %s/auth", configuration.Server.BaseURL)
-	log.Printf("🎫 Token endpoint: %s/oauth/token", configuration.Server.BaseURL)
-	log.Printf("📱 Device authorization: %s/device/authorize", configuration.Server.BaseURL)
-	log.Printf("🔧 Client registration: %s/register", configuration.Server.BaseURL)
 	log.Printf("🏥 Health check: %s/health", configuration.Server.BaseURL)
 	log.Printf("📊 Metrics endpoint: %s/metrics", configuration.Server.BaseURL)
 	log.Printf("📈 Status endpoint: %s/stats", configuration.Server.BaseURL)
@@ -335,14 +460,16 @@ func initializeHandlers() {
 	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
 	statusHandler = handlers.NewStatusHandler(configuration)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, memoryStore, &authCodeToStateMap)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	jwksHandler = handlers.NewJWKSHandler()
 	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)
-	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector)
+	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, memoryStore, &UpstreamSessionMap)
 	claimsHandler = handlers.NewClaimsHandler(configuration, log)
 	versionHandler = handlers.NewVersionHandler()
+	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)
+	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler)
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }
@@ -374,12 +501,15 @@ func setupRoutes() {
 	// Metrics endpoint - register first
 	http.Handle("/metrics", proxyAwareMiddleware(promhttp.Handler()))
 
-	// OAuth2 endpoints - use fosite's built-in handlers with CORS support
-	http.Handle("/auth", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
-	http.Handle("/oauth/authorize", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
-	http.Handle("/oauth/token", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(tokenHandler.ServeHTTP))))
-	http.Handle("/oauth/introspect", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(introspectionHandler.ServeHTTP))))
-	http.Handle("/oauth/revoke", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(revokeHandler.ServeHTTP))))
+	// OAuth2 callback endpoint - mode-aware (handles both proxy and local callbacks)
+	http.Handle("/callback", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(callbackHandler.ServeHTTP))))
+
+	// OAuth2 endpoints - use mode-aware handlers
+	http.Handle("/authorize", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
+	http.Handle("/token", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(tokenHandler.ServeHTTP))))
+	http.Handle("/introspect", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(introspectionHandler.ServeHTTP))))
+	http.Handle("/revoke", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(revokeHandler.ServeHTTP))))
+	http.Handle("/userinfo", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(userinfoHandler.ServeHTTP))))
 
 	// Device flow endpoints - use our custom device authorization but store in fosite-compatible format
 	http.Handle("/device/authorize", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleDeviceAuthorization))))
@@ -394,16 +524,6 @@ func setupRoutes() {
 	http.Handle("/.well-known/oauth-authorization-server", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(oauth2DiscoveryHandler.ServeHTTP))))
 	http.Handle("/.well-known/openid-configuration", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(discoveryHandler.ServeHTTP))))
 	http.Handle("/.well-known/jwks.json", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(jwksHandler.ServeHTTP))))
-
-	// Utility endpoints
-	http.Handle("/userinfo", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userinfoHandler := handlers.UserInfoHandler{
-			Configuration:  configuration,
-			OAuth2Provider: oauth2Provider,
-			Metrics:        metricsCollector,
-		}
-		userinfoHandler.ServeHTTP(w, r)
-	}))))
 
 	// Stats endpoint
 	http.Handle("/stats", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -422,7 +542,6 @@ func setupRoutes() {
 
 	// Claims display endpoints
 	http.Handle("/claims", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(claimsHandler.ServeHTTP))))
-	http.Handle("/callback", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(claimsHandler.HandleCallback))))
 
 	http.Handle("/status", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(statusHandler.ServeHTTP))))
 
