@@ -86,6 +86,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **internal/utils/**: Utility functions.
 - **pkg/config/**: Configuration management.
 - **helm/oauth2-server/**: Kubernetes Helm chart for deployment.
+- **.env.example**: Environment variables template for proxy mode and server configuration.
 - **static/**: Static web assets (minimal, if any).
 - **docker-compose.yml**: Docker Compose configuration for local development.
 - **Dockerfile**: Container image definition.
@@ -109,6 +110,11 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 ```bash
 git clone <repository-url>
 cd oauth2-server
+
+# Copy environment configuration
+cp .env.example .env
+# Edit .env with your configuration
+
 go mod tidy
 docker-compose up
 # or
@@ -139,6 +145,7 @@ When these environment variables are set, the server runs in proxy mode and igno
 UPSTREAM_PROVIDER_URL=https://accounts.google.com
 UPSTREAM_CLIENT_ID=your-client-id
 UPSTREAM_CLIENT_SECRET=your-client-secret
+UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
 ```
 
 **Security Note**: Upstream provider configuration has been moved from `config.yaml` to environment variables only to prevent storing sensitive credentials in configuration files.
@@ -153,6 +160,11 @@ HOST=localhost
 
 # Security
 JWT_SIGNING_KEY=your-jwt-secret
+
+# Logging
+LOG_LEVEL=debug
+LOG_FORMAT=json
+ENABLE_AUDIT=true
 
 # Proxy settings
 TRUST_PROXY_HEADERS=true
@@ -491,20 +503,18 @@ oauth2_attestation_verification_duration_seconds{method="jwt"}
 
 | Endpoint | Method | Description | RFC |
 |----------|--------|-------------|-----|
-| `/auth` | GET | Authorization endpoint | RFC 6749 |
-| `/oauth/authorize` | GET | Authorization endpoint (PKCE, browser/curl) | RFC 6749 |
-| `/oauth/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
+| `/authorize` | GET | Authorization endpoint | RFC 6749 |
+| `/token` | POST | Token endpoint (all grant types, including device code and token exchange) | RFC 6749, 8628, 8693 |
 | `/device/authorize` | POST | Device authorization | RFC 8628 |
 | `/device` | GET | Device verification UI | RFC 8628 |
 | `/device/verify` | POST | Device code verification | RFC 8628 |
 | `/device/consent` | POST | Device consent | RFC 8628 |
-| `/oauth/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
-| `/oauth/revoke` | POST | Token revocation | RFC 6749 |
+| `/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
+| `/revoke` | POST | Token revocation | RFC 6749 |
 | `/userinfo` | GET | UserInfo endpoint (requires Authorization header) | OIDC Core |
 | `/register` | POST | Dynamic client registration (with audience) |
 | `/claims` | GET | Claims display (interactive) |
 | `/callback` | GET | OAuth2 callback for demo |
-| `/demo` | GET | Interactive PKCE demo page |
 
 ### Discovery & Health
 
@@ -515,7 +525,8 @@ oauth2_attestation_verification_duration_seconds{method="jwt"}
 | `/.well-known/jwks.json` | GET | JSON Web Key Set |
 | `/health` | GET | Health check |
 | `/stats` | GET | Server statistics |
-| `/` | GET | Minimal server info and stats (no docs UI) |
+| `/status` | GET | Server status |
+| `/version` | GET | Version information |
 
 ## Usage Guidelines
 ### Unified Login & Authorization UI
@@ -523,15 +534,6 @@ oauth2_attestation_verification_duration_seconds{method="jwt"}
 Both the device code flow and authorization code flow use a unified, modern login/authorization page. This page adapts to the flow and provides a seamless user experience for browser and device flows.
 
 See `templates/unified_auth.html` for the implementation.
-
-### Interactive Demo Page & Test Users
-
-The `/demo` endpoint provides an interactive PKCE demo for browser and cURL flows. It includes:
-- Example test users for quick login
-- Step-by-step flow visualization
-- Claims display and callback integration
-
-See `templates/demo.html` for details.
 
 ### Claims Display & Callback
 
