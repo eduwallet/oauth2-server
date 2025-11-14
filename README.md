@@ -412,7 +412,7 @@ clients:
       required_level: "high"
 ```
 
-### OpenID 4 Verifiable Credential Issuance Support
+## OpenID 4 Verifiable Credential Issuance Support
 
 The server implements `issuer_state` parameter support as specified in [OpenID 4 Verifiable Credential Issuance 1.0](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-issuer_state).
 
@@ -422,7 +422,7 @@ The `issuer_state` parameter allows credential issuers to maintain state across 
 
 - **Authorization Request**: Include `issuer_state` in the authorization URL
 - **State Persistence**: Server maintains the original `issuer_state` through proxy flows
-- **UserInfo Response**: Returns `issuer_state` in userinfo responses when present
+- **UserInfo Response**: Returns `issuer_state` in userinfo responses when present in original authorization request
 - **Proxy Mode**: Properly handles `issuer_state` in upstream provider proxy scenarios
 
 #### Usage Example
@@ -796,3 +796,61 @@ There is **no documentation UI** or client management UI.
 ---
 
 **Built with ❤️ using [Fosite](https://github.com/ory/fosite) - The security first OAuth2 & OpenID Connect framework
+
+## API Endpoint Protection
+
+The server provides configurable protection for sensitive management endpoints. By default, these endpoints are **disabled** for security reasons.
+
+#### Protected Endpoints
+
+- **`/register`** - Dynamic client registration
+- **`/trust-anchor/*`** - Trust anchor certificate management
+
+#### Configuration
+
+Enable and protect these endpoints using environment variables:
+
+```bash
+# Enable the endpoints (disabled by default)
+ENABLE_REGISTRATION_API=true
+ENABLE_TRUST_ANCHOR_API=true
+
+# Set API key for authentication
+API_KEY=your-secure-api-key-here
+```
+
+Or in `config.yaml`:
+
+```yaml
+security:
+  enable_registration_api: true
+  enable_trust_anchor_api: true
+  api_key: "your-secure-api-key-here"
+```
+
+#### API Key Authentication
+
+When enabled, these endpoints require an `X-API-Key` header:
+
+```bash
+# Example: Register a client
+curl -X POST http://localhost:8080/register \
+  -H "X-API-Key: your-secure-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"redirect_uris": ["https://example.com/callback"]}'
+
+# Example: Upload trust anchor
+curl -X POST http://localhost:8080/trust-anchor/ca-cert \
+  -H "X-API-Key: your-secure-api-key-here" \
+  -F "certificate=@ca.pem"
+```
+
+#### Security Recommendations
+
+1. **Keep Disabled by Default**: These endpoints are disabled by default for security
+2. **Use Strong API Keys**: Generate long, random API keys (32+ characters)
+3. **Network Restrictions**: Consider restricting access to these endpoints at the network level
+4. **Monitor Usage**: Enable audit logging to track API usage
+5. **Regular Rotation**: Rotate API keys regularly
+
+**Warning**: These endpoints allow modification of server configuration. Only enable them when necessary and protect them appropriately.

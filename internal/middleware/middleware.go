@@ -48,7 +48,7 @@ func CORS(next http.HandlerFunc) http.HandlerFunc {
 
 		w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
 		if allowOrigin != "*" {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
@@ -105,6 +105,43 @@ func RateLimit(requestsPerMinute int) func(http.HandlerFunc) http.HandlerFunc {
 			// Add current request
 			clients[clientIP] = append(clients[clientIP], now)
 
+			next.ServeHTTP(w, r)
+		}
+	}
+}
+
+// APIKeyAuth middleware for API key authentication
+func APIKeyAuth(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			// Allow OPTIONS requests through for CORS preflight
+			if r.Method == "OPTIONS" {
+				log.Printf("🔄 Allowing OPTIONS request through for CORS preflight")
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if apiKey == "" {
+				log.Printf("⚠️  API key authentication disabled (no API key configured)")
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Check for API key in header
+			authHeader := r.Header.Get("X-API-Key")
+			if authHeader == "" {
+				log.Printf("❌ API key authentication failed: missing X-API-Key header")
+				http.Error(w, "API key required", http.StatusUnauthorized)
+				return
+			}
+
+			if authHeader != apiKey {
+				log.Printf("❌ API key authentication failed: invalid API key")
+				http.Error(w, "Invalid API key", http.StatusUnauthorized)
+				return
+			}
+
+			log.Printf("✅ API key authentication successful")
 			next.ServeHTTP(w, r)
 		}
 	}

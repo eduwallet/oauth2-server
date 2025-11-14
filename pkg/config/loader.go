@@ -31,10 +31,13 @@ func Load() (*Config, error) {
 	// 2. Apply environment variable overrides
 	cfg.LoadFromEnv()
 
-	// 3. Normalize redirect URIs with the final base URL
+	// 3. Set defaults for missing configuration
+	cfg.SetDefaults()
+
+	// 4. Normalize redirect URIs with the final base URL
 	cfg.NormalizeAllClientRedirectURIs()
 
-	// 4. Validate configuration
+	// 5. Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}

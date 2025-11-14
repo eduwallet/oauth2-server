@@ -556,10 +556,10 @@ func setupRoutes() {
 	http.Handle("/device/consent", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleConsent))))
 
 	// Registration endpoints
-	http.Handle("/register", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
+	http.Handle("/register", protectedMiddleware(configuration.Security.APIKey, configuration.Security.EnableRegistrationAPI)(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
 
 	// Trust anchor management endpoints
-	http.Handle("/trust-anchor/", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	http.Handle("/trust-anchor/", protectedMiddleware(configuration.Security.APIKey, configuration.Security.EnableTrustAnchorAPI)(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Extract the name from the path
 		path := strings.TrimPrefix(r.URL.Path, "/trust-anchor/")
 		if path == "" {
@@ -674,4 +674,18 @@ func proxyAwareMiddleware(handler http.Handler) http.Handler {
 
 		handler.ServeHTTP(w, r)
 	})
+}
+
+// Combined middleware for protected HTTP endpoints (with API key auth)
+func protectedMiddleware(apiKey string, enableAPI bool) func(http.Handler) http.Handler {
+	return func(handler http.Handler) http.Handler {
+		return middleware.APIKeyAuth(apiKey)(func(w http.ResponseWriter, r *http.Request) {
+			if !enableAPI {
+				log.Printf("❌ API endpoint disabled: %s", r.URL.Path)
+				http.Error(w, "API endpoint disabled", http.StatusForbidden)
+				return
+			}
+			corsAndProxyMiddleware(handler).ServeHTTP(w, r)
+		})
+	}
 }

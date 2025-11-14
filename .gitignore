@@ -5,6 +5,7 @@ main
 server.log
 ./server
 ./*.log
+.env
 server-demo.log
 server-demo.pid
 test_server.log
@@ -19,5 +20,3 @@ server.pid
 examples/
 notebook/
 oauth2-server.log
-
-.env

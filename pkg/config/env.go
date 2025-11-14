@@ -71,6 +71,19 @@ func (c *Config) LoadFromEnv() {
 		c.Security.EnablePKCE = GetEnvBool("ENABLE_PKCE", true)
 	}
 
+	// API protection configuration
+	if apiKey := os.Getenv("API_KEY"); apiKey != "" {
+		c.Security.APIKey = apiKey
+	}
+
+	if enableRegistrationAPI := os.Getenv("ENABLE_REGISTRATION_API"); enableRegistrationAPI != "" {
+		c.Security.EnableRegistrationAPI = GetEnvBool("ENABLE_REGISTRATION_API", false)
+	}
+
+	if enableTrustAnchorAPI := os.Getenv("ENABLE_TRUST_ANCHOR_API"); enableTrustAnchorAPI != "" {
+		c.Security.EnableTrustAnchorAPI = GetEnvBool("ENABLE_TRUST_ANCHOR_API", false)
+	}
+
 	// Add support for dynamic client configuration via environment variables
 	c.loadClientsFromEnv()
 

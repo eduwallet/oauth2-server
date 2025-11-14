@@ -16,17 +16,16 @@ type AttestationConfig struct {
 
 // ClientAttestationConfig represents attestation configuration for a specific client
 type ClientAttestationConfig struct {
-	ClientID       string   `yaml:"client_id"`
-	AllowedMethods []string `yaml:"allowed_methods"`
-	TrustAnchors   []string `yaml:"trust_anchors"`
-	RequiredLevel  string   `yaml:"required_level,omitempty"`
+	ClientID       string   `yaml:"client_id" json:"client_id"`
+	AllowedMethods []string `yaml:"allowed_methods" json:"allowed_methods"`
+	TrustAnchors   []string `yaml:"trust_anchors" json:"trust_anchors"`
+	RequiredLevel  string   `yaml:"required_level,omitempty" json:"required_level,omitempty"`
 }
 
 // Validate validates the client attestation configuration
 func (c *ClientAttestationConfig) Validate() error {
-	if c.ClientID == "" {
-		return fmt.Errorf("client_id is required for attestation config")
-	}
+	// Note: client_id validation is handled by the registration handler
+	// since it may be set automatically during registration
 
 	if len(c.AllowedMethods) == 0 {
 		return fmt.Errorf("at least one allowed_method is required")
@@ -73,11 +72,10 @@ func (a *AttestationConfig) Validate() error {
 		return nil // No validation needed when disabled
 	}
 
-	if len(a.Clients) == 0 {
-		return fmt.Errorf("at least one client must be configured when attestation is enabled")
-	}
+	// Allow attestation to be enabled without pre-configured clients
+	// Clients can be registered dynamically with attestation configuration later
 
-	// Validate each client configuration
+	// Validate each client configuration if any are present
 	clientIDs := make(map[string]bool)
 	for _, client := range a.Clients {
 		// Check for duplicate client IDs
@@ -145,6 +143,11 @@ type SecurityConfig struct {
 	AuthorizationCodeExpirySeconds int    `yaml:"authorization_code_expiry_seconds"`
 	EnablePKCE                     bool   `yaml:"enable_pkce"`
 	RequireHTTPS                   bool   `yaml:"require_https"`
+
+	// API protection settings
+	APIKey                string `yaml:"api_key,omitempty"`
+	EnableRegistrationAPI bool   `yaml:"enable_registration_api"`
+	EnableTrustAnchorAPI  bool   `yaml:"enable_trust_anchor_api"`
 }
 
 // LoggingConfig holds logging configuration
@@ -378,6 +381,34 @@ func (c *Config) IsProxyMode() bool {
 // IsLocalMode returns true if the server is configured to use local users
 func (c *Config) IsLocalMode() bool {
 	return !c.IsProxyMode()
+}
+
+// SetDefaults sets default values for configuration options that are not specified
+func (c *Config) SetDefaults() {
+	// Set default security values
+	if c.Security.TokenExpirySeconds == 0 {
+		c.Security.TokenExpirySeconds = 3600 // 1 hour
+	}
+	if c.Security.RefreshTokenExpirySeconds == 0 {
+		c.Security.RefreshTokenExpirySeconds = 86400 // 24 hours
+	}
+	if c.Security.AuthorizationCodeExpirySeconds == 0 {
+		c.Security.AuthorizationCodeExpirySeconds = 600 // 10 minutes
+	}
+	if c.Security.DeviceCodeExpirySeconds == 0 {
+		c.Security.DeviceCodeExpirySeconds = 1800 // 30 minutes
+	}
+
+	// Set default API protection values (disabled by default for security)
+	// These should be explicitly enabled by administrators
+	if c.Security.EnableRegistrationAPI == false && os.Getenv("ENABLE_REGISTRATION_API") == "" {
+		// Default is false - registration API is disabled
+		c.Security.EnableRegistrationAPI = false
+	}
+	if c.Security.EnableTrustAnchorAPI == false && os.Getenv("ENABLE_TRUST_ANCHOR_API") == "" {
+		// Default is false - trust anchor API is disabled
+		c.Security.EnableTrustAnchorAPI = false
+	}
 }
 
 // Helper functions

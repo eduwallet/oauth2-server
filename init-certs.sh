@@ -17,6 +17,7 @@ fi
 # Upload certificate to oauth2-server
 echo "Uploading trust anchor certificate to oauth2-server..."
 curl -X POST http://oauth2-server:8080/trust-anchor/hsm_ca \
+    -H "X-API-Key: ${API_KEY}" \
   -F "certificate=@$CERT_FILE" \
   --max-time 30 \
   --retry 5 \
@@ -25,6 +26,7 @@ curl -X POST http://oauth2-server:8080/trust-anchor/hsm_ca \
 echo "Trust anchor certificate uploaded successfully"
 
 # curl -X POST http://oauth2-server:8080/register \
+#   -H "X-API-Key: ${API_KEY}" \
 #   -H "Content-Type: application/json" \
 #   -d '{
 #     "client_id": "hsm-attestation-wallet-demo",
