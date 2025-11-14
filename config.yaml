@@ -36,27 +36,6 @@ attestation:
   enabled: true  # Enable attestation feature for demo
   experimental: true  # Mark as experimental feature
   
-  # Trust anchor configuration for verifying attestations
-  trust_anchors:
-    - name: "example_tpm_ca"
-      type: "tpm"
-      certificate_path: "/certs/tpm_ca.pem"
-      enabled: false
-      description: "Example TPM manufacturer CA certificate"
-    
-    - name: "example_hsm_ca" 
-      type: "hsm"
-      certificate_path: "/tmp/certs/hsm_ca.pem"
-      enabled: true  # Enable for demo
-      description: "Example HSM root CA certificate"
-  
-  # Client-specific attestation configurations (required when attestation enabled)
-  clients:
-    - client_id: "hsm-attestation-wallet-demo"
-      allowed_methods: ["attest_jwt_client_auth"]  # Real HSM attestation for demo
-      trust_anchors: ["example_hsm_ca"]
-      required_level: "high"
-  
   # Verification settings
   verification:
     clock_skew_tolerance_seconds: 300  # 5 minutes tolerance for time differences
@@ -244,79 +223,6 @@ clients:
   token_endpoint_auth_method: "client_secret_basic"
   enabled_flows:
   - "device_code"
-
-# HSM Attestation Wallet Demo Client
-- id: "hsm-attestation-wallet-demo"
-  secret: "my-secret"  # No secret needed - attestation provides authentication
-  name: "HSM Attestation Wallet Demo"
-  description: "Browser-based HSM attestation wallet demonstration"
-  redirect_uris:
-  - "http://localhost:8001/callback"
-  - "http://localhost:8001/callback.html"
-  - "http://localhost:8001"
-  - "http://127.0.0.1:8001/callback"
-  - "http://127.0.0.1:8001/callback.html"
-  - "http://127.0.0.1:8001"
-  - "http://localhost:8001/oauth2/callback"
-  - "https://demo-app.oauth2-server.orb.local/callback.html"
-  grant_types:
-  - "authorization_code"
-  - "refresh_token"
-  - "client_credentials"
-  response_types:
-  - "code"
-  scopes:
-  - "openid"
-  - "profile"
-  - "email"
-  - "wallet:read"
-  - "wallet:write"
-  - "api:read"
-  audience:
-  - "api-service"
-  token_endpoint_auth_method: "client_secret_basic"
-  public: false
-  enabled_flows:
-  - "authorization_code"
-  enabled: true
-  attestation_config:
-    client_id: "hsm-attestation-wallet-demo"  # Client ID for attestation verification
-    allowed_methods:
-      - "attest_jwt_client_auth"
-    trust_anchors:        # Reference to configured trust anchor
-      - "/tmp/certs/hsm_ca.pem"
-
-# Example Attestation-Enabled Client (disabled by default)
-- id: "attested-mobile-app"
-  name: "Attested Mobile Application"
-  description: "Mobile app with hardware attestation support"
-  redirect_uris:
-  - "/oauth/callback"
-  grant_types:
-  - "authorization_code"
-  - "refresh_token"
-  response_types:
-  - "code"
-  scopes:
-  - "openid"
-  - "profile"
-  - "email"
-  - "api:read"
-  audience:
-  - "api-service"
-  token_endpoint_auth_method: "attest_jwt_client_auth"  # New attestation method
-  public: true
-  enabled_flows:
-  - "authorization_code"
-  enabled: false  # Disabled until attestation feature is implemented
-  attestation_config:
-    attestor_type: "android"  # Type of attestation hardware
-    trust_anchor: "example_hsm_ca"  # Reference to trust anchor
-    required_claims:
-      - "hwid"          # Hardware identifier
-      - "boot_state"    # Verified boot state
-      - "app_integrity" # Application integrity
-    allow_debug_attestation: false  # Reject debug/development attestations
 
 users:
 # Test users for development and testing

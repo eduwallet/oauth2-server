@@ -73,6 +73,7 @@ var (
 	versionHandler         *handlers.VersionHandler
 	userinfoHandler        *handlers.UserInfoHandler
 	callbackHandler        *handlers.CallbackHandler
+	trustAnchorHandler     *handlers.TrustAnchorHandler
 
 	// Metrics collector
 	metricsCollector *metrics.MetricsCollector
@@ -87,6 +88,36 @@ var (
 // Maps for persisting original authorization state through the OAuth2 flow in proxy mode
 var authCodeToStateMap = make(map[string]string) // authorization_code -> original_state
 var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData)
+
+type TrustAnchorDispatcher struct {
+	handler *handlers.TrustAnchorHandler
+}
+
+func (d *TrustAnchorDispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Printf("DEBUG: TrustAnchorDispatcher called for path: %s, method: %s", r.URL.Path, r.Method)
+	if r.URL.Path == "/trust-anchor/" {
+		// List all trust anchors
+		d.handler.HandleList(w, r)
+		return
+	}
+
+	// Extract name from path /trust-anchor/{name}
+	name := strings.TrimPrefix(r.URL.Path, "/trust-anchor/")
+	log.Printf("DEBUG: Extracted name: %s", name)
+	if name == "" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case "POST":
+		d.handler.HandleUpload(w, r, name)
+	case "DELETE":
+		d.handler.HandleDelete(w, r, name)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
 
 func main() {
 	// Handle version flag
@@ -455,21 +486,28 @@ func initializeHandlers() {
 	// Set version information in the handlers package
 	handlers.SetVersionInfo(Version, GitCommit, BuildTime)
 
-	registrationHandler = handlers.NewRegistrationHandler(memoryStore)
-	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
-	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
-	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
-	statusHandler = handlers.NewStatusHandler(configuration)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, memoryStore, &authCodeToStateMap)
-	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
-	jwksHandler = handlers.NewJWKSHandler()
+	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
+	registrationHandler = handlers.NewRegistrationHandler(memoryStore, trustAnchorHandler)
 	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)
+
+	// Initialize OAuth2 flow handlers
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, memoryStore, &UpstreamSessionMap)
-	claimsHandler = handlers.NewClaimsHandler(configuration, log)
-	versionHandler = handlers.NewVersionHandler()
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, memoryStore, &authCodeToStateMap)
+	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
+	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)
+
+	// Initialize discovery and utility handlers
+	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
+	jwksHandler = handlers.NewJWKSHandler()
+	statusHandler = handlers.NewStatusHandler(configuration)
+	versionHandler = handlers.NewVersionHandler()
+	claimsHandler = handlers.NewClaimsHandler(configuration, log)
 	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler)
+
+	// Initialize device flow handler
+	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }
@@ -518,7 +556,28 @@ func setupRoutes() {
 	http.Handle("/device/consent", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleConsent))))
 
 	// Registration endpoints
-	http.Handle("/register", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
+	http.Handle("/register", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
+
+	// Trust anchor management endpoints
+	http.Handle("/trust-anchor/", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract the name from the path
+		path := strings.TrimPrefix(r.URL.Path, "/trust-anchor/")
+		if path == "" {
+			// List all trust anchors
+			trustAnchorHandler.HandleList(w, r)
+			return
+		}
+
+		// Handle specific trust anchor by name
+		switch r.Method {
+		case "POST":
+			trustAnchorHandler.HandleUpload(w, r, path)
+		case "DELETE":
+			trustAnchorHandler.HandleDelete(w, r, path)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))))
 
 	// Discovery endpoints with CORS support
 	http.Handle("/.well-known/oauth-authorization-server", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(oauth2DiscoveryHandler.ServeHTTP))))

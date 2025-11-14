@@ -523,6 +523,8 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 
+			proxySession.Claims.Extra["hsm_backed"] = true
+
 			// Create a new request for local token creation instead of modifying the original
 			localTokenForm := url.Values{}
 			localTokenForm.Set("grant_type", "client_credentials")
@@ -539,13 +541,34 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 			localTokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			localTokenReq.PostForm = localTokenForm
 
-			// Add basic authentication for confidential clients
-			if clientConfig, ok := h.Configuration.GetClientByID(clientID); ok && !clientConfig.Public {
-				h.Log.Printf("🔐 [PROXY] Adding basic auth for confidential client: %s", clientID)
-				localTokenReq.SetBasicAuth(clientID, clientConfig.Secret)
+			if memoryClient, ok := h.MemoryStore.Clients[clientID]; ok {
+				if defaultClient, ok := memoryClient.(*fosite.DefaultClient); ok {
+					if !defaultClient.Public {
+						h.Log.Printf("🔐 [PROXY] Adding basic auth for confidential client: %s", clientID)
+						// Try to get the original secret from our client secrets store
+						if originalSecret, exists := GetClientSecret(clientID); exists {
+							localTokenReq.SetBasicAuth(clientID, originalSecret)
+							h.Log.Printf("✅ [PROXY] Used stored original secret for basic auth")
+						} else {
+							h.Log.Printf("❌ [PROXY] Original secret not found for dynamic client: %s", clientID)
+							http.Error(w, "client secret not available for authentication", http.StatusInternalServerError)
+							return
+						}
+					}
+				} else {
+					h.Log.Printf("❌ [PROXY] Client %s found in memory store but not a DefaultClient", clientID)
+					http.Error(w, "invalid client configuration", http.StatusInternalServerError)
+					return
+				}
 			} else {
-				h.Log.Printf("ℹ️ [PROXY] Client %s is public, skipping basic auth for proxy token", clientID)
+				h.Log.Printf("❌ [PROXY] Client configuration not found for client_id: %s", clientID)
+				http.Error(w, "client configuration not found", http.StatusBadRequest)
+				return
 			}
+
+			// Debug: Dump the full request as curl command
+			curlCmd := h.buildCurlCommand(localTokenReq)
+			h.Log.Printf("🔍 [PROXY] Local token request curl command:\n%s", curlCmd)
 
 			// Use the same logic as local mode: create access request with local request and proxy session
 			ctx := r.Context()
@@ -628,4 +651,48 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 	if _, err := w.Write(respBody); err != nil {
 		h.Log.Printf("❌ [PROXY] Failed to write response body to client: %v", err)
 	}
+}
+
+// buildCurlCommand builds a curl command string that represents the given HTTP request
+func (h *TokenHandler) buildCurlCommand(req *http.Request) string {
+	var cmd strings.Builder
+	cmd.WriteString("curl -X ")
+	cmd.WriteString(req.Method)
+	cmd.WriteString(" '")
+	cmd.WriteString(req.URL.String())
+	cmd.WriteString("'")
+
+	// Add headers
+	for key, values := range req.Header {
+		for _, value := range values {
+			if key == "Authorization" {
+				cmd.WriteString(" \\\n  -H '")
+				cmd.WriteString(key)
+				cmd.WriteString(": ")
+				cmd.WriteString("[REDACTED]")
+				cmd.WriteString("'")
+			} else {
+				cmd.WriteString(" \\\n  -H '")
+				cmd.WriteString(key)
+				cmd.WriteString(": ")
+				cmd.WriteString(value)
+				cmd.WriteString("'")
+			}
+		}
+	}
+
+	// Add body if present
+	if req.Body != nil {
+		// Read the body
+		bodyBytes, err := io.ReadAll(req.Body)
+		if err == nil && len(bodyBytes) > 0 {
+			// Restore the body for the actual request
+			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			cmd.WriteString(" \\\n  -d '")
+			cmd.WriteString(string(bodyBytes))
+			cmd.WriteString("'")
+		}
+	}
+
+	return cmd.String()
 }

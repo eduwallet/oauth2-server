@@ -5,8 +5,11 @@ services:
     volumes:
       - certs:/tmp/certs
       - ./init-certs.sh:/init-certs.sh
-    entrypoint: ["/bin/sh", "-c", "apk add --no-cache openssl && /init-certs.sh"]
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache openssl curl && /init-certs.sh"]
     restart: "no"
+    depends_on:
+      oauth2-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/certs/hsm_ca.pem"]
       interval: 2s
@@ -25,11 +28,7 @@ services:
       - UPSTREAM_CLIENT_SECRET=${UPSTREAM_CLIENT_SECRET}
       - UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
     volumes:
-      - certs:/tmp/certs
       - ./config.yaml:/app/config.yaml:ro
-    depends_on:
-      init-certs:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "sh", "-c", "curl -f http://localhost:8080/health | grep -q '\"status\":\"healthy\"'"]
       interval: 30s
@@ -40,6 +39,8 @@ services:
   demo-app:
     image: python:3.11-alpine
     working_dir: /app
+    ports:
+      - "8001:8080"
     volumes:
       - certs:/tmp/certs
       - ./examples/hsm-attestation-wallet:/app
@@ -51,7 +52,7 @@ services:
       init-certs:
         condition: service_completed_successfully
       oauth2-server:
-        condition: service_started
+        condition: service_healthy
         
 volumes:
   certs:

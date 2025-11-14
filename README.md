@@ -49,6 +49,13 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **Comprehensive Debugging**: Detailed logging for attestation verification steps
 - **Standards Compliance**: Follows draft-ietf-oauth-attestation-based-client-auth-07
 
+### 🛡️ Trust Anchor Management
+- **Dynamic Certificate Upload**: Upload X.509 trust anchor certificates via API
+- **Certificate Validation**: Automatic PEM format and X.509 validation
+- **Name-Based Resolution**: Reference trust anchors by name in client configurations
+- **Secure Storage**: Isolated certificate storage with access controls
+- **CRUD Operations**: Create, read, update, delete trust anchor certificates
+
 ### OAuth2 Grant Types
 - ✅ Authorization Code
 - ✅ Client Credentials
@@ -66,6 +73,9 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - ✅ **draft-ietf-oauth-attestation-based-client-auth-07** - OAuth 2.0 Attestation-Based Client Authentication
 - ✅ **OpenID 4 Verifiable Credential Issuance 1.0** - `issuer_state` parameter support
 
+### Extensions
+- 🛡️ **Trust Anchor Management API** - Dynamic certificate management for attestation validation
+
 ### Production Features
 - ✅ Kubernetes native
 - ✅ Security hardening
@@ -80,7 +90,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **internal/auth/**: Authentication and authorization logic for OAuth2 flows.
 - **internal/attestation/**: OAuth 2.0 Attestation-Based Client Authentication implementation with JWT and TLS certificate verification, comprehensive debugging, and proxy mode support.
 - **internal/flows/**: Implements various OAuth2 flows.
-- **internal/handlers/**: Defines HTTP handlers for API endpoints.
+- **internal/handlers/**: Defines HTTP handlers for API endpoints including trust anchor management and dynamic client registration.
 - **internal/models/**: Data models used in the application.
 - **internal/store/**: Storage and retrieval of data.
 - **internal/utils/**: Utility functions.
@@ -97,9 +107,10 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 
 - **OAuth2 Authorization Flows**: Authorization Code, Client Credentials, Device Authorization, Refresh Token, Token Exchange
 - **Attestation-Based Authentication**: Hardware-backed client authentication with JWT and TLS certificate support, proxy mode verification, and comprehensive debugging
+- **Trust Anchor Management**: Dynamic upload and management of X.509 trust anchor certificates for attestation validation
 - **OpenID 4 Verifiable Credentials**: Full `issuer_state` parameter support for verifiable credential issuance flows
 - **Security**: JWT-based tokens, PKCE, HTTPS, proxy-aware, rate limiting, CORS
-- **Management**: Dynamic client registration via API (with audience support)
+- **Management**: Dynamic client registration via API (with audience support and attestation configuration)
 - **Token Introspection**: `/introspect` endpoint returns all standard fields, including `aud` as a JSON array
 - **Token Statistics**: `/token/stats` endpoint provides statistics about issued, active, revoked, and expired tokens
 
@@ -174,6 +185,8 @@ FORCE_HTTPS=false
 ### Configuration Files
 
 See `values.yaml` and `docker-compose.yml` for additional configuration options.
+
+**Trust Anchor Storage**: Trust anchor certificates are stored in `/tmp/trust-anchors/` directory with `.pem` file extensions. Ensure this directory is writable by the server process and consider mounting it as a persistent volume in production deployments.
 
 ### Proxy Mode
 
@@ -482,6 +495,75 @@ oauth2_attestation_trust_level{level="high", client_id="hsm-demo"}
 oauth2_attestation_verification_duration_seconds{method="jwt"}
 ```
 
+## Trust Anchor Management
+
+The server provides a REST API for managing trust anchor certificates used in attestation-based client authentication. Trust anchors are X.509 certificates that serve as root certificates for validating client attestation chains.
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/trust-anchor/` | GET | List all available trust anchors |
+| `/trust-anchor/{name}` | POST | Upload a trust anchor certificate |
+| `/trust-anchor/{name}` | DELETE | Delete a trust anchor certificate |
+
+### Upload Trust Anchor
+
+Upload an X.509 certificate in PEM format as a trust anchor:
+
+```bash
+curl -X POST http://localhost:8080/trust-anchor/hsm-ca \
+  -F "certificate=@hsm-ca.pem"
+```
+
+**Response:**
+```json
+{
+  "name": "hsm-ca",
+  "path": "/tmp/trust-anchors/hsm-ca.pem",
+  "status": "uploaded"
+}
+```
+
+### List Trust Anchors
+
+Get a list of all uploaded trust anchor names:
+
+```bash
+curl http://localhost:8080/trust-anchor/
+```
+
+**Response:**
+```json
+{
+  "trust_anchors": ["hsm-ca", "mobile-ca", "iot-ca"]
+}
+```
+
+### Delete Trust Anchor
+
+Remove a trust anchor certificate:
+
+```bash
+curl -X DELETE http://localhost:8080/trust-anchor/hsm-ca
+```
+
+**Response:**
+```json
+{
+  "name": "hsm-ca",
+  "status": "deleted"
+}
+```
+
+### Certificate Requirements
+
+- **Format**: PEM-encoded X.509 certificate
+- **Validation**: Automatic X.509 parsing and validation
+- **Size Limit**: Maximum 1MB per certificate
+- **Storage**: Certificates are stored in `/tmp/trust-anchors/` with `.pem` extension
+- **Naming**: Trust anchor names must be valid filenames (no path traversal allowed)
+
 ### Monitoring and Metrics
 
 Attestation events are tracked in Prometheus metrics:
@@ -512,9 +594,17 @@ oauth2_attestation_verification_duration_seconds{method="jwt"}
 | `/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
 | `/revoke` | POST | Token revocation | RFC 6749 |
 | `/userinfo` | GET | UserInfo endpoint (requires Authorization header) | OIDC Core |
-| `/register` | POST | Dynamic client registration (with audience) |
+| `/register` | POST | Dynamic client registration (with audience and attestation support) |
 | `/claims` | GET | Claims display (interactive) |
 | `/callback` | GET | OAuth2 callback for demo |
+
+### Trust Anchor Management Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/trust-anchor/` | GET | List all available trust anchors |
+| `/trust-anchor/{name}` | POST | Upload a trust anchor certificate |
+| `/trust-anchor/{name}` | DELETE | Delete a trust anchor certificate |
 
 ### Discovery & Health
 
@@ -558,6 +648,91 @@ curl -X POST http://localhost:8080/register \
     "scope": "openid profile email"
   }'
 ```
+
+#### Client Registration with Attestation Configuration
+
+Register a client with attestation-based authentication:
+
+```bash
+curl -X POST http://localhost:8080/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "HSM Attestation Wallet",
+    "token_endpoint_auth_method": "attest_jwt_client_auth",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "redirect_uris": ["https://wallet.example.com/callback"],
+    "scope": "openid profile",
+    "attestation_config": {
+      "client_id": "hsm-wallet-client",
+      "allowed_methods": ["attest_jwt_client_auth"],
+      "trust_anchors": ["hsm-ca"],
+      "required_level": "high"
+    }
+  }'
+```
+
+**Response:**
+```json
+{
+  "client_id": "generated-client-id",
+  "client_secret": null,
+  "client_secret_expires_at": 0,
+  "registration_access_token": null,
+  "registration_client_uri": null,
+  "client_id_issued_at": 1699275600,
+  "redirect_uris": ["https://wallet.example.com/callback"],
+  "token_endpoint_auth_method": "attest_jwt_client_auth",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "client_name": "HSM Attestation Wallet",
+  "scope": "openid profile",
+  "audience": ["generated-client-id"],
+  "attestation_config": {
+    "client_id": "hsm-wallet-client",
+    "allowed_methods": ["attest_jwt_client_auth"],
+    "trust_anchors": ["/tmp/trust-anchors/hsm-ca.pem"],
+    "required_level": "high"
+  }
+}
+```
+
+**Note**: Trust anchor names in the `attestation_config.trust_anchors` array are automatically resolved to their file paths during registration. The uploaded trust anchor "hsm-ca" becomes "/tmp/trust-anchors/hsm-ca.pem" in the stored configuration.
+
+### Complete Attestation Setup Workflow
+
+1. **Upload Trust Anchor Certificate**:
+   ```bash
+   curl -X POST http://localhost:8080/trust-anchor/hsm-ca \
+     -F "certificate=@hsm-ca.pem"
+   ```
+
+2. **Register Client with Attestation Configuration**:
+   ```bash
+   curl -X POST http://localhost:8080/register \
+     -H "Content-Type: application/json" \
+     -d '{
+       "client_name": "HSM Wallet App",
+       "token_endpoint_auth_method": "attest_jwt_client_auth",
+       "grant_types": ["authorization_code"],
+       "redirect_uris": ["https://wallet.example.com/callback"],
+       "attestation_config": {
+         "allowed_methods": ["attest_jwt_client_auth"],
+         "trust_anchors": ["hsm-ca"],
+         "required_level": "high"
+       }
+     }'
+   ```
+
+3. **Client Uses Attestation for Authentication**:
+   ```bash
+   # Client creates JWT with attestation claims and certificate chain
+   curl -X POST https://oauth2-server.example.com/token \
+     -d "grant_type=authorization_code" \
+     -d "code=auth_code" \
+     -d "redirect_uri=https://wallet.example.com/callback" \
+     -d "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
+     -d "client_assertion=${ATTESTATION_JWT}"
+   ```
 
 ### Token Exchange for Refresh Token
 
