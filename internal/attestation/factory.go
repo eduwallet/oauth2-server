@@ -11,17 +11,21 @@ import (
 
 // VerifierFactory creates attestation verifiers based on configuration
 type VerifierFactory struct {
-	config       *config.AttestationConfig
-	trustAnchors map[string]string // name -> certificate PEM content
-	logger       *logrus.Logger
+	config               *config.AttestationConfig
+	trustAnchors         map[string]string // name -> certificate PEM content
+	logger               *logrus.Logger
+	dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool)
+	trustAnchorResolver  func(name string) string // resolves trust anchor name to file path
 }
 
 // NewVerifierFactory creates a new verifier factory
-func NewVerifierFactory(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger) *VerifierFactory {
+func NewVerifierFactory(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger, dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool), trustAnchorResolver func(name string) string) *VerifierFactory {
 	return &VerifierFactory{
-		config:       config,
-		trustAnchors: trustAnchorFiles,
-		logger:       logger,
+		config:               config,
+		trustAnchors:         trustAnchorFiles,
+		logger:               logger,
+		dynamicConfigChecker: dynamicConfigChecker,
+		trustAnchorResolver:  trustAnchorResolver,
 	}
 }
 
@@ -59,11 +63,28 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 		// Load trust anchor certificates
 		var certPEMs []string
 		for _, anchorName := range clientConfig.TrustAnchors {
-			if certPEM, exists := f.trustAnchors[anchorName]; exists {
-				certPEMs = append(certPEMs, certPEM)
-			} else {
+			var certPEM string
+			var exists bool
+
+			// First try static trust anchors
+			if certPEM, exists = f.trustAnchors[anchorName]; !exists {
+				// Try to load dynamically
+				if f.trustAnchorResolver != nil {
+					path := f.trustAnchorResolver(anchorName)
+					if path != "" {
+						if data, err := ioutil.ReadFile(path); err == nil {
+							certPEM = string(data)
+							exists = true
+						}
+					}
+				}
+			}
+
+			if !exists {
 				return nil, fmt.Errorf("trust anchor not found: %s", anchorName)
 			}
+
+			certPEMs = append(certPEMs, certPEM)
 		}
 		return NewJWTVerifier(clientID, certPEMs, f.logger)
 
@@ -71,11 +92,28 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 		// Load trust anchor certificates
 		var certPEMs []string
 		for _, anchorName := range clientConfig.TrustAnchors {
-			if certPEM, exists := f.trustAnchors[anchorName]; exists {
-				certPEMs = append(certPEMs, certPEM)
-			} else {
+			var certPEM string
+			var exists bool
+
+			// First try static trust anchors
+			if certPEM, exists = f.trustAnchors[anchorName]; !exists {
+				// Try to load dynamically
+				if f.trustAnchorResolver != nil {
+					path := f.trustAnchorResolver(anchorName)
+					if path != "" {
+						if data, err := ioutil.ReadFile(path); err == nil {
+							certPEM = string(data)
+							exists = true
+						}
+					}
+				}
+			}
+
+			if !exists {
 				return nil, fmt.Errorf("trust anchor not found: %s", anchorName)
 			}
+
+			certPEMs = append(certPEMs, certPEM)
 		}
 		return NewTLSVerifier(clientID, certPEMs)
 
@@ -86,9 +124,17 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 
 // GetSupportedMethods returns the supported attestation methods for a client
 func (f *VerifierFactory) GetSupportedMethods(clientID string) ([]string, error) {
+	// First check static config
 	for _, client := range f.config.Clients {
 		if client.ClientID == clientID {
 			return client.AllowedMethods, nil
+		}
+	}
+
+	// Then check dynamic configs
+	if f.dynamicConfigChecker != nil {
+		if config, exists := f.dynamicConfigChecker(clientID); exists {
+			return config.AllowedMethods, nil
 		}
 	}
 
@@ -97,35 +143,59 @@ func (f *VerifierFactory) GetSupportedMethods(clientID string) ([]string, error)
 
 // IsAttestationEnabled checks if attestation is enabled for a client
 func (f *VerifierFactory) IsAttestationEnabled(clientID string) bool {
+	// First check static config
 	for _, client := range f.config.Clients {
 		if client.ClientID == clientID {
 			return len(client.AllowedMethods) > 0
 		}
 	}
 
-	return false
-}
-
-// ValidateClientConfig validates the attestation configuration for a client
-func (f *VerifierFactory) ValidateClientConfig(clientID string) error {
-	for _, client := range f.config.Clients {
-		if client.ClientID == clientID {
-			return client.Validate()
+	// Then check dynamic configs
+	if f.dynamicConfigChecker != nil {
+		if config, exists := f.dynamicConfigChecker(clientID); exists {
+			return len(config.AllowedMethods) > 0
 		}
 	}
 
-	return fmt.Errorf("client not found: %s", clientID)
+	return false
+}
+
+// AddClientConfig adds or updates a client attestation configuration dynamically
+func (f *VerifierFactory) AddClientConfig(clientID string, config *config.ClientAttestationConfig) {
+	// Check if client already exists
+	for i, client := range f.config.Clients {
+		if client.ClientID == clientID {
+			// Update existing
+			f.config.Clients[i] = *config
+			return
+		}
+	}
+	// Add new
+	f.config.Clients = append(f.config.Clients, *config)
 }
 
 // GetClientConfig returns the attestation configuration for a client
 func (f *VerifierFactory) GetClientConfig(clientID string) (*config.ClientAttestationConfig, error) {
+	// First check static config
 	for _, client := range f.config.Clients {
 		if client.ClientID == clientID {
 			return &client, nil
 		}
 	}
 
+	// Then check dynamic configs
+	if f.dynamicConfigChecker != nil {
+		if config, exists := f.dynamicConfigChecker(clientID); exists {
+			return config, nil
+		}
+	}
+
 	return nil, fmt.Errorf("client not found: %s", clientID)
+}
+
+// GetClientConfig returns the attestation configuration for a client
+func (m *VerifierManager) GetClientConfig(clientID string) (*config.ClientAttestationConfig, error) {
+	return m.factory.GetClientConfig(clientID)
 }
 
 // CreateVerifierForAllMethods creates verifiers for all allowed methods for a client
@@ -151,15 +221,17 @@ func (f *VerifierFactory) CreateVerifierForAllMethods(clientID string) (map[stri
 
 // VerifierManager manages multiple verifiers and provides a unified interface
 type VerifierManager struct {
-	factory   *VerifierFactory
-	verifiers map[string]map[string]interface{} // clientID -> method -> verifier
+	factory              *VerifierFactory
+	verifiers            map[string]map[string]interface{} // clientID -> method -> verifier
+	dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool)
 }
 
 // NewVerifierManager creates a new verifier manager
-func NewVerifierManager(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger) *VerifierManager {
+func NewVerifierManager(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger, dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool), trustAnchorResolver func(name string) string) *VerifierManager {
 	return &VerifierManager{
-		factory:   NewVerifierFactory(config, trustAnchorFiles, logger),
-		verifiers: make(map[string]map[string]interface{}),
+		factory:              NewVerifierFactory(config, trustAnchorFiles, logger, dynamicConfigChecker, trustAnchorResolver),
+		verifiers:            make(map[string]map[string]interface{}),
+		dynamicConfigChecker: dynamicConfigChecker,
 	}
 }
 
@@ -246,10 +318,39 @@ func (m *VerifierManager) PreloadVerifiers() error {
 
 // GetSupportedMethods returns supported methods for a client
 func (m *VerifierManager) GetSupportedMethods(clientID string) ([]string, error) {
-	return m.factory.GetSupportedMethods(clientID)
+	// First check static config
+	if methods, err := m.factory.GetSupportedMethods(clientID); err == nil {
+		return methods, nil
+	}
+
+	// Then check dynamic configs
+	if m.dynamicConfigChecker != nil {
+		if config, exists := m.dynamicConfigChecker(clientID); exists {
+			return config.AllowedMethods, nil
+		}
+	}
+
+	return nil, fmt.Errorf("client not found: %s", clientID)
 }
 
 // IsAttestationEnabled checks if attestation is enabled for a client
 func (m *VerifierManager) IsAttestationEnabled(clientID string) bool {
-	return m.factory.IsAttestationEnabled(clientID)
+	// First check static config
+	if m.factory.IsAttestationEnabled(clientID) {
+		return true
+	}
+
+	// Then check dynamic configs
+	if m.dynamicConfigChecker != nil {
+		if config, exists := m.dynamicConfigChecker(clientID); exists {
+			return len(config.AllowedMethods) > 0
+		}
+	}
+
+	return false
+}
+
+// AddClientConfig adds or updates a client attestation configuration dynamically
+func (m *VerifierManager) AddClientConfig(clientID string, config *config.ClientAttestationConfig) {
+	m.factory.AddClientConfig(clientID, config)
 }

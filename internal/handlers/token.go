@@ -2,6 +2,10 @@ package handlers
 
 import (
 	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,6 +23,11 @@ import (
 	"github.com/ory/fosite/token/jwt"
 	"github.com/sirupsen/logrus"
 )
+
+// Context key type for Fosite client
+type fositeClientKey string
+
+const clientContextKey fositeClientKey = "client"
 
 // TokenHandler manages OAuth2 token requests using pure fosite implementation
 type TokenHandler struct {
@@ -85,25 +94,76 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ctx := r.Context()
-
 	// Debug logging
 	clientID := r.FormValue("client_id")
 	h.Log.Printf("🔍 Token request - Grant Type: %s, Client ID: %s", grantType, clientID)
 
 	// Check for attestation-based authentication
-	if err := h.handleAttestationAuthentication(r); err != nil {
+	attestationPerformed := false
+	if performed, err := h.handleAttestationAuthentication(r); err != nil {
 		h.Log.Printf("❌ Attestation authentication failed: %v", err)
 		if h.Metrics != nil {
 			h.Metrics.RecordTokenRequest(grantType, clientID, "attestation_error")
 		}
 		http.Error(w, "Attestation authentication failed", http.StatusUnauthorized)
 		return
+	} else {
+		attestationPerformed = performed
+		if attestationPerformed {
+			h.Log.Printf("✅ Attestation verified for client: %s", clientID)
+		}
 	}
 
-	// Check for traditional client ID/secret authentication if attestation was not used
+	// Check for standard JWT client assertion authentication
+	jwtAssertionPerformed := false
+	if !attestationPerformed && r.FormValue("client_assertion_type") == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
+		if err := h.handleJWTClientAssertion(r); err != nil {
+			h.Log.Printf("❌ JWT client assertion failed: %v", err)
+			if h.Metrics != nil {
+				h.Metrics.RecordTokenRequest(grantType, clientID, "jwt_assertion_error")
+			}
+			http.Error(w, "JWT client assertion failed", http.StatusUnauthorized)
+			return
+		}
+		jwtAssertionPerformed = true
+		h.Log.Printf("✅ JWT client assertion verified for client: %s", clientID)
+	}
+
+	// If attestation or JWT assertion was performed, remove the client_assertion parameters
+	// Fosite will skip client authentication since authentication is complete
+	if attestationPerformed || jwtAssertionPerformed {
+		if err := r.ParseForm(); err == nil {
+			// Remove assertion parameters since authentication is complete
+			r.Form.Del("client_assertion")
+			r.Form.Del("client_assertion_type")
+			r.PostForm.Del("client_assertion")
+			r.PostForm.Del("client_assertion_type")
+		}
+		// For attestation/JWT clients, use client_credentials grant type to mimic local token call
+		r.Form.Set("grant_type", "client_credentials")
+		// Set basic auth like in proxy token handling
+		if secret, ok := GetClientSecret(clientID); ok {
+			r.SetBasicAuth(clientID, secret)
+			h.Log.Printf("✅ Set basic auth for attestation/JWT client: %s", clientID)
+		}
+	}
+
+	ctx := r.Context()
+
+	// Let fosite handle ALL token requests natively, including device code flow and refresh tokens
+	// Use a consistent session for all requests - fosite will manage session retrieval for refresh tokens
+	session := &openid.DefaultSession{}
+	session.Subject = clientID
+	session.Username = clientID
+	h.Log.Printf("🔍 Token: Created empty session at address: %p", session)
+	h.Log.Printf("🔍 Token: Session before NewAccessRequest - Subject: '%s'", session.GetSubject())
+
+	// Store attestation information in session claims if attestation was performed
+	if attestationPerformed {
+		h.storeAttestationInSession(ctx, session)
+	} // Check for traditional client ID/secret authentication if neither attestation nor JWT assertion was used
 	// Skip authentication for proxy requests that are already authenticated
-	if r.FormValue("client_assertion") == "" && r.FormValue("proxy_authenticated") == "" {
+	if !attestationPerformed && !jwtAssertionPerformed && r.FormValue("client_assertion") == "" && r.FormValue("proxy_authenticated") == "" {
 		if err := h.handleTraditionalAuthentication(r); err != nil {
 			h.Log.Printf("❌ Traditional authentication failed: %v", err)
 			if h.Metrics != nil {
@@ -116,24 +176,8 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		h.Log.Printf("✅ Proxy request authentication bypassed for client: %s", clientID)
 	}
 
-	// If attestation was used, remove the client_assertion parameters
-	// Fosite will skip client authentication since all clients appear public
-	if r.FormValue("client_assertion") != "" {
-		h.Log.Printf("✅ Attestation verified for client: %s", clientID)
-		if err := r.ParseForm(); err == nil {
-			// Remove attestation parameters since authentication is complete
-			r.Form.Del("client_assertion")
-			r.Form.Del("client_assertion_type")
-			r.PostForm.Del("client_assertion")
-			r.PostForm.Del("client_assertion_type")
-		}
-	}
-
-	// Let fosite handle ALL token requests natively, including device code flow and refresh tokens
-	// Use a consistent session for all requests - fosite will manage session retrieval for refresh tokens
-	session := &openid.DefaultSession{}
-	h.Log.Printf("🔍 Token: Created empty session at address: %p", session)
-	h.Log.Printf("🔍 Token: Session before NewAccessRequest - Subject: '%s'", session.GetSubject())
+	// Store issuer_state in session claims if available (for authorization code flow)
+	h.storeIssuerStateInSession(r, session)
 
 	accessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, r, session)
 	if err != nil {
@@ -198,28 +242,101 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	h.Log.Printf("✅ Token request handled successfully by fosite")
 }
 
+// storeAttestationInSession stores attestation information in session claims if attestation was performed
+func (h *TokenHandler) storeAttestationInSession(ctx context.Context, session *openid.DefaultSession) {
+	// Check if attestation was performed and store the result in session claims
+	if attestationResult, hasAttestation := attestation.GetAttestationResult(ctx); hasAttestation && attestationResult.Valid {
+		h.Log.Printf("🔍 Storing attestation result in session claims: hasAttestation=%t, valid=%t", hasAttestation, attestationResult.Valid)
+
+		// Initialize claims if nil
+		if session.Claims == nil {
+			session.Claims = &jwt.IDTokenClaims{}
+		}
+		if session.Claims.Extra == nil {
+			session.Claims.Extra = make(map[string]interface{})
+		}
+
+		// Store attestation information in session claims (this gets persisted with the token)
+		attestationInfo := map[string]interface{}{
+			"attestation_verified":    true,
+			"attestation_trust_level": attestationResult.TrustLevel,
+			"attestation_issued_at":   attestationResult.IssuedAt.Unix(),
+			"attestation_expires_at":  attestationResult.ExpiresAt.Unix(),
+		}
+
+		// Extract additional attestation details from claims if available
+		if attestationResult.Claims != nil {
+			if keyId, ok := attestationResult.Claims["att_device_id"].(string); ok && keyId != "" {
+				attestationInfo["attestation_key_id"] = keyId
+			} else if issuerKeyId, ok := attestationResult.Claims["iss"].(string); ok && strings.Contains(issuerKeyId, "hsm:") {
+				// Extract key ID from issuer claim like "hsm:hsm_ae26b334"
+				parts := strings.Split(issuerKeyId, ":")
+				if len(parts) == 2 {
+					attestationInfo["attestation_key_id"] = parts[1]
+				}
+			}
+			if hsmBacked, ok := attestationResult.Claims["att_hardware_backed"].(bool); ok {
+				attestationInfo["hsm_backed"] = hsmBacked
+			}
+			if bioAuth, ok := attestationResult.Claims["att_biometric"].(bool); ok {
+				attestationInfo["bio_authenticated"] = bioAuth
+			}
+		}
+
+		session.Claims.Extra["attestation"] = attestationInfo
+		h.Log.Printf("✅ Stored attestation info in session claims")
+	} else {
+		h.Log.Printf("⚠️ Not storing attestation: hasAttestation=%t, valid=%t", hasAttestation, false)
+	}
+}
+
+// storeIssuerStateInSession stores issuer_state in session claims if available
+func (h *TokenHandler) storeIssuerStateInSession(r *http.Request, session *openid.DefaultSession) {
+	// Store issuer_state in session claims if available (for authorization code flow)
+	authCode := r.FormValue("code")
+	if authCode != "" && h.AuthCodeToStateMap != nil {
+		if issuerState, exists := (*h.AuthCodeToStateMap)[authCode]; exists {
+			h.Log.Printf("🔍 Storing issuer_state in session claims: %s", issuerState)
+
+			// Initialize claims if nil
+			if session.Claims == nil {
+				session.Claims = &jwt.IDTokenClaims{}
+			}
+			if session.Claims.Extra == nil {
+				session.Claims.Extra = make(map[string]interface{})
+			}
+
+			session.Claims.Extra["issuer_state"] = issuerState
+			h.Log.Printf("✅ Stored issuer_state in session claims")
+			// Clean up the authorization code mapping
+			delete(*h.AuthCodeToStateMap, authCode)
+		}
+	}
+}
+
 // handleAttestationAuthentication handles attestation-based client authentication
-func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) error {
+// Returns true if attestation was performed and succeeded, false otherwise
+func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) (bool, error) {
 	// Skip if attestation manager is not available
 	if h.AttestationManager == nil {
-		return nil
+		return false, nil
 	}
 
 	clientID := r.FormValue("client_id")
 	if clientID == "" {
 		// Client ID might be in Authorization header for some auth methods
-		return nil
+		return false, nil
 	}
 
 	// Check if attestation is enabled for this client
 	if !h.AttestationManager.IsAttestationEnabled(clientID) {
-		return nil // Attestation not required for this client
+		return false, nil // Attestation not required for this client
 	}
 
 	// Determine the authentication method
 	authMethod := h.determineAuthMethod(r)
 	if authMethod == "" {
-		return nil // No attestation method detected
+		return false, nil // No attestation method detected
 	}
 
 	h.Log.Printf("🔍 Processing attestation auth - Client: %s, Method: %s", clientID, authMethod)
@@ -227,7 +344,7 @@ func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) error {
 	// Get the appropriate verifier
 	verifier, err := h.AttestationManager.GetVerifier(clientID, authMethod)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Perform attestation verification based on method
@@ -255,13 +372,13 @@ func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) error {
 		// Extract JWT from client_assertion parameter
 		clientAssertion := r.FormValue("client_assertion")
 		if clientAssertion == "" {
-			return fosite.ErrInvalidRequest.WithHint("Missing client_assertion for JWT attestation")
+			return false, fosite.ErrInvalidRequest.WithHint("Missing client_assertion for JWT attestation")
 		}
 
 		if jwtVerifier, ok := verifier.(attestation.AttestationVerifier); ok {
 			result, err = jwtVerifier.VerifyAttestation(clientAssertion)
 		} else {
-			return fosite.ErrServerError.WithHint("Invalid JWT verifier")
+			return false, fosite.ErrServerError.WithHint("Invalid JWT verifier")
 		}
 
 	case "attest_tls_client_auth":
@@ -269,29 +386,130 @@ func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) error {
 		if tlsVerifier, ok := verifier.(attestation.TLSAttestationVerifier); ok {
 			result, err = tlsVerifier.VerifyAttestation(r)
 		} else {
-			return fosite.ErrServerError.WithHint("Invalid TLS verifier")
+			return false, fosite.ErrServerError.WithHint("Invalid TLS verifier")
 		}
 
 	default:
-		return fosite.ErrInvalidRequest.WithHintf("Unsupported attestation method: %s", authMethod)
+		return false, fosite.ErrInvalidRequest.WithHintf("Unsupported attestation method: %s", authMethod)
 	}
 
 	if err != nil {
 		h.Log.Printf("❌ Attestation verification failed: %v", err)
-		//		return fosite.ErrInvalidClient.WithHint("Attestation verification failed")
+		return false, err
 	}
 
 	if !result.Valid {
 		h.Log.Printf("❌ Invalid attestation result")
-		//		return fosite.ErrInvalidClient.WithHint("Invalid attestation")
+		return false, fosite.ErrInvalidClient.WithHint("Invalid attestation")
 	}
 
 	h.Log.Printf("✅ Attestation verification successful - Client: %s, Trust Level: %s",
 		result.ClientID, result.TrustLevel)
 
+	// Get the client from store and set it in context for Fosite
+	client, exists := h.MemoryStore.Clients[result.ClientID]
+	if !exists {
+		return false, fosite.ErrInvalidClient.WithHint("Unknown client")
+	}
+	ctx := context.WithValue(r.Context(), clientContextKey, client)
+	*r = *r.WithContext(ctx)
+
 	// Store attestation result in request context for later use
 	*r = *r.WithContext(attestation.WithAttestationResult(r.Context(), result))
 
+	return true, nil
+}
+
+// handleJWTClientAssertion handles standard JWT client assertion authentication
+func (h *TokenHandler) handleJWTClientAssertion(r *http.Request) error {
+	clientAssertion := r.FormValue("client_assertion")
+	if clientAssertion == "" {
+		return fosite.ErrInvalidRequest.WithHint("Missing client_assertion")
+	}
+
+	// Parse the JWT to extract claims
+	parts := strings.Split(clientAssertion, ".")
+	if len(parts) != 3 {
+		return fosite.ErrInvalidRequest.WithHint("Invalid JWT format")
+	}
+
+	// Decode the payload (second part)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fosite.ErrInvalidRequest.WithHint("Invalid JWT payload encoding")
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return fosite.ErrInvalidRequest.WithHint("Invalid JWT payload")
+	}
+
+	// Extract issuer (client_id) from claims
+	iss, ok := claims["iss"].(string)
+	if !ok || iss == "" {
+		return fosite.ErrInvalidRequest.WithHint("Missing or invalid iss claim in JWT")
+	}
+
+	// Extract audience
+	aud, ok := claims["aud"].(string)
+	if !ok || aud == "" {
+		return fosite.ErrInvalidRequest.WithHint("Missing or invalid aud claim in JWT")
+	}
+
+	// Verify audience matches our server
+	if aud != h.Configuration.Server.BaseURL && aud != h.Configuration.Server.BaseURL+"/token" {
+		return fosite.ErrInvalidRequest.WithHint("Invalid audience in JWT")
+	}
+
+	// Check if client exists
+	client, exists := h.MemoryStore.Clients[iss]
+	if !exists {
+		return fosite.ErrInvalidClient.WithHint("Unknown client")
+	}
+
+	// Get the client's secret (unhashed for JWT validation)
+	clientSecret, ok := GetClientSecret(iss)
+	if !ok {
+		return fosite.ErrInvalidClient.WithHint("Client secret not available")
+	}
+
+	// Verify JWT signature using HMAC-SHA256
+	headerAndPayload := parts[0] + "." + parts[1]
+	expectedSignature := parts[2]
+
+	// Compute expected signature
+	mac := hmac.New(sha256.New, []byte(clientSecret))
+	mac.Write([]byte(headerAndPayload))
+	computedSignature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	if !hmac.Equal([]byte(expectedSignature), []byte(computedSignature)) {
+		return fosite.ErrInvalidClient.WithHint("Invalid JWT signature")
+	}
+
+	// Verify expiration
+	if exp, ok := claims["exp"].(float64); ok {
+		if int64(exp) < time.Now().Unix() {
+			return fosite.ErrInvalidRequest.WithHint("JWT has expired")
+		}
+	}
+
+	// Verify not before
+	if nbf, ok := claims["nbf"].(float64); ok {
+		if int64(nbf) > time.Now().Unix() {
+			return fosite.ErrInvalidRequest.WithHint("JWT not yet valid")
+		}
+	}
+
+	// Set client_id in the form if not already set
+	if r.FormValue("client_id") == "" {
+		r.Form.Set("client_id", iss)
+	}
+
+	// Set the client in context for Fosite
+	ctx := context.WithValue(r.Context(), clientContextKey, client)
+	*r = *r.WithContext(ctx)
+
+	h.Log.Printf("✅ JWT client assertion validated for client: %s", iss)
 	return nil
 }
 
@@ -485,16 +703,16 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 	if h.AttestationManager != nil && h.AttestationManager.IsAttestationEnabled(clientID) {
 		h.Log.Printf("🔐 [PROXY] Attestation required for client: %s", clientID)
 
-		if err := h.handleAttestationAuthentication(r); err != nil {
+		if performed, err := h.handleAttestationAuthentication(r); err != nil {
 			h.Log.Printf("❌ [PROXY] Attestation verification failed for client %s: %v", clientID, err)
 			if h.Metrics != nil {
 				h.Metrics.RecordTokenRequest("proxy_token", clientID, "attestation_error")
 			}
 			http.Error(w, "Attestation verification failed", http.StatusUnauthorized)
 			return
+		} else if performed {
+			h.Log.Printf("✅ [PROXY] Attestation verification successful for client: %s", clientID)
 		}
-
-		h.Log.Printf("✅ [PROXY] Attestation verification successful for client: %s", clientID)
 	} else {
 		h.Log.Printf("ℹ️ [PROXY] Attestation not required for client: %s", clientID)
 	}
@@ -592,16 +810,11 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 				proxySession.Claims.Extra["upstream_expires_in"] = expiresIn
 			}
 
-			// Look up the issuer_state using the authorization code from the request
-			authCode := r.Form.Get("code")
-			if authCode != "" && h.AuthCodeToStateMap != nil {
-				if issuerState, exists := (*h.AuthCodeToStateMap)[authCode]; exists {
-					proxySession.Claims.Extra["issuer_state"] = issuerState
-					h.Log.Printf("🔄 [PROXY] Stored issuer state in proxy session claims: %s", issuerState)
-					// Clean up the authorization code mapping
-					delete(*h.AuthCodeToStateMap, authCode)
-				}
-			}
+			// Store attestation information in proxy session claims if attestation was performed
+			h.storeAttestationInSession(r.Context(), proxySession)
+
+			// Store issuer_state in proxy session claims if available
+			h.storeIssuerStateInSession(r, proxySession)
 			// Create a new request for local token creation instead of modifying the original
 			localTokenForm := url.Values{}
 			localTokenForm.Set("grant_type", "client_credentials")

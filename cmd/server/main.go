@@ -135,14 +135,11 @@ func main() {
 
 	log.Printf("🚀 Starting OAuth2 Server v%s (commit: %s)", Version, GitCommit)
 
-	var err error
-
 	_ = godotenv.Load()
-	if err != nil {
-		log.Printf("No .env file loaded")
-	}
+	log.Printf("✅ Environment variables loaded (if .env file exists)")
 
 	// Load configuration from YAML
+	var err error
 	configuration, err = config.Load()
 	if err != nil {
 		log.Fatalf("❌ Failed to load configuration: %v", err)
@@ -298,6 +295,12 @@ func main() {
 	metricsCollector = metrics.NewMetricsCollector()
 	log.Printf("✅ Metrics collector initialized")
 
+	// Initialize trust anchor handler first (needed for attestation manager)
+	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
+
+	// Initialize stores (needed before attestation manager)
+	memoryStore = storage.NewMemoryStore()
+
 	// Initialize attestation manager if attestation is enabled
 	if configuration.Attestation != nil && configuration.Attestation.Enabled {
 		// Load trust anchor certificates from config file
@@ -307,15 +310,12 @@ func main() {
 		}
 		log.Printf("✅ Loaded %d trust anchors", len(trustAnchors))
 
-		attestationManager = attestation.NewVerifierManager(configuration.Attestation, trustAnchors, log)
+		attestationManager = attestation.NewVerifierManager(configuration.Attestation, trustAnchors, log, handlers.GetClientAttestationConfig, trustAnchorHandler.ResolvePath)
 		if err := attestationManager.PreloadVerifiers(); err != nil {
 			log.Fatalf("❌ Failed to preload attestation verifiers: %v", err)
 		}
 		log.Printf("✅ Attestation manager initialized with %d clients", len(configuration.Attestation.Clients))
 	}
-
-	// Initialize stores
-	memoryStore = storage.NewMemoryStore()
 
 	// Initialize OAuth2 provider
 	if err := initializeOAuth2Provider(); err != nil {
@@ -459,6 +459,12 @@ type PublicClientWrapper struct {
 }
 
 func (w *PublicClientWrapper) IsPublic() bool {
+	// Check if client has a secret (hashed or not)
+	// Clients with secrets should not be public for proper authentication
+	if w.Client.GetHashedSecret() != nil && len(w.Client.GetHashedSecret()) > 0 {
+		return false // Not public if it has a secret
+	}
+
 	// Check if client supports client_credentials grant
 	grantTypes := w.Client.GetGrantTypes()
 	for _, grantType := range grantTypes {
@@ -470,13 +476,22 @@ func (w *PublicClientWrapper) IsPublic() bool {
 }
 
 func initializeOAuth2Provider() error {
+	log.Printf("🔍 Initializing OAuth2 provider...")
+	log.Printf("🔍 Configuration: %v", configuration != nil)
+	log.Printf("🔍 MemoryStore: %v", memoryStore != nil)
+
 	// Generate RSA key for JWT signing
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return fmt.Errorf("failed to generate RSA key: %w", err)
 	}
+	log.Printf("✅ RSA key generated")
 
 	// Configure OAuth2 provider with minimal settings
+	log.Printf("🔍 Configuration details:")
+	log.Printf("🔍   Security.TokenExpirySeconds: %d", configuration.Security.TokenExpirySeconds)
+	log.Printf("🔍   Security.JWTSecret length: %d", len(configuration.Security.JWTSecret))
+	log.Printf("🔍   Server.BaseURL: %s", configuration.Server.BaseURL)
 	config := &fosite.Config{
 		AccessTokenLifespan:   time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
 		RefreshTokenLifespan:  time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
@@ -496,22 +511,27 @@ func initializeOAuth2Provider() error {
 			"urn:ietf:params:oauth:token-type:refresh_token",
 		},
 	}
+	log.Printf("✅ Fosite config created")
 
 	// Setup the RFC8693 handler...
 	AccessTokenStrategy = compose.NewOAuth2HMACStrategy(config)
 	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
+	log.Printf("✅ Token strategies created")
 
 	// Create custom storage that delegates client management to skip authentication
 	customStorage := &CustomStorage{
 		MemoryStore: memoryStore,
 	}
+	log.Printf("✅ Custom storage created")
 
 	// Create a simple OAuth2 provider without complex strategies
+	log.Printf("🔍 About to call compose.ComposeAllEnabled...")
 	oauth2Provider = compose.ComposeAllEnabled(
 		config,
 		customStorage, // Use custom storage instead of memoryStore
 		privateKey,
 	)
+	log.Printf("✅ OAuth2 provider created")
 
 	// Initialize RFC8693 handler but don't append it to all token requests
 	// The token exchange functionality should be handled by the default fosite provider
@@ -523,6 +543,7 @@ func initializeOAuth2Provider() error {
 		AccessTokenStorage:   memoryStore,
 		RefreshTokenStorage:  memoryStore,
 	}
+	log.Printf("✅ RFC8693 handler initialized")
 
 	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil
@@ -535,14 +556,14 @@ func initializeHandlers() {
 	handlers.SetVersionInfo(Version, GitCommit, BuildTime)
 
 	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
-	registrationHandler = handlers.NewRegistrationHandler(memoryStore, trustAnchorHandler)
+	registrationHandler = handlers.NewRegistrationHandler(memoryStore, trustAnchorHandler, attestationManager)
 	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)
 
 	// Initialize OAuth2 flow handlers
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, memoryStore, &UpstreamSessionMap)
 	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, memoryStore, &authCodeToStateMap)
-	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log)
+	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log, attestationManager, memoryStore)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)
 
@@ -665,9 +686,12 @@ func corsAndProxyMiddleware(handler http.Handler) http.Handler {
 // Middleware for proxy awareness
 func proxyAwareMiddleware(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Store original values
+		// Store original values (with defaults for logging)
 		originalHost := r.Host
 		originalScheme := r.URL.Scheme
+		if originalScheme == "" {
+			originalScheme = "http" // Default assumption
+		}
 
 		// Handle X-Forwarded-Proto (HTTP/HTTPS)
 		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
@@ -718,7 +742,9 @@ func proxyAwareMiddleware(handler http.Handler) http.Handler {
 
 		// Log proxy information for debugging
 		log.Printf("🔄 Proxy-aware request: %s %s (Original: %s://%s, Forwarded: %s://%s)",
-			r.Method, r.RequestURI, originalScheme, originalHost, r.URL.Scheme, r.Host)
+			r.Method, r.RequestURI,
+			originalScheme, originalHost,
+			r.URL.Scheme, r.Host)
 
 		handler.ServeHTTP(w, r)
 	})

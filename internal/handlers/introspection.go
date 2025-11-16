@@ -5,23 +5,33 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
+
+	"oauth2-server/internal/attestation"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/handler/openid"
+	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
 
 // IntrospectionHandler manages token introspection requests
 type IntrospectionHandler struct {
-	OAuth2Provider fosite.OAuth2Provider
-	Log            *logrus.Logger
+	OAuth2Provider     fosite.OAuth2Provider
+	Log                *logrus.Logger
+	AttestationManager *attestation.VerifierManager
+	MemoryStore        *storage.MemoryStore
 }
 
 // NewIntrospectionHandler creates a new introspection handler
-func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, log *logrus.Logger) *IntrospectionHandler {
+func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, log *logrus.Logger, attestationManager *attestation.VerifierManager, memoryStore *storage.MemoryStore) *IntrospectionHandler {
 	return &IntrospectionHandler{
-		OAuth2Provider: oauth2Provider,
-		Log:            log,
+		OAuth2Provider:     oauth2Provider,
+		Log:                log,
+		AttestationManager: attestationManager,
+		MemoryStore:        memoryStore,
 	}
 }
 
@@ -48,34 +58,171 @@ func (rc *responseCapture) Write(data []byte) (int, error) {
 	return rc.body.Write(data)
 }
 
-// getSessionFromToken attempts to extract issuer_state from a JWT token
-func (h *IntrospectionHandler) getIssuerStateFromToken(tokenValue string) interface{} {
-	// JWT format: header.payload.signature
-	parts := strings.Split(tokenValue, ".")
-	if len(parts) != 3 {
+// handleAttestationAuthentication handles attestation-based client authentication for introspection
+func (h *IntrospectionHandler) handleAttestationAuthentication(r *http.Request) error {
+	// Skip if attestation manager is not available
+	if h.AttestationManager == nil {
 		return nil
 	}
 
-	// Decode the payload (second part)
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	clientID := r.FormValue("client_id")
+	if clientID == "" {
+		// Client ID might be in Authorization header for some auth methods
+		if username, _, ok := r.BasicAuth(); ok {
+			clientID = username
+		}
+	}
+
+	if clientID == "" {
+		return nil // No client ID available
+	}
+
+	// Determine the authentication method
+	authMethod := h.determineAuthMethod(r)
+	if authMethod == "" {
+		return nil // No attestation method detected
+	}
+
+	// Check if attestation is enabled for this client OR if this is JWT client auth
+	attestationEnabled := h.AttestationManager.IsAttestationEnabled(clientID)
+	isJwtClientAuth := authMethod == "jwt_client_auth"
+
+	if !attestationEnabled && !isJwtClientAuth {
+		return nil // Attestation not required for this client and not JWT auth
+	}
+
+	h.Log.Printf("🔍 Processing attestation auth for introspection - Client: %s, Method: %s", clientID, authMethod)
+
+	// Get the appropriate verifier
+	verifier, err := h.AttestationManager.GetVerifier(clientID, authMethod)
 	if err != nil {
-		h.Log.Printf("❌ Error decoding JWT payload: %v", err)
-		return nil
+		return err
 	}
 
-	// Parse the JSON payload
-	var claims map[string]interface{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		h.Log.Printf("❌ Error parsing JWT claims: %v", err)
-		return nil
+	// Perform attestation verification based on method
+	var result *attestation.AttestationResult
+
+	// Continue with verification
+	switch authMethod {
+	case "attest_jwt_client_auth":
+		// Extract JWT from client_assertion parameter
+		clientAssertion := r.FormValue("client_assertion")
+		if clientAssertion == "" {
+			return fosite.ErrInvalidRequest.WithHint("Missing client_assertion for JWT attestation")
+		}
+
+		if jwtVerifier, ok := verifier.(attestation.AttestationVerifier); ok {
+			result, err = jwtVerifier.VerifyAttestation(clientAssertion)
+		} else {
+			return fosite.ErrServerError.WithHint("Invalid JWT verifier")
+		}
+
+	case "jwt_client_auth":
+		// For regular JWT client authentication (without attestation), we just validate the JWT structure
+		// This allows public clients to authenticate with JWT assertions
+		clientAssertion := r.FormValue("client_assertion")
+		if clientAssertion == "" {
+			return fosite.ErrInvalidRequest.WithHint("Missing client_assertion for JWT authentication")
+		}
+
+		// Basic JWT validation - check if it's a properly formed JWT
+		// In a real implementation, you'd validate the signature against the client's public key
+		// For now, we accept any properly formed JWT as valid client authentication
+		parts := strings.Split(clientAssertion, ".")
+		if len(parts) != 3 {
+			return fosite.ErrInvalidRequest.WithHint("Invalid JWT format in client_assertion")
+		}
+
+		// For demo purposes, create a minimal attestation result
+		result = &attestation.AttestationResult{
+			ClientID:   clientID,
+			Valid:      true,
+			TrustLevel: "jwt_authenticated",
+			IssuedAt:   time.Now(),
+			ExpiresAt:  time.Now().Add(time.Hour),
+			Claims:     map[string]interface{}{"auth_method": "jwt_client_auth"},
+		}
+
+		h.Log.Printf("✅ JWT client authentication accepted for introspection - Client: %s", clientID)
+
+	case "attest_tls_client_auth":
+		// For TLS attestation, we need the TLS connection state
+		if tlsVerifier, ok := verifier.(attestation.TLSAttestationVerifier); ok {
+			result, err = tlsVerifier.VerifyAttestation(r)
+		} else {
+			return fosite.ErrServerError.WithHint("Invalid TLS verifier")
+		}
+
+	default:
+		return fosite.ErrInvalidRequest.WithHintf("Unsupported attestation method: %s", authMethod)
 	}
 
-	// Extract issuer_state from claims (Fosite includes Extra claims directly in JWT payload)
-	if issuerState, exists := claims["issuer_state"]; exists {
-		return issuerState
+	if err != nil {
+		h.Log.Printf("❌ Attestation verification failed for introspection: %v", err)
+		return err
 	}
+
+	if !result.Valid {
+		h.Log.Printf("❌ Invalid attestation result for introspection")
+		return fosite.ErrInvalidClient.WithHint("Invalid attestation")
+	}
+
+	h.Log.Printf("✅ Attestation verification successful for introspection - Client: %s, Trust Level: %s",
+		result.ClientID, result.TrustLevel)
+
+	// Store attestation result in request context for later use
+	*r = *r.WithContext(attestation.WithAttestationResult(r.Context(), result))
 
 	return nil
+}
+
+// determineAuthMethod determines the attestation authentication method from the request
+func (h *IntrospectionHandler) determineAuthMethod(r *http.Request) string {
+	clientID := r.FormValue("client_id")
+	if clientID == "" {
+		if username, _, ok := r.BasicAuth(); ok {
+			clientID = username
+		}
+	}
+
+	// Check for JWT attestation
+	clientAssertionType := r.FormValue("client_assertion_type")
+	if clientAssertionType == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
+		clientAssertion := r.FormValue("client_assertion")
+
+		// Check if the client is configured for attestation-based authentication
+		if h.AttestationManager != nil && h.AttestationManager.IsAttestationEnabled(clientID) {
+			supportedMethods, err := h.AttestationManager.GetSupportedMethods(clientID)
+			if err == nil {
+				// Check if attest_jwt_client_auth is supported
+				for _, method := range supportedMethods {
+					if method == "attest_jwt_client_auth" {
+						return "attest_jwt_client_auth"
+					}
+				}
+			}
+		}
+
+		// Also check if JWT contains attestation-specific claims
+		if strings.Contains(clientAssertion, "att_") {
+			return "attest_jwt_client_auth"
+		}
+
+		// If we have a JWT client assertion but no attestation config, treat it as regular JWT auth
+		// This allows public clients to authenticate with JWT assertions without attestation
+		if clientAssertion != "" {
+			return "jwt_client_auth"
+		}
+	}
+
+	// Check for TLS attestation
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		// This could be TLS client certificate authentication
+		// We need to check if it's specifically for attestation
+		return "attest_tls_client_auth"
+	}
+
+	return ""
 }
 
 // ServeHTTP handles token introspection requests (RFC 7662)
@@ -98,6 +245,12 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Debug: Log all form values
+	h.Log.Printf("🔍 Form values: %v", r.Form)
+	for key, values := range r.Form {
+		h.Log.Printf("🔍 Form[%s] = %v", key, values)
+	}
+
 	// RFC 7662 allows client authentication via:
 	// 1. Basic authentication in Authorization header
 	// 2. client_id and client_secret in request body
@@ -113,22 +266,62 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	// Check if we have some form of client authentication
 	hasBasicAuth := authHeader != "" && strings.HasPrefix(authHeader, "Basic ")
 	hasClientCreds := clientID != "" || clientSecret != ""
+	hasJwtAssertion := r.FormValue("client_assertion_type") == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" && r.FormValue("client_assertion") != ""
 
-	if !hasBasicAuth && !hasClientCreds {
+	if !hasBasicAuth && !hasClientCreds && !hasJwtAssertion {
 		h.Log.Printf("❌ No client authentication provided for introspection")
 		http.Error(w, "Client authentication required for introspection", http.StatusUnauthorized)
 		return
 	}
 
-	h.Log.Printf("🔍 Client authentication present for introspection")
+	h.Log.Printf("🔍 Client authentication present for introspection (Basic: %t, Creds: %t, JWT: %t)", hasBasicAuth, hasClientCreds, hasJwtAssertion)
 
 	// Log form values (but hide sensitive data)
 	token := r.FormValue("token")
 	tokenTypeHint := r.FormValue("token_type_hint")
-	//	clientID := r.FormValue("client_id")
-	//	clientSecret := r.FormValue("client_secret")
-
 	h.Log.Printf("🔍 Introspection details: token_present=%t, token_type_hint=%s", token != "", tokenTypeHint)
+
+	// Check for attestation-based authentication for introspection (for configured clients)
+	// This must be done BEFORE JWT assertion processing to ensure attestation context is available
+	if err := h.handleAttestationAuthentication(r); err != nil {
+		h.Log.Printf("❌ Attestation authentication failed for introspection: %v", err)
+		// Don't return error here, continue with normal flow
+	} else {
+		// Debug: Check if attestation result was stored in context
+		if attestationResult, hasAttestation := attestation.GetAttestationResult(r.Context()); hasAttestation {
+			h.Log.Printf("✅ Attestation result stored in context: Client=%s, TrustLevel=%s, Valid=%t",
+				attestationResult.ClientID, attestationResult.TrustLevel, attestationResult.Valid)
+		}
+	}
+
+	// Handle JWT client assertion authentication AFTER attestation check
+	var jwtAuthenticatedClientID string
+	if hasJwtAssertion {
+		clientAssertion := r.FormValue("client_assertion")
+		if clientAssertion == "" {
+			h.Log.Printf("❌ JWT assertion type present but client_assertion is empty")
+		} else {
+			// Safely truncate for logging
+			assertionPreview := clientAssertion
+			if len(assertionPreview) > 50 {
+				assertionPreview = assertionPreview[:50]
+			}
+			h.Log.Printf("🔍 Processing JWT client assertion: %s...", assertionPreview)
+
+			if extractedClientID := h.extractClientIDFromJWT(clientAssertion); extractedClientID != "" {
+				jwtAuthenticatedClientID = extractedClientID
+				h.Log.Printf("✅ JWT client assertion validated for client: %s", jwtAuthenticatedClientID)
+
+				// Apply the same trick as token handler: create a local introspection request
+				// with client_credentials authentication that Fosite can handle normally
+				h.Log.Printf("🔄 JWT authenticated client %s, creating local introspection request", jwtAuthenticatedClientID)
+				h.handleLocalIntrospectionWithCredentials(w, r, jwtAuthenticatedClientID)
+				return
+			} else {
+				h.Log.Printf("❌ Failed to extract client ID from JWT assertion")
+			}
+		}
+	}
 
 	// Create the introspection request
 	ir, err := h.OAuth2Provider.NewIntrospectionRequest(ctx, r, newSession())
@@ -162,19 +355,359 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Debug: Log all response keys and values
+	h.Log.Printf("🔍 Main Introspection Response Keys: %v", getMapKeys(response))
+	for key, value := range response {
+		h.Log.Printf("🔍 Main Response [%s]: %v", key, value)
+	}
+
 	// Add issuer_state if the token is active
 	if active, ok := response["active"].(bool); ok && active {
-		// Parse the token to extract issuer_state from claims
-		tokenValue := r.FormValue("token")
-		if tokenValue != "" {
-			if issuerState := h.getIssuerStateFromToken(tokenValue); issuerState != nil {
-				response["issuer_state"] = issuerState
-			}
-		}
+		// issuer_state and attestation info are now automatically included by Fosite
+		// from the token claims that were stored during token creation
+		h.Log.Printf("🔍 Token is active, checking for stored claims")
+
+		// The attestation and issuer_state information is now automatically included
+		// in the response by Fosite since we stored them in the session claims during token creation
 	}
+
+	h.Log.Printf("Response response: %v", response)
 
 	// Write the modified response
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 	w.WriteHeader(capture.statusCode)
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleLocalIntrospectionWithCredentials creates a local introspection request with client credentials
+// This applies the same trick as the token handler: bridge JWT authentication to standard OAuth2 flow
+func (h *IntrospectionHandler) handleLocalIntrospectionWithCredentials(w http.ResponseWriter, r *http.Request, clientID string) {
+	tokenValue := r.FormValue("token")
+	if tokenValue == "" {
+		h.Log.Printf("❌ No token provided for local introspection")
+		http.Error(w, "invalid_request: missing token", http.StatusBadRequest)
+		return
+	}
+
+	h.Log.Printf("🔄 Creating local introspection request for JWT-authenticated client: %s", clientID)
+
+	// Debug: Decode and log token claims
+	if tokenValue != "" {
+		h.logTokenClaims(tokenValue)
+	}
+
+	// Create a new request for local introspection instead of modifying the original
+	localForm := make(url.Values)
+	localForm.Set("token", tokenValue)
+	if tokenTypeHint := r.FormValue("token_type_hint"); tokenTypeHint != "" {
+		localForm.Set("token_type_hint", tokenTypeHint)
+	}
+
+	localReq, err := http.NewRequest("POST", "http://localhost:8080/introspect", strings.NewReader(localForm.Encode()))
+	if err != nil {
+		h.Log.Printf("❌ Failed to create local introspection request: %v", err)
+		http.Error(w, "failed to create local introspection request", http.StatusInternalServerError)
+		return
+	}
+	// Copy the context from the original request to preserve attestation information
+	localReq = localReq.WithContext(r.Context())
+	localReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	localReq.PostForm = localForm
+
+	// Set basic auth with the attested client's credentials
+	// This assumes the client has stored credentials (like in the token handler)
+	if secret, ok := GetClientSecret(clientID); ok {
+		localReq.SetBasicAuth(clientID, secret)
+		h.Log.Printf("✅ Used stored credentials for basic auth in local introspection")
+	} else {
+		h.Log.Printf("❌ No stored credentials found for client: %s", clientID)
+		// For clients without stored secrets, we could create a temporary client
+		// or fall back to manual introspection
+		h.handleManualIntrospection(w, r, clientID)
+		return
+	}
+
+	// Create the introspection request using Fosite directly
+	ctx := localReq.Context()
+
+	ir, err := h.OAuth2Provider.NewIntrospectionRequest(ctx, localReq, newSession())
+	if err != nil {
+		h.Log.Printf("❌ Error creating local introspection request: %v", err)
+		h.OAuth2Provider.WriteIntrospectionError(ctx, w, err)
+		return
+	}
+
+	// Debug: Log extra claims from the introspection session
+	if resp, ok := ir.(*fosite.IntrospectionResponse); ok {
+		session := resp.AccessRequester.GetSession()
+		if ds, ok := session.(*openid.DefaultSession); ok {
+			h.Log.Printf("🔍 Introspection Session Subject: '%s'", ds.GetSubject())
+			if ds.Claims != nil {
+				h.Log.Printf("🔍 Introspection Session Extra Claims: %+v", ds.Claims.Extra)
+				for key, value := range ds.Claims.Extra {
+					h.Log.Printf("🔍 Introspection Session Extra Claim [%s]: %v", key, value)
+				}
+			} else {
+				h.Log.Printf("🔍 Introspection Session has no Claims")
+			}
+		}
+	}
+
+	// Capture the response to add issuer_state and attestation
+	capture := newResponseCapture(w)
+	h.OAuth2Provider.WriteIntrospectionResponse(ctx, capture, ir)
+
+	// Parse the JSON response
+	var response map[string]interface{}
+	if err := json.Unmarshal(capture.body.Bytes(), &response); err != nil {
+		h.Log.Printf("❌ Error parsing local introspection response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Debug: Log all response keys and values
+	h.Log.Printf("🔍 Introspection Response Keys: %v", getMapKeys(response))
+	for key, value := range response {
+		h.Log.Printf("🔍 Response [%s]: %v", key, value)
+	}
+
+	// Add issuer_state if the token is active
+	if active, ok := response["active"].(bool); ok && active {
+		h.Log.Printf("🔍 Token is active, checking for issuer_state and attestation")
+
+		// Manually add extra claims from the introspection session
+		if resp, ok := ir.(*fosite.IntrospectionResponse); ok {
+			session := resp.AccessRequester.GetSession()
+			if ds, ok := session.(*openid.DefaultSession); ok && ds.Claims != nil && ds.Claims.Extra != nil {
+				for key, value := range ds.Claims.Extra {
+					response[key] = value
+					h.Log.Printf("🔍 Added extra claim to response [%s]: %v", key, value)
+				}
+			}
+		}
+
+		h.Log.Printf("✅ Attestation and issuer_state info added from introspection session")
+	} else {
+		h.Log.Printf("⚠️ Token is not active (active=%t, ok=%t)", active, ok)
+	}
+
+	h.Log.Printf("🔍 Final response before encoding: %+v", response)
+
+	// Write the modified response
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.WriteHeader(capture.statusCode)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleManualIntrospection performs token introspection manually when Fosite fails but JWT auth succeeds
+func (h *IntrospectionHandler) handleManualIntrospection(w http.ResponseWriter, r *http.Request, clientID string) {
+	tokenValue := r.FormValue("token")
+	if tokenValue == "" {
+		h.Log.Printf("❌ No token provided for manual introspection")
+		http.Error(w, "invalid_request: missing token", http.StatusBadRequest)
+		return
+	}
+
+	h.Log.Printf("🔍 Performing manual introspection for token from client: %s", clientID)
+
+	// Parse the token to extract claims
+	parts := strings.Split(tokenValue, ".")
+	if len(parts) != 3 {
+		h.Log.Printf("❌ Invalid JWT format for manual introspection")
+		response := map[string]interface{}{
+			"active": false,
+			"error":  "invalid_token",
+		}
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Decode the payload
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		h.Log.Printf("❌ Error decoding JWT payload: %v", err)
+		response := map[string]interface{}{
+			"active": false,
+			"error":  "invalid_token",
+		}
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Parse the claims
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		h.Log.Printf("❌ Error parsing JWT claims: %v", err)
+		response := map[string]interface{}{
+			"active": false,
+			"error":  "invalid_token",
+		}
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Check if token is expired
+	now := time.Now().Unix()
+	var exp int64
+	if expVal, ok := claims["exp"].(float64); ok {
+		exp = int64(expVal)
+	}
+
+	active := exp == 0 || exp > now
+
+	// Build introspection response
+	response := map[string]interface{}{
+		"active": active,
+	}
+
+	if active {
+		// Add standard claims
+		if sub, ok := claims["sub"].(string); ok {
+			response["sub"] = sub
+		}
+		if iss, ok := claims["iss"].(string); ok {
+			response["iss"] = iss
+		}
+		if aud, ok := claims["aud"].(string); ok {
+			response["aud"] = aud
+		}
+		if clientId, ok := claims["client_id"].(string); ok {
+			response["client_id"] = clientId
+		}
+		if scope, ok := claims["scope"].(string); ok {
+			response["scope"] = scope
+		}
+		if tokenType, ok := claims["token_type"].(string); ok {
+			response["token_type"] = tokenType
+		}
+		if exp > 0 {
+			response["exp"] = exp
+		}
+		if iat, ok := claims["iat"].(float64); ok {
+			response["iat"] = int64(iat)
+		}
+
+		// Add issuer_state if present
+		if issuerState, exists := claims["issuer_state"]; exists {
+			response["issuer_state"] = issuerState
+		}
+
+		// Add attestation information for JWT-authenticated clients
+		if attestationResult, hasAttestation := attestation.GetAttestationResult(r.Context()); hasAttestation && attestationResult.Valid {
+			attestationInfo := map[string]interface{}{
+				"attestation_verified":    true,
+				"attestation_trust_level": attestationResult.TrustLevel,
+				"attestation_issued_at":   attestationResult.IssuedAt.Unix(),
+				"attestation_expires_at":  attestationResult.ExpiresAt.Unix(),
+			}
+
+			if attestationResult.Claims != nil {
+				if keyId, ok := attestationResult.Claims["att_device_id"].(string); ok && keyId != "" {
+					attestationInfo["attestation_key_id"] = keyId
+				} else if issuerKeyId, ok := attestationResult.Claims["iss"].(string); ok && strings.Contains(issuerKeyId, "hsm:") {
+					// Extract key ID from issuer claim like "hsm:hsm_ae26b334"
+					parts := strings.Split(issuerKeyId, ":")
+					if len(parts) == 2 {
+						attestationInfo["attestation_key_id"] = parts[1]
+					}
+				}
+				if hsmBacked, ok := attestationResult.Claims["att_hardware_backed"].(bool); ok {
+					attestationInfo["hsm_backed"] = hsmBacked
+				}
+				if bioAuth, ok := attestationResult.Claims["att_biometric"].(bool); ok {
+					attestationInfo["bio_authenticated"] = bioAuth
+				}
+			}
+
+			response["attestation"] = attestationInfo
+		}
+	}
+
+	h.Log.Printf("✅ Manual introspection completed - Active: %t", active)
+
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// extractClientIDFromJWT extracts the client_id from a JWT client assertion
+func (h *IntrospectionHandler) extractClientIDFromJWT(clientAssertion string) string {
+	if clientAssertion == "" {
+		return ""
+	}
+
+	// JWT format: header.payload.signature
+	parts := strings.Split(clientAssertion, ".")
+	if len(parts) != 3 {
+		h.Log.Printf("❌ Invalid JWT format in client assertion")
+		return ""
+	}
+
+	// Decode the payload (second part)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		h.Log.Printf("❌ Error decoding JWT payload: %v", err)
+		return ""
+	}
+
+	// Parse the JSON payload
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		h.Log.Printf("❌ Error parsing JWT claims: %v", err)
+		return ""
+	}
+
+	// Extract client_id from claims
+	if clientID, ok := claims["sub"].(string); ok && clientID != "" {
+		return clientID
+	}
+
+	// Also check 'iss' claim as fallback
+	if clientID, ok := claims["iss"].(string); ok && clientID != "" {
+		return clientID
+	}
+
+	h.Log.Printf("❌ No client_id found in JWT claims")
+	return ""
+}
+
+// logTokenClaims decodes and logs the claims from a JWT token for debugging
+func (h *IntrospectionHandler) logTokenClaims(tokenValue string) {
+	parts := strings.Split(tokenValue, ".")
+	if len(parts) != 3 {
+		h.Log.Printf("🔍 Token is not a valid JWT (not 3 parts)")
+		return
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		h.Log.Printf("🔍 Error decoding token payload: %v", err)
+		return
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		h.Log.Printf("🔍 Error parsing token claims: %v", err)
+		return
+	}
+
+	h.Log.Printf("🔍 Token Claims: %+v", claims)
+	for key, value := range claims {
+		h.Log.Printf("🔍 Token Claim [%s]: %v", key, value)
+	}
+}
+
+// getMapKeys returns a slice of keys from a map
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

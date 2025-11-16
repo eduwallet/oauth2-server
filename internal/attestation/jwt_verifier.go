@@ -222,11 +222,43 @@ func (v *JWTVerifier) VerifyAttestation(token string) (*AttestationResult, error
 
 	// Extract attestation-specific claims
 	attClaims := make(map[string]interface{})
+
+	// Extract known attestation claims from the payload
+	if hwBacked, ok := claims["hwbacked"].(bool); ok {
+		attClaims["att_hardware_backed"] = hwBacked
+	}
+	if bioAuth, ok := claims["bio_auth"].(bool); ok {
+		attClaims["att_biometric"] = bioAuth
+	}
+	if secLevel, ok := claims["sec_level"].(string); ok {
+		attClaims["att_security_level"] = secLevel
+	}
+	if tamperDetected, ok := claims["tamper_detected"].(bool); ok {
+		attClaims["att_tamper_detected"] = tamperDetected
+	}
+	if bootState, ok := claims["boot_state"].(string); ok {
+		attClaims["att_boot_state"] = bootState
+	}
+	if deviceId, ok := claims["device_id"].(string); ok {
+		attClaims["att_device_id"] = deviceId
+	}
+	if firmwareVersion, ok := claims["firmware_version"].(string); ok {
+		attClaims["att_firmware_version"] = firmwareVersion
+	}
+	if hardwareVersion, ok := claims["hardware_version"].(string); ok {
+		attClaims["att_hardware_version"] = hardwareVersion
+	}
+	if bioType, ok := claims["bio_type"].(string); ok {
+		attClaims["att_bio_type"] = bioType
+	}
+
+	// Also extract any claims that start with "att_" for backward compatibility
 	for key, value := range claims {
 		if strings.HasPrefix(key, "att_") {
 			attClaims[key] = value
 		}
 	}
+
 	fmt.Printf("[DEBUG] Attestation claims extracted: %+v\n", attClaims)
 
 	result := &AttestationResult{
@@ -238,7 +270,19 @@ func (v *JWTVerifier) VerifyAttestation(token string) (*AttestationResult, error
 		IssuedAt:   time.Now(),                // Could extract from iat claim
 		ExpiresAt:  time.Now().Add(time.Hour), // Could extract from exp claim
 		Claims:     attClaims,
-		TrustLevel: "high", // Could be determined based on issuer/certificate chain
+		TrustLevel: "high", // Default to high, but could be determined based on sec_level claim
+	}
+
+	// Determine trust level based on sec_level claim
+	if secLevel, ok := attClaims["att_security_level"].(string); ok {
+		switch secLevel {
+		case "hardware":
+			result.TrustLevel = "high"
+		case "software":
+			result.TrustLevel = "medium"
+		default:
+			result.TrustLevel = "low"
+		}
 	}
 
 	// Add confirmation if present
@@ -383,7 +427,6 @@ type AttestationClaims struct {
 	AttestationLevel   string                 `json:"att_level,omitempty"`
 	AttestationDetails map[string]interface{} `json:"att_details,omitempty"`
 	HardwareBacked     bool                   `json:"att_hardware_backed,omitempty"`
-	SecureElement      bool                   `json:"att_secure_element,omitempty"`
 	BiometricAuth      bool                   `json:"att_biometric,omitempty"`
 	DeviceIntegrity    string                 `json:"att_device_integrity,omitempty"`
 	AppIntegrity       string                 `json:"att_app_integrity,omitempty"`

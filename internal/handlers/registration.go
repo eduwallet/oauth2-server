@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"oauth2-server/internal/attestation"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"os"
@@ -22,17 +23,23 @@ import (
 type RegistrationHandler struct {
 	memoryStore        *storage.MemoryStore
 	trustAnchorHandler *TrustAnchorHandler
+	attestationManager *attestation.VerifierManager
 }
 
 // Global map to store original client secrets for dynamic clients
 // Key: clientID, Value: original unhashed secret
 var clientSecrets = make(map[string]string)
 
+// Global map to store attestation configs for dynamic clients
+// Key: clientID, Value: attestation config
+var clientAttestationConfigs = make(map[string]*config.ClientAttestationConfig)
+
 // NewRegistrationHandler creates a new registration handler
-func NewRegistrationHandler(memoryStore *storage.MemoryStore, trustAnchorHandler *TrustAnchorHandler) *RegistrationHandler {
+func NewRegistrationHandler(memoryStore *storage.MemoryStore, trustAnchorHandler *TrustAnchorHandler, attestationManager *attestation.VerifierManager) *RegistrationHandler {
 	return &RegistrationHandler{
 		memoryStore:        memoryStore,
 		trustAnchorHandler: trustAnchorHandler,
+		attestationManager: attestationManager,
 	}
 }
 
@@ -324,10 +331,23 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	h.memoryStore.Clients[clientID] = newClient
 	log.Printf("✅ [REGISTRATION] Client stored successfully")
 
+	// Register attestation config with the attestation manager if provided
+	if finalAttestationConfig != nil {
+		log.Printf("🔍 [REGISTRATION] Registering attestation config with attestation manager")
+		h.attestationManager.AddClientConfig(clientID, finalAttestationConfig)
+		log.Printf("✅ [REGISTRATION] Attestation config registered with attestation manager")
+	}
+
 	// Store the original secret for dynamic clients (only for new clients, not updates)
 	if !isUpdate && clientSecret != "" {
 		clientSecrets[clientID] = clientSecret
 		log.Printf("✅ [REGISTRATION] Original client secret stored for client: %s", clientID)
+	}
+
+	// Store the attestation config for dynamic clients
+	if finalAttestationConfig != nil {
+		clientAttestationConfigs[clientID] = finalAttestationConfig
+		log.Printf("✅ [REGISTRATION] Attestation config stored for client: %s", clientID)
 	}
 
 	// Prepare the response
@@ -415,13 +435,12 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// resolveTrustAnchors resolves trust anchor names to file paths
+// resolveTrustAnchors validates that trust anchor names can be resolved to existing files
 func (h *RegistrationHandler) resolveTrustAnchors(attestationConfig *config.ClientAttestationConfig) error {
 	if h.trustAnchorHandler == nil {
 		return fmt.Errorf("trust anchor handler not available")
 	}
 
-	resolvedAnchors := make([]string, 0, len(attestationConfig.TrustAnchors))
 	for _, name := range attestationConfig.TrustAnchors {
 		path := h.trustAnchorHandler.ResolvePath(name)
 		if path == "" {
@@ -432,11 +451,9 @@ func (h *RegistrationHandler) resolveTrustAnchors(attestationConfig *config.Clie
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return fmt.Errorf("trust anchor file not found: %s", name)
 		}
-
-		resolvedAnchors = append(resolvedAnchors, path)
 	}
 
-	attestationConfig.TrustAnchors = resolvedAnchors
+	// Trust anchors remain as names, not paths
 	return nil
 }
 
@@ -444,4 +461,10 @@ func (h *RegistrationHandler) resolveTrustAnchors(attestationConfig *config.Clie
 func GetClientSecret(clientID string) (string, bool) {
 	secret, exists := clientSecrets[clientID]
 	return secret, exists
+}
+
+// GetClientAttestationConfig retrieves the attestation config for a given client ID
+func GetClientAttestationConfig(clientID string) (*config.ClientAttestationConfig, bool) {
+	config, exists := clientAttestationConfigs[clientID]
+	return config, exists
 }
