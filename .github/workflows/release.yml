@@ -125,15 +125,24 @@ jobs:
             BUILD_TIME=${{ github.run_id }}
 
       - name: Create GitHub Release
-        uses: actions/create-release@v1
+        run: |
+          # Create release using GitHub CLI
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # For manual dispatch, create draft release
+            gh release create ${{ steps.changelog.outputs.current_tag }} \
+              --title "Release ${{ steps.changelog.outputs.current_tag }}" \
+              --notes "${{ steps.changelog.outputs.CHANGELOG }}" \
+              --draft \
+              --prerelease=${{ contains(steps.changelog.outputs.current_tag, '-') }}
+          else
+            # For tag push, create regular release
+            gh release create ${{ steps.changelog.outputs.current_tag }} \
+              --title "Release ${{ steps.changelog.outputs.current_tag }}" \
+              --notes "${{ steps.changelog.outputs.CHANGELOG }}" \
+              --prerelease=${{ contains(steps.changelog.outputs.current_tag, '-') }}
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.changelog.outputs.current_tag }}
-          release_name: Release ${{ steps.changelog.outputs.current_tag }}
-          body: ${{ steps.changelog.outputs.CHANGELOG }}
-          draft: false
-          prerelease: ${{ contains(steps.changelog.outputs.current_tag, '-') }}
 
       - name: Upload release assets
         run: |

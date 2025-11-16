@@ -185,6 +185,11 @@ func HashSecret(secret string) ([]byte, error) {
 	return hashed, nil
 }
 
+// ValidateSecret validates a secret against its bcrypt hash
+func ValidateSecret(secret string, hashedSecret []byte) bool {
+	return bcrypt.CompareHashAndPassword(hashedSecret, []byte(secret)) == nil
+}
+
 // ValidateRegistrationAccessToken checks if the registration access token is valid
 func ValidateRegistrationAccessToken(token string) bool {
 	// Simplified validation - in a real implementation, you'd validate JWT

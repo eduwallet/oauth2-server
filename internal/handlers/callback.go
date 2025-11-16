@@ -54,6 +54,7 @@ func (h *CallbackHandler) handleProxyCallback(w http.ResponseWriter, r *http.Req
 
 	sess, ok := (*h.UpstreamSessionMap)[proxyState]
 	if !ok {
+		h.Log.Printf("❌ [PROXY] Unknown state: %s - not found in session map", proxyState)
 		http.Error(w, "unknown state", http.StatusBadRequest)
 		return
 	}

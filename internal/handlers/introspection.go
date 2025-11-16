@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -20,6 +23,59 @@ func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, log *logrus.L
 		OAuth2Provider: oauth2Provider,
 		Log:            log,
 	}
+}
+
+// responseCapture captures the response from Fosite to allow modification
+type responseCapture struct {
+	http.ResponseWriter
+	statusCode int
+	body       *bytes.Buffer
+}
+
+func newResponseCapture(w http.ResponseWriter) *responseCapture {
+	return &responseCapture{
+		ResponseWriter: w,
+		statusCode:     200,
+		body:           &bytes.Buffer{},
+	}
+}
+
+func (rc *responseCapture) WriteHeader(code int) {
+	rc.statusCode = code
+}
+
+func (rc *responseCapture) Write(data []byte) (int, error) {
+	return rc.body.Write(data)
+}
+
+// getSessionFromToken attempts to extract issuer_state from a JWT token
+func (h *IntrospectionHandler) getIssuerStateFromToken(tokenValue string) interface{} {
+	// JWT format: header.payload.signature
+	parts := strings.Split(tokenValue, ".")
+	if len(parts) != 3 {
+		return nil
+	}
+
+	// Decode the payload (second part)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		h.Log.Printf("❌ Error decoding JWT payload: %v", err)
+		return nil
+	}
+
+	// Parse the JSON payload
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		h.Log.Printf("❌ Error parsing JWT claims: %v", err)
+		return nil
+	}
+
+	// Extract issuer_state from claims (Fosite includes Extra claims directly in JWT payload)
+	if issuerState, exists := claims["issuer_state"]; exists {
+		return issuerState
+	}
+
+	return nil
 }
 
 // ServeHTTP handles token introspection requests (RFC 7662)
@@ -94,6 +150,31 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Write the successful introspection response
-	h.OAuth2Provider.WriteIntrospectionResponse(ctx, w, ir)
+	// Capture the response to add issuer_state
+	capture := newResponseCapture(w)
+	h.OAuth2Provider.WriteIntrospectionResponse(ctx, capture, ir)
+
+	// Parse the JSON response
+	var response map[string]interface{}
+	if err := json.Unmarshal(capture.body.Bytes(), &response); err != nil {
+		h.Log.Printf("❌ Error parsing introspection response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Add issuer_state if the token is active
+	if active, ok := response["active"].(bool); ok && active {
+		// Parse the token to extract issuer_state from claims
+		tokenValue := r.FormValue("token")
+		if tokenValue != "" {
+			if issuerState := h.getIssuerStateFromToken(tokenValue); issuerState != nil {
+				response["issuer_state"] = issuerState
+			}
+		}
+	}
+
+	// Write the modified response
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.WriteHeader(capture.statusCode)
+	json.NewEncoder(w).Encode(response)
 }

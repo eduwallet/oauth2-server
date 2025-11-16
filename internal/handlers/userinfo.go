@@ -136,8 +136,8 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if session != nil {
 			if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Headers != nil && defaultSession.Headers.Extra != nil {
 				if issuerState, ok := defaultSession.Headers.Extra["issuer_state"].(string); ok && issuerState != "" {
-					userInfo["issuer_state"] = issuerState
-					log.Printf("✅ UserInfo: Added issuer state to response: %s", issuerState)
+					// issuer_state moved to introspection endpoint - no longer included in userinfo
+					log.Printf("ℹ️ UserInfo: issuer_state available but moved to introspection endpoint: %s", issuerState)
 				}
 			}
 		}
@@ -290,8 +290,8 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 
 	// Add the issuer_state if available from the proxy token mapping
 	if issuerState != "" {
-		userinfo["issuer_state"] = issuerState
-		log.Printf("✅ [PROXY] Added issuer state to userinfo response: %s", issuerState)
+		// issuer_state moved to introspection endpoint - no longer included in userinfo
+		log.Printf("ℹ️ [PROXY] issuer_state available but moved to introspection endpoint: %s", issuerState)
 	}
 
 	log.Printf("✅ [PROXY] Added proxy claims to userinfo response")

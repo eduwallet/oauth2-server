@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"oauth2-server/internal/attestation"
 	"oauth2-server/internal/metrics"
+	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"strings"
 	"time"
@@ -63,22 +64,30 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check if proxy mode is enabled
-	if h.Configuration.IsProxyMode() {
-		h.handleProxyToken(w, r)
-		return
-	}
-
 	if err := r.ParseForm(); err != nil {
 		h.Log.Printf("❌ Failed to parse form: %v", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
+	// If client_id is not in form but we have basic auth, extract it from basic auth
+	if r.FormValue("client_id") == "" {
+		if username, _, ok := r.BasicAuth(); ok {
+			r.Form.Set("client_id", username)
+		}
+	}
+
+	grantType := r.FormValue("grant_type")
+
+	// Check if proxy mode is enabled and if we should proxy this request
+	if h.Configuration.IsProxyMode() && grantType == "authorization_code" {
+		h.handleProxyToken(w, r)
+		return
+	}
+
 	ctx := r.Context()
 
 	// Debug logging
-	grantType := r.FormValue("grant_type")
 	clientID := r.FormValue("client_id")
 	h.Log.Printf("🔍 Token request - Grant Type: %s, Client ID: %s", grantType, clientID)
 
@@ -92,25 +101,31 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Check for traditional client ID/secret authentication if attestation was not used
+	// Skip authentication for proxy requests that are already authenticated
+	if r.FormValue("client_assertion") == "" && r.FormValue("proxy_authenticated") == "" {
+		if err := h.handleTraditionalAuthentication(r); err != nil {
+			h.Log.Printf("❌ Traditional authentication failed: %v", err)
+			if h.Metrics != nil {
+				h.Metrics.RecordTokenRequest(grantType, clientID, "auth_error")
+			}
+			http.Error(w, "Client authentication failed", http.StatusUnauthorized)
+			return
+		}
+	} else if r.FormValue("proxy_authenticated") == "true" {
+		h.Log.Printf("✅ Proxy request authentication bypassed for client: %s", clientID)
+	}
+
 	// If attestation was used, remove the client_assertion parameters
-	// The client is configured as public, so fosite won't require additional auth
+	// Fosite will skip client authentication since all clients appear public
 	if r.FormValue("client_assertion") != "" {
-		h.Log.Printf("✅ Attestation verified for public client: %s", clientID)
+		h.Log.Printf("✅ Attestation verified for client: %s", clientID)
 		if err := r.ParseForm(); err == nil {
-			// Now remove the attestation parameters
-			// and add client basic auth if needed
+			// Remove attestation parameters since authentication is complete
 			r.Form.Del("client_assertion")
 			r.Form.Del("client_assertion_type")
 			r.PostForm.Del("client_assertion")
 			r.PostForm.Del("client_assertion_type")
-
-			// Add basic authentication for confidential clients
-			if clientConfig, ok := h.Configuration.GetClientByID(clientID); ok && !clientConfig.Public {
-				h.Log.Printf("🔐 [LOCAL] Adding basic auth for confidential client: %s", clientID)
-				r.SetBasicAuth(clientID, clientConfig.Secret)
-			} else {
-				h.Log.Printf("ℹ️ [LOCAL] Client %s is public, skipping basic auth for proxy token", clientID)
-			}
 		}
 	}
 
@@ -318,6 +333,71 @@ func (h *TokenHandler) determineAuthMethod(r *http.Request) string {
 	return ""
 }
 
+// handleTraditionalAuthentication handles traditional client ID/secret authentication
+func (h *TokenHandler) handleTraditionalAuthentication(r *http.Request) error {
+	clientID := r.FormValue("client_id")
+
+	// If client_id is not in form, check basic auth username
+	if clientID == "" {
+		if username, _, ok := r.BasicAuth(); ok {
+			clientID = username
+		}
+	}
+
+	if clientID == "" {
+		return fosite.ErrInvalidRequest.WithHint("Missing client_id")
+	}
+
+	// Check if client exists in memory store
+	client, exists := h.MemoryStore.Clients[clientID]
+	if !exists {
+		h.Log.Printf("❌ Unknown client: %s", clientID)
+		return fosite.ErrInvalidClient.WithHint("Unknown client")
+	}
+
+	// Check if client is configured as public (no authentication required)
+	if client.IsPublic() {
+		h.Log.Printf("✅ Client %s is public, skipping authentication", clientID)
+		return nil
+	}
+
+	// For confidential clients, check authentication methods
+	clientSecret := r.FormValue("client_secret")
+
+	// Check HTTP Basic Authentication
+	if username, password, ok := r.BasicAuth(); ok {
+		if username == clientID {
+			// Compare hashed password with stored hash
+			if utils.ValidateSecret(password, client.GetHashedSecret()) {
+				h.Log.Printf("✅ Basic auth successful for client: %s", clientID)
+				return nil
+			} else {
+				h.Log.Printf("❌ Basic auth failed for client: %s", clientID)
+				return fosite.ErrInvalidClient.WithHint("Invalid client credentials")
+			}
+		} else {
+			h.Log.Printf("❌ Basic auth username mismatch for client: %s", clientID)
+			return fosite.ErrInvalidClient.WithHint("Invalid client credentials")
+		}
+	}
+
+	// Check form-encoded client_secret
+	if clientSecret != "" {
+		// Compare hashed client_secret with stored hash
+		if utils.ValidateSecret(clientSecret, client.GetHashedSecret()) {
+			h.Log.Printf("✅ Form auth successful for client: %s", clientID)
+			return nil
+		} else {
+			h.Log.Printf("❌ Form auth failed for client: %s", clientID)
+			return fosite.ErrInvalidClient.WithHint("Invalid client credentials")
+		}
+	}
+
+	// No authentication provided
+	h.Log.Printf("❌ No authentication provided for confidential client: %s", clientID)
+	return fosite.ErrInvalidClient.WithHint("Missing client authentication")
+}
+
 // handleProxyToken forwards token requests to the upstream token endpoint,
 // substituting client credentials to the upstream client and returning the
 // upstream response back to the downstream client.
@@ -522,15 +602,18 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 					delete(*h.AuthCodeToStateMap, authCode)
 				}
 			}
-
-			proxySession.Claims.Extra["hsm_backed"] = true
-
 			// Create a new request for local token creation instead of modifying the original
 			localTokenForm := url.Values{}
 			localTokenForm.Set("grant_type", "client_credentials")
 			localTokenForm.Set("client_id", clientID)
-			localTokenForm.Set("redirect_uri", "http://localhost:8080/callback") // No secret for local token
-			localTokenForm.Set("scope", "openid profile email")                  // Default scopes for proxy tokens
+			// Note: redirect_uri not needed for client_credentials flow
+
+			// Use openid scope for proxy tokens (required for OIDC)
+			localTokenForm.Set("scope", "openid")
+			h.Log.Printf("🔄 [PROXY] Using openid scope for proxy token")
+
+			// Add internal flag to bypass authentication for proxy requests
+			localTokenForm.Set("proxy_authenticated", "true")
 
 			localTokenReq, err := http.NewRequest("POST", "http://localhost:8080/token", strings.NewReader(localTokenForm.Encode()))
 			if err != nil {
@@ -541,29 +624,9 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 			localTokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			localTokenReq.PostForm = localTokenForm
 
-			if memoryClient, ok := h.MemoryStore.Clients[clientID]; ok {
-				if defaultClient, ok := memoryClient.(*fosite.DefaultClient); ok {
-					if !defaultClient.Public {
-						h.Log.Printf("🔐 [PROXY] Adding basic auth for confidential client: %s", clientID)
-						// Try to get the original secret from our client secrets store
-						if originalSecret, exists := GetClientSecret(clientID); exists {
-							localTokenReq.SetBasicAuth(clientID, originalSecret)
-							h.Log.Printf("✅ [PROXY] Used stored original secret for basic auth")
-						} else {
-							h.Log.Printf("❌ [PROXY] Original secret not found for dynamic client: %s", clientID)
-							http.Error(w, "client secret not available for authentication", http.StatusInternalServerError)
-							return
-						}
-					}
-				} else {
-					h.Log.Printf("❌ [PROXY] Client %s found in memory store but not a DefaultClient", clientID)
-					http.Error(w, "invalid client configuration", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				h.Log.Printf("❌ [PROXY] Client configuration not found for client_id: %s", clientID)
-				http.Error(w, "client configuration not found", http.StatusBadRequest)
-				return
+			if secret, ok := GetClientSecret(clientID); ok {
+				localTokenReq.SetBasicAuth(clientID, secret)
+				h.Log.Printf("✅ [PROXY] Used stored original secret for basic auth")
 			}
 
 			// Debug: Dump the full request as curl command

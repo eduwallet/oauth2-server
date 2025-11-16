@@ -207,7 +207,7 @@
                     <li>Authorization code exchange</li>
                     <li>User claims display with issuer_state</li>
                 </ul>
-                <strong>Note:</strong> The demo includes an <code>issuer_state</code> parameter that will be returned in the UserInfo response.
+                <strong>Note:</strong> The demo includes an <code>issuer_state</code> parameter that will be returned in the Token Introspection response.
             </div>
         </div>
 
@@ -422,9 +422,10 @@ curl -X POST "${config.baseUrl}/oauth/token" \\
   -H "Authorization: Basic $(echo -n '${config.clientId}:web-app-secret' | base64)" \\
   -d "grant_type=authorization_code&code=YOUR_AUTH_CODE&redirect_uri=${config.redirectUri}&code_verifier=${codeVerifier}"
 
-# 4. Test UserInfo endpoint with access token (should include issuer_state claim):
-curl -X GET "${config.baseUrl}/userinfo" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+# 4. Test Token Introspection endpoint with access token (should include issuer_state claim):
+curl -X POST "${config.baseUrl}/oauth/introspect" \\
+  -H "Authorization: Basic $(echo -n '${config.clientId}:web-app-secret' | base64)" \\
+  -d "token=YOUR_ACCESS_TOKEN&token_type_hint=access_token"
                 `.trim();
                 
                 commandsDiv.textContent = commands;

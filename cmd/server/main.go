@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -426,6 +427,48 @@ func initializeUsers() error {
 	return nil
 }
 
+// CustomStorage wraps MemoryStore but provides custom client management
+type CustomStorage struct {
+	*storage.MemoryStore
+}
+
+// GetClient returns a client but makes it appear public to skip Fosite's authentication
+func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client, error) {
+	client, exists := s.MemoryStore.Clients[id]
+	if !exists {
+		return nil, fosite.ErrInvalidClient
+	}
+
+	// Return a wrapper that makes the client appear public
+	return &PublicClientWrapper{Client: client}, nil
+}
+
+// ClientAssertionJWTValid delegates to the underlying memory store
+func (s *CustomStorage) ClientAssertionJWTValid(ctx context.Context, jti string) error {
+	return s.MemoryStore.ClientAssertionJWTValid(ctx, jti)
+}
+
+// SetClientAssertionJWT delegates to the underlying memory store
+func (s *CustomStorage) SetClientAssertionJWT(ctx context.Context, jti string, exp time.Time) error {
+	return s.MemoryStore.SetClientAssertionJWT(ctx, jti, exp)
+}
+
+// PublicClientWrapper makes any client appear public to Fosite
+type PublicClientWrapper struct {
+	fosite.Client
+}
+
+func (w *PublicClientWrapper) IsPublic() bool {
+	// Check if client supports client_credentials grant
+	grantTypes := w.Client.GetGrantTypes()
+	for _, grantType := range grantTypes {
+		if grantType == "client_credentials" {
+			return false // Not public if it supports client_credentials
+		}
+	}
+	return true // Public for other grants
+}
+
 func initializeOAuth2Provider() error {
 	// Generate RSA key for JWT signing
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -458,10 +501,15 @@ func initializeOAuth2Provider() error {
 	AccessTokenStrategy = compose.NewOAuth2HMACStrategy(config)
 	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
 
+	// Create custom storage that delegates client management to skip authentication
+	customStorage := &CustomStorage{
+		MemoryStore: memoryStore,
+	}
+
 	// Create a simple OAuth2 provider without complex strategies
 	oauth2Provider = compose.ComposeAllEnabled(
 		config,
-		memoryStore,
+		customStorage, // Use custom storage instead of memoryStore
 		privateKey,
 	)
 
