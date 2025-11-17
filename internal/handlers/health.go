@@ -31,7 +31,9 @@ func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"status":    "healthy",
 		"timestamp": time.Now().Unix(),
-		"version":   "1.0.0",
+		"version":   Version,
+		"git_commit": GitCommit,
+		"build_time": BuildTime,
 		"base_url":  h.Configuration.Server.BaseURL,
 		"clients":   len(h.MemoryStore.Clients),
 		"storage":   "fosite-memory", // Indicate we're using fosite's storage

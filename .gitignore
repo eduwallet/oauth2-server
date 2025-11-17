@@ -17,7 +17,6 @@ rfc8693/
 server-test.log
 server.pid
 .DS_Store
-examples/
 notebook/
 oauth2-server.log
 test_introspection_jwt.sh

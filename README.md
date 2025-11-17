@@ -111,7 +111,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **OpenID 4 Verifiable Credentials**: Full `issuer_state` parameter support for verifiable credential issuance flows
 - **Security**: JWT-based tokens, PKCE, HTTPS, proxy-aware, rate limiting, CORS
 - **Management**: Dynamic client registration via API (with audience support and attestation configuration)
-- **Token Introspection**: `/introspect` endpoint returns all standard fields, including `aud` as a JSON array
+- **Token Introspection**: `/introspect` endpoint returns all standard fields, including `aud` as a JSON array and attestation metadata for attested clients
 - **Token Statistics**: `/token/stats` endpoint provides statistics about issued, active, revoked, and expired tokens
 
 ## Setup Instructions
@@ -591,7 +591,7 @@ oauth2_attestation_verification_duration_seconds{method="jwt"}
 | `/device` | GET | Device verification UI | RFC 8628 |
 | `/device/verify` | POST | Device code verification | RFC 8628 |
 | `/device/consent` | POST | Device consent | RFC 8628 |
-| `/introspect` | POST | Token introspection (returns `aud` as array) | RFC 7662 |
+| `/introspect` | POST | Token introspection (returns `aud` as array, includes attestation metadata) | RFC 7662 |
 | `/revoke` | POST | Token revocation | RFC 6749 |
 | `/userinfo` | GET | UserInfo endpoint (requires Authorization header) | OIDC Core |
 | `/register` | POST | Dynamic client registration (with audience and attestation support) |
@@ -747,23 +747,54 @@ curl -X POST http://localhost:8080/token \
 
 ### Introspect a Token
 
+Token introspection requires HTTP Basic authentication with client credentials:
+
 ```bash
 curl -X POST http://localhost:8080/introspect \
+  -u "backend-client:backend-client-secret" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
   -d "token=<access_or_refresh_token>"
 ```
 
-**Response:**
+**Response for regular tokens:**
 ```json
 {
   "active": true,
-  "client_id": "client_xyz",
-  "scope": "openid offline_access",
-  "token_type": "access_token",
-  "exp": 1753869233,
-  "iat": 1753865633,
-  "aud": ["client_abc", "client_xyz"],
+  "client_id": "backend-client",
+  "scope": "api:read",
+  "token_type": "Bearer",
+  "exp": 1763375669,
+  "iat": 1763372069,
+  "aud": ["api-service"],
   "iss": "http://localhost:8080",
-  "sub": "user-001"
+  "sub": "backend-client",
+  "username": "backend-client"
+}
+```
+
+**Response for attested tokens (includes attestation metadata):**
+```json
+{
+  "active": true,
+  "client_id": "hsm-attestation-wallet-demo",
+  "scope": "openid profile",
+  "token_type": "Bearer",
+  "exp": 1763375669,
+  "iat": 1763372069,
+  "aud": ["api-service"],
+  "iss": "http://localhost:8080",
+  "sub": "user-001",
+  "username": "john.doe",
+  "attestation": {
+    "attestation_verified": true,
+    "attestation_trust_level": "high",
+    "attestation_issued_at": 1763372069,
+    "attestation_expires_at": 1763375669,
+    "attestation_key_id": "hsm_ae26b334",
+    "hsm_backed": true,
+    "bio_authenticated": false,
+    "device_integrity": "verified"
+  }
 }
 ```
 

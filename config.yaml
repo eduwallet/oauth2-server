@@ -33,22 +33,22 @@ logging:
 # OAuth 2.0 Attestation-Based Client Authentication
 # https://datatracker.ietf.org/doc/html/draft-ietf-oauth-attestation-based-client-auth-07
 attestation:
-  enabled: true  # Enable attestation feature for demo
-  experimental: true  # Mark as experimental feature
-  
+  enabled: true # Enable attestation feature for demo
+  experimental: true # Mark as experimental feature
+
   # Verification settings
   verification:
-    clock_skew_tolerance_seconds: 300  # 5 minutes tolerance for time differences
-    nonce_cache_duration_seconds: 3600  # 1 hour nonce replay protection
-    require_fresh_attestation: true  # Require new attestation for each auth
-    max_attestation_age_seconds: 600  # 10 minutes max attestation age
-  
+    clock_skew_tolerance_seconds: 300 # 5 minutes tolerance for time differences
+    nonce_cache_duration_seconds: 3600 # 1 hour nonce replay protection
+    require_fresh_attestation: true # Require new attestation for each auth
+    max_attestation_age_seconds: 600 # 10 minutes max attestation age
+
   # Supported attestation formats
   supported_formats:
-    - "tpm"      # TPM 2.0 attestations
-    - "hsm"      # Hardware Security Module attestations
-    - "android"  # Android hardware attestation
-    - "ios"      # iOS App Attestation
+  - "tpm" # TPM 2.0 attestations
+  - "hsm" # Hardware Security Module attestations
+  - "android" # Android hardware attestation
+  - "ios" # iOS App Attestation
 
 clients:
 # Frontend SPA Client

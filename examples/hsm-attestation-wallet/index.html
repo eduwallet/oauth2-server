@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>HSM Attestation Wallet Demo</title>
+    <link rel="stylesheet" href="static/css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Loading State -->
+    <div id="loading-state" class="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <i class="fas fa-spinner fa-spin fa-3x"></i>
+            <h2>Initializing HSM Attestation Wallet...</h2>
+        </div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-state" class="error-overlay" style="display: none;">
+        <div class="error-content">
+            <i class="fas fa-exclamation-triangle fa-3x"></i>
+            <h2>Initialization Failed</h2>
+            <p id="error-message"></p>
+            <button onclick="location.reload()">Reload Page</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-shield-halved"></i>
+                    <h1>HSM Attestation Wallet Demo</h1>
+                </div>
+                <div class="status-indicators">
+                    <div class="system-status" id="system-status">
+                        <div class="status-indicator"></div>
+                        <span class="status-text">System Offline</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="navigation">
+            <div class="nav-buttons">
+                <button class="nav-button active" data-view="overview">
+                    <i class="fas fa-tachometer-alt"></i> Overview
+                </button>
+                <button class="nav-button" data-view="hsm">
+                    <i class="fas fa-microchip"></i> HSM
+                </button>
+                <button class="nav-button" data-view="biometric">
+                    <i class="fas fa-fingerprint"></i> Biometric
+                </button>
+                <button class="nav-button" data-view="attestation">
+                    <i class="fas fa-certificate"></i> Attestation
+                </button>
+                <button class="nav-button" data-view="oauth2">
+                    <i class="fas fa-key"></i> OAuth2
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Overview Section -->
+            <section class="demo-section" id="overview-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-tachometer-alt"></i> System Overview</h2>
+                </div>
+                
+                <div class="demo-panel">
+                    <div class="panel-content">
+                        <h3>Service Management</h3>
+                        <div class="button-group">
+                            <button id="initialize-all" class="btn btn-primary">
+                                <i class="fas fa-clock"></i> Auto-Initializing...
+                            </button>
+                            <button id="reset-all" class="btn btn-secondary">
+                                <i class="fas fa-refresh"></i> Reset All
+                            </button>
+                        </div>
+                        
+                        <div id="status-display" class="status-grid">
+                            <!-- Status will be populated by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- HSM Section -->
+            <section class="demo-section" id="hsm-section" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-microchip"></i> Hardware Security Module</h2>
+                </div>
+                
+                <div class="demo-panel">
+                    <div class="panel-content">
+                        <h3>HSM Operations</h3>
+                        <p>Hardware Security Module simulation with secure key generation and storage.</p>
+                        
+                        <div class="button-group">
+                            <button id="generate-key" class="btn btn-primary">
+                                <i class="fas fa-key"></i> Generate Key
+                            </button>
+                            <button id="show-hsm-details" class="btn btn-secondary">
+                                <i class="fas fa-info-circle"></i> Show HSM Details
+                            </button>
+                            <button id="create-attestation-cert" class="btn btn-tertiary">
+                                <i class="fas fa-certificate"></i> Create Attestation
+                            </button>
+                        </div>
+                        
+                        <div id="hsm-result" class="result-area">
+                            <!-- Results will be populated by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Biometric Section -->
+            <section class="demo-section" id="biometric-section" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-fingerprint"></i> Biometric Authentication</h2>
+                </div>
+                
+                <div class="demo-panel">
+                    <div class="panel-content">
+                        <h3>Biometric Operations</h3>
+                        <div class="button-group">
+                            <button id="enroll-biometric" class="btn btn-primary">
+                                <i class="fas fa-user-plus"></i> Enroll User
+                            </button>
+                            <button id="authenticate-bio" class="btn btn-secondary">
+                                <i class="fas fa-fingerprint"></i> Authenticate
+                            </button>
+                        </div>
+                        
+                        <div id="biometric-result" class="result-area">
+                            <!-- Results will be populated by JavaScript -->
+                        </div>
+                        
+                        <form id="biometric-form" class="demo-form">
+                            <!-- Biometric form will be populated by JavaScript -->
+                        </form>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Attestation Section -->
+            <section class="demo-section" id="attestation-section" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-certificate"></i> JWT Attestation</h2>
+                </div>
+                
+                <div class="demo-panel">
+                    <div class="panel-content">
+                        <h3>Attestation Operations</h3>
+                        <div class="button-group">
+                            <button id="create-attestation" class="btn btn-primary">
+                                <i class="fas fa-plus"></i> Create Attestation
+                            </button>
+                            <button id="verify-attestation" class="btn btn-secondary">
+                                <i class="fas fa-check"></i> Verify Attestation
+                            </button>
+                        </div>
+                        
+                        <div id="attestation-result" class="result-area">
+                            <!-- Results will be populated by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- OAuth2 Section -->
+            <section class="demo-section" id="oauth2-section" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-key"></i> OAuth2 Authentication</h2>
+                </div>
+                
+                <div class="demo-panel">
+                    <div class="panel-content">
+                        <h3>OAuth2 Operations</h3>
+                        <div class="button-group">
+                            <button id="register-oauth" class="btn btn-primary">
+                                <i class="fas fa-user-plus"></i> Register Client
+                            </button>
+                            <button id="start-oauth-same-window" class="btn btn-tertiary">
+                                <i class="fas fa-play"></i> OAuth Flow (Same Window)
+                            </button>
+                            <button id="get-userinfo" class="btn btn-info">
+                                <i class="fas fa-user"></i> Get User Info & Introspection
+                            </button>
+                        </div>
+                        
+                        <div class="oauth-info">
+                            <p><strong>Same Window:</strong> Automatically restores state after authentication</p>
+                        </div>
+                        
+                        <div id="oauth-result" class="result-area">
+                            <!-- Results will be populated by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+
+        <!-- Fixed Activity Logs at Bottom -->
+        <div class="logs-panel">
+            <div class="logs-header">
+                <h3>
+                    <i class="fas fa-terminal"></i> Activity Logs
+                </h3>
+                <div class="logs-controls">
+                    <button class="btn btn-sm btn-secondary" onclick="document.getElementById('demo-logs').innerHTML = ''">
+                        <i class="fas fa-trash"></i> Clear
+                    </button>
+                    <button class="btn btn-sm btn-secondary" onclick="window.exportLogs?.()">
+                        <i class="fas fa-download"></i> Export
+                    </button>
+                </div>
+            </div>
+            <div id="demo-logs" class="logs-container">
+                <!-- Logs will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+        <script>
+            // Inject environment variable from Docker Compose (if set)
+            window.HSM_DEMO_SERVER_URL = (typeof HSM_DEMO_SERVER_URL !== 'undefined') ? HSM_DEMO_SERVER_URL : undefined;
+        </script>
+        <script src="config.js?v=1731253000"></script>
+        <script src="static/js/crypto-utils.js?v=1731253000"></script>
+        <script src="static/js/hsm-simulator.js?v=1731253000"></script>
+        <script src="static/js/biometric-simulator.js?v=1731253000"></script>
+        <script src="static/js/attestation-service.js?v=1731253000"></script>
+        <script src="static/js/oauth2-client.js?v=1731253000"></script>
+        <script src="static/js/ui-controller.js?v=1731253000"></script>
+        <script src="static/js/main.js?v=1731253000"></script>
+</body>
+</html>
