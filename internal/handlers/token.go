@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"oauth2-server/internal/attestation"
 	"oauth2-server/internal/metrics"
+	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"strings"
@@ -19,7 +20,6 @@ import (
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/openid"
-	"github.com/ory/fosite/storage"
 	"github.com/ory/fosite/token/jwt"
 	"github.com/sirupsen/logrus"
 )
@@ -36,7 +36,8 @@ type TokenHandler struct {
 	Log                *logrus.Logger
 	Metrics            *metrics.MetricsCollector
 	AttestationManager *attestation.VerifierManager
-	MemoryStore        *storage.MemoryStore
+	Storage            store.Storage
+	SecretManager      *store.SecretManager
 	AuthCodeToStateMap *map[string]string
 }
 
@@ -47,7 +48,8 @@ func NewTokenHandler(
 	logger *logrus.Logger,
 	metricsCollector *metrics.MetricsCollector,
 	attestationManager *attestation.VerifierManager,
-	memoryStore *storage.MemoryStore,
+	storage store.Storage,
+	secretManager *store.SecretManager,
 	authCodeToStateMap *map[string]string,
 ) *TokenHandler {
 	return &TokenHandler{
@@ -56,7 +58,8 @@ func NewTokenHandler(
 		Log:                logger,
 		Metrics:            metricsCollector,
 		AttestationManager: attestationManager,
-		MemoryStore:        memoryStore,
+		Storage:            storage,
+		SecretManager:      secretManager,
 		AuthCodeToStateMap: authCodeToStateMap,
 	}
 }
@@ -140,11 +143,16 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 			r.PostForm.Del("client_assertion_type")
 		}
 		// For attestation/JWT clients, use client_credentials grant type to mimic local token call
-		r.Form.Set("grant_type", "client_credentials")
-		// Set basic auth like in proxy token handling
-		if secret, ok := GetClientSecret(clientID); ok {
-			r.SetBasicAuth(clientID, secret)
-			h.Log.Printf("✅ Set basic auth for attestation/JWT client: %s", clientID)
+		// But keep authorization_code grant type for authorization code flows
+		if grantType != "authorization_code" {
+			r.Form.Set("grant_type", "client_credentials")
+			// Set basic auth like in proxy token handling
+			if secret, ok := GetClientSecret(clientID, h.Storage, h.SecretManager); ok {
+				r.SetBasicAuth(clientID, secret)
+				h.Log.Printf("✅ Set basic auth for attestation/JWT client: %s", clientID)
+			}
+		} else {
+			h.Log.Printf("✅ Keeping authorization_code grant type for attested client: %s", clientID)
 		}
 	}
 
@@ -153,8 +161,17 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	// Let fosite handle ALL token requests natively, including device code flow and refresh tokens
 	// Use a consistent session for all requests - fosite will manage session retrieval for refresh tokens
 	session := &openid.DefaultSession{}
-	session.Subject = clientID
-	session.Username = clientID
+	if grantType != "authorization_code" {
+		session.Subject = clientID
+		session.Username = clientID
+	}
+	// Initialize session claims to prevent nil pointer issues
+	if session.Claims == nil {
+		session.Claims = &jwt.IDTokenClaims{}
+	}
+	if session.Claims.Extra == nil {
+		session.Claims.Extra = make(map[string]interface{})
+	}
 	h.Log.Printf("🔍 Token: Created empty session at address: %p", session)
 	h.Log.Printf("🔍 Token: Session before NewAccessRequest - Subject: '%s'", session.GetSubject())
 
@@ -179,6 +196,34 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	// Store issuer_state in session claims if available (for authorization code flow)
 	h.storeIssuerStateInSession(r, session)
 
+	// Debug: Log request details before NewAccessRequest
+	h.Log.Printf("🔍 [DEBUG] Request details before NewAccessRequest:")
+	h.Log.Printf("🔍 [DEBUG] Grant Type: %s", grantType)
+	h.Log.Printf("🔍 [DEBUG] Client ID: %s", clientID)
+	h.Log.Printf("🔍 [DEBUG] Session Subject: '%s', Username: '%s'", session.GetSubject(), session.GetUsername())
+
+	// Log form values (excluding sensitive data)
+	h.Log.Printf("🔍 [DEBUG] Form values:")
+	for key, values := range r.Form {
+		if key == "client_secret" || key == "client_assertion" {
+			h.Log.Printf("🔍 [DEBUG]   %s: [REDACTED]", key)
+		} else {
+			h.Log.Printf("🔍 [DEBUG]   %s: %v", key, values)
+		}
+	}
+
+	// Log headers (redacting sensitive ones)
+	h.Log.Printf("🔍 [DEBUG] Headers:")
+	for name, values := range r.Header {
+		for _, value := range values {
+			if strings.ToLower(name) == "authorization" {
+				h.Log.Printf("🔍 [DEBUG]   %s: [REDACTED]", name)
+			} else {
+				h.Log.Printf("🔍 [DEBUG]   %s: %s", name, value)
+			}
+		}
+	}
+
 	accessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, r, session)
 	if err != nil {
 		h.Log.Printf("❌ NewAccessRequest failed: %v", err)
@@ -202,6 +247,43 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	if session.Claims != nil {
 		h.Log.Printf("🔍 Token: Session Claims - Subject: '%s', Issuer: '%s'",
 			session.Claims.Subject, session.Claims.Issuer)
+	}
+
+	// For client_credentials flow, fosite doesn't automatically grant scopes
+	// We need to set the granted scopes based on client configuration
+	if grantType == "client_credentials" {
+		client := accessRequest.GetClient()
+		requestedScopes := accessRequest.GetRequestedScopes()
+		clientScopes := client.GetScopes()
+
+		h.Log.Printf("🔍 Client credentials scope handling - Client: %s, Requested: %v, Client scopes: %v",
+			client.GetID(), requestedScopes, clientScopes)
+
+		var grantedScopes []string
+
+		if len(requestedScopes) == 0 {
+			// If no scopes requested, grant all client scopes
+			grantedScopes = clientScopes
+			h.Log.Printf("🔍 No scopes requested, granting all client scopes: %v", grantedScopes)
+		} else {
+			// Grant intersection of requested and client scopes
+			for _, reqScope := range requestedScopes {
+				for _, clientScope := range clientScopes {
+					if reqScope == clientScope {
+						grantedScopes = append(grantedScopes, reqScope)
+						break
+					}
+				}
+			}
+			h.Log.Printf("🔍 Granted intersection of scopes: %v", grantedScopes)
+		}
+
+		// Set the granted scopes on the access request
+		// Grant the scopes we want (fosite should not have granted any for client_credentials)
+		for _, scope := range grantedScopes {
+			accessRequest.GrantScope(scope)
+		}
+		h.Log.Printf("✅ Set granted scopes for client_credentials: %v", grantedScopes)
 	}
 
 	// Let fosite create the access response
@@ -407,8 +489,8 @@ func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) (bool, e
 		result.ClientID, result.TrustLevel)
 
 	// Get the client from store and set it in context for Fosite
-	client, exists := h.MemoryStore.Clients[result.ClientID]
-	if !exists {
+	client, err := h.Storage.GetClient(r.Context(), result.ClientID)
+	if err != nil {
 		return false, fosite.ErrInvalidClient.WithHint("Unknown client")
 	}
 	ctx := context.WithValue(r.Context(), clientContextKey, client)
@@ -462,13 +544,13 @@ func (h *TokenHandler) handleJWTClientAssertion(r *http.Request) error {
 	}
 
 	// Check if client exists
-	client, exists := h.MemoryStore.Clients[iss]
-	if !exists {
+	client, err := h.Storage.GetClient(r.Context(), iss)
+	if err != nil {
 		return fosite.ErrInvalidClient.WithHint("Unknown client")
 	}
 
 	// Get the client's secret (unhashed for JWT validation)
-	clientSecret, ok := GetClientSecret(iss)
+	clientSecret, ok := GetClientSecret(iss, h.Storage, h.SecretManager)
 	if !ok {
 		return fosite.ErrInvalidClient.WithHint("Client secret not available")
 	}
@@ -566,17 +648,23 @@ func (h *TokenHandler) handleTraditionalAuthentication(r *http.Request) error {
 		return fosite.ErrInvalidRequest.WithHint("Missing client_id")
 	}
 
-	// Check if client exists in memory store
-	client, exists := h.MemoryStore.Clients[clientID]
-	if !exists {
+	// Check if client exists in storage
+	client, err := h.Storage.GetClient(r.Context(), clientID)
+	if err != nil {
 		h.Log.Printf("❌ Unknown client: %s", clientID)
 		return fosite.ErrInvalidClient.WithHint("Unknown client")
 	}
 
 	// Check if client is configured as public (no authentication required)
-	if client.IsPublic() {
-		h.Log.Printf("✅ Client %s is public, skipping authentication", clientID)
+	// But attestation-enabled clients always require authentication
+	attestationEnabled := h.AttestationManager != nil && h.AttestationManager.IsAttestationEnabled(clientID)
+	if client.IsPublic() && !attestationEnabled {
+		h.Log.Printf("✅ Client %s is public and not attestation-enabled, skipping authentication", clientID)
 		return nil
+	} else if client.IsPublic() && attestationEnabled {
+		h.Log.Printf("⚠️ Client %s is public but attestation-enabled, requiring authentication", clientID)
+	} else {
+		h.Log.Printf("❌ Client %s is not public, requires authentication", clientID)
 	}
 
 	// For confidential clients, check authentication methods
@@ -691,7 +779,8 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 
 	h.Log.Printf("👤 [PROXY] Downstream client ID: %s", clientID)
 
-	if _, ok := h.MemoryStore.Clients[clientID]; !ok {
+	// Check if client exists in storage
+	if _, err := h.Storage.GetClient(r.Context(), clientID); err != nil {
 		h.Log.Printf("❌ [PROXY] Unknown or unregistered client_id: %s", clientID)
 		http.Error(w, "unknown or unregistered client_id", http.StatusBadRequest)
 		return
@@ -837,7 +926,7 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 			localTokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			localTokenReq.PostForm = localTokenForm
 
-			if secret, ok := GetClientSecret(clientID); ok {
+			if secret, ok := GetClientSecret(clientID, h.Storage, h.SecretManager); ok {
 				localTokenReq.SetBasicAuth(clientID, secret)
 				h.Log.Printf("✅ [PROXY] Used stored original secret for basic auth")
 			}

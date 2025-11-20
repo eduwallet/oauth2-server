@@ -6,32 +6,36 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"oauth2-server/internal/attestation"
+	"oauth2-server/internal/store"
+	"oauth2-server/pkg/config"
 	"strings"
 	"time"
 
-	"oauth2-server/internal/attestation"
-
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/openid"
-	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
 
 // IntrospectionHandler manages token introspection requests
 type IntrospectionHandler struct {
 	OAuth2Provider     fosite.OAuth2Provider
+	Config             *config.Config
 	Log                *logrus.Logger
 	AttestationManager *attestation.VerifierManager
-	MemoryStore        *storage.MemoryStore
+	Storage            store.Storage
+	SecretManager      *store.SecretManager
 }
 
 // NewIntrospectionHandler creates a new introspection handler
-func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, log *logrus.Logger, attestationManager *attestation.VerifierManager, memoryStore *storage.MemoryStore) *IntrospectionHandler {
+func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, attestationManager *attestation.VerifierManager, storage store.Storage, secretManager *store.SecretManager) *IntrospectionHandler {
 	return &IntrospectionHandler{
 		OAuth2Provider:     oauth2Provider,
+		Config:             config,
 		Log:                log,
 		AttestationManager: attestationManager,
-		MemoryStore:        memoryStore,
+		Storage:            storage,
+		SecretManager:      secretManager,
 	}
 }
 
@@ -276,6 +280,20 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	h.Log.Printf("🔍 Client authentication present for introspection (Basic: %t, Creds: %t, JWT: %t)", hasBasicAuth, hasClientCreds, hasJwtAssertion)
 
+	// Extract client ID for privileged check (if not already set)
+	if clientID == "" {
+		if username, _, ok := r.BasicAuth(); ok {
+			clientID = username
+		}
+	}
+
+	// Check if this is the privileged client that can introspect any token
+	if clientID != "" && h.Config.Security.PrivilegedClientID != "" && clientID == h.Config.Security.PrivilegedClientID {
+		h.Log.Printf("🔍 Privileged client %s requesting introspection - allowing unrestricted access", clientID)
+		h.handleManualIntrospection(w, r, clientID)
+		return
+	}
+
 	// Log form values (but hide sensitive data)
 	token := r.FormValue("token")
 	tokenTypeHint := r.FormValue("token_type_hint")
@@ -321,6 +339,20 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				h.Log.Printf("❌ Failed to extract client ID from JWT assertion")
 			}
 		}
+	}
+
+	// Extract client ID for privileged check
+	if clientID == "" {
+		if username, _, ok := r.BasicAuth(); ok {
+			clientID = username
+		}
+	}
+
+	// Check if this is the privileged client that can introspect any token
+	if clientID != "" && h.Config.Security.PrivilegedClientID != "" && clientID == h.Config.Security.PrivilegedClientID {
+		h.Log.Printf("🔍 Privileged client %s requesting introspection - allowing unrestricted access", clientID)
+		h.handleManualIntrospection(w, r, clientID)
+		return
 	}
 
 	// Create the introspection request
@@ -416,7 +448,7 @@ func (h *IntrospectionHandler) handleLocalIntrospectionWithCredentials(w http.Re
 
 	// Set basic auth with the attested client's credentials
 	// This assumes the client has stored credentials (like in the token handler)
-	if secret, ok := GetClientSecret(clientID); ok {
+	if secret, ok := GetClientSecret(clientID, h.Storage, h.SecretManager); ok {
 		localReq.SetBasicAuth(clientID, secret)
 		h.Log.Printf("✅ Used stored credentials for basic auth in local introspection")
 	} else {

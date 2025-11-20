@@ -1,8 +1,8 @@
 # Build stage
 FROM golang:1.25-alpine AS builder
 
-# Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+# Install build dependencies including C compiler and SQLite dev libraries
+RUN apk add --no-cache git ca-certificates tzdata gcc musl-dev sqlite-dev
 
 # Set working directory
 WORKDIR /app
@@ -21,10 +21,9 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
 
-# Build the application with optimizations
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -a -installsuffix cgo \
-    -ldflags="-s -w -extldflags '-static' \
+# Build the application with CGO enabled for SQLite support
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags="-s -w \
               -X main.Version=${VERSION} \
               -X main.GitCommit=${GIT_COMMIT} \
               -X main.BuildTime=${BUILD_TIME}" \
@@ -34,8 +33,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 # Final stage - use alpine for healthcheck capabilities
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS calls
-RUN apk add --no-cache ca-certificates curl
+# Install ca-certificates for HTTPS calls and SQLite runtime libraries
+RUN apk add --no-cache ca-certificates curl sqlite-libs
 
 # Copy binary from builder stage
 COPY --from=builder /app/oauth2-server /app/oauth2-server

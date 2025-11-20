@@ -8,20 +8,22 @@ import (
 	"log"
 	"net/http"
 	"oauth2-server/internal/attestation"
+	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"os"
 	"strings"
 	"time"
 
+	"context"
+
 	"github.com/ory/fosite"
-	"github.com/ory/fosite/storage"
 )
 
 // RegistrationHandler manages dynamic client registration
-
 type RegistrationHandler struct {
-	memoryStore        *storage.MemoryStore
+	storage            *store.CustomStorage
+	secretManager      *store.SecretManager
 	trustAnchorHandler *TrustAnchorHandler
 	attestationManager *attestation.VerifierManager
 }
@@ -35,9 +37,10 @@ var clientSecrets = make(map[string]string)
 var clientAttestationConfigs = make(map[string]*config.ClientAttestationConfig)
 
 // NewRegistrationHandler creates a new registration handler
-func NewRegistrationHandler(memoryStore *storage.MemoryStore, trustAnchorHandler *TrustAnchorHandler, attestationManager *attestation.VerifierManager) *RegistrationHandler {
+func NewRegistrationHandler(storage *store.CustomStorage, secretManager *store.SecretManager, trustAnchorHandler *TrustAnchorHandler, attestationManager *attestation.VerifierManager) *RegistrationHandler {
 	return &RegistrationHandler{
-		memoryStore:        memoryStore,
+		storage:            storage,
+		secretManager:      secretManager,
 		trustAnchorHandler: trustAnchorHandler,
 		attestationManager: attestationManager,
 	}
@@ -133,7 +136,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		clientID = metadata.ClientID
 		log.Printf("🔍 [REGISTRATION] Client ID provided: %s", clientID)
 		// Check if client already exists
-		if _, exists := h.memoryStore.Clients[clientID]; exists {
+		if _, err := h.storage.GetClient(r.Context(), clientID); err == nil {
 			isUpdate = true
 			log.Printf("🔄 [REGISTRATION] Updating existing client: %s", clientID)
 		} else {
@@ -154,13 +157,17 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 
 	log.Printf("✅ [REGISTRATION] Client ID determined: %s (isUpdate: %v)", clientID, isUpdate)
 
-	// Generate client secret only for new clients
+	// Determine if client is public
+	isPublic := metadata.TokenEndpointAuthMethod == "none" || metadata.TokenEndpointAuthMethod == "attest_jwt_client_auth" || metadata.TokenEndpointAuthMethod == "attest_tls_client_auth"
+	log.Printf("🔍 [REGISTRATION] Client is public: %v", isPublic)
+
+	// Generate client secret only for new clients and non-public clients
 	var clientSecret string
 	var hashedSecret []byte
 	var err error
 
-	if !isUpdate {
-		log.Printf("🔍 [REGISTRATION] Generating client secret for new client")
+	if !isUpdate && !isPublic {
+		log.Printf("🔍 [REGISTRATION] Generating client secret for new confidential client")
 		clientSecret, err = generateRandomString(64)
 		if err != nil {
 			log.Printf("❌ [REGISTRATION] Failed to generate client secret: %v", err)
@@ -178,10 +185,10 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 			return
 		}
 		log.Printf("✅ [REGISTRATION] Client secret hashed successfully")
-	} else {
+	} else if isUpdate && !isPublic {
 		log.Printf("🔍 [REGISTRATION] Update operation - retrieving existing client secret")
 		// For updates, keep the existing secret
-		if existingClient, exists := h.memoryStore.Clients[clientID]; exists {
+		if existingClient, err := h.storage.GetClient(r.Context(), clientID); err == nil {
 			if defaultClient, ok := existingClient.(*fosite.DefaultClient); ok {
 				hashedSecret = defaultClient.Secret
 				log.Printf("✅ [REGISTRATION] Retrieved existing hashed secret")
@@ -191,13 +198,18 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 				return
 			}
 		} else {
-			log.Printf("❌ [REGISTRATION] Existing client not found in memory store")
+			log.Printf("❌ [REGISTRATION] Existing client not found in storage: %v", err)
 			http.Error(w, "Client not found", http.StatusNotFound)
 			return
 		}
+	} else {
+		log.Printf("🔍 [REGISTRATION] Public client - no secret needed")
+		hashedSecret = nil
 	}
 
 	log.Printf("✅ [REGISTRATION] Client secret handling completed")
+
+	// Handle attestation config for updates
 
 	// Handle attestation config for updates
 	var finalAttestationConfig *config.ClientAttestationConfig
@@ -312,24 +324,43 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 
 	// Create or update the client
 	log.Printf("🔍 [REGISTRATION] Creating fosite.DefaultClient")
+	var clientSecretBytes []byte
+	if isPublic {
+		clientSecretBytes = nil
+	} else {
+		clientSecretBytes = hashedSecret
+	}
 	newClient := &fosite.DefaultClient{
 		ID:            clientID,
-		Secret:        hashedSecret,
+		Secret:        clientSecretBytes,
 		RedirectURIs:  metadata.RedirectURIs,
 		GrantTypes:    grantTypes,
 		ResponseTypes: responseTypes,
 		Scopes:        scopes,
 		Audience:      audience,
-		Public:        metadata.TokenEndpointAuthMethod == "none",
+		Public:        isPublic,
 	}
 	log.Printf("✅ [REGISTRATION] fosite.DefaultClient created successfully")
 	log.Printf("🔍 [REGISTRATION] Client details: ID=%s, Public=%v, GrantTypes=%v, ResponseTypes=%v, Scopes=%v, Audience=%v",
 		newClient.ID, newClient.Public, newClient.GrantTypes, newClient.ResponseTypes, newClient.Scopes, newClient.Audience)
 
 	// Store the client
-	log.Printf("🔍 [REGISTRATION] Storing client in memory store")
-	h.memoryStore.Clients[clientID] = newClient
-	log.Printf("✅ [REGISTRATION] Client stored successfully")
+	log.Printf("🔍 [REGISTRATION] Storing client in storage")
+	if isUpdate {
+		if err := h.storage.UpdateClient(r.Context(), clientID, newClient); err != nil {
+			log.Printf("❌ [REGISTRATION] Failed to update client: %v", err)
+			http.Error(w, "Failed to update client", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("✅ [REGISTRATION] Client updated successfully")
+	} else {
+		if err := h.storage.CreateClient(r.Context(), newClient); err != nil {
+			log.Printf("❌ [REGISTRATION] Failed to create client: %v", err)
+			http.Error(w, "Failed to create client", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("✅ [REGISTRATION] Client created successfully")
+	}
 
 	// Register attestation config with the attestation manager if provided
 	if finalAttestationConfig != nil {
@@ -338,25 +369,47 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		log.Printf("✅ [REGISTRATION] Attestation config registered with attestation manager")
 	}
 
-	// Store the original secret for dynamic clients (only for new clients, not updates)
-	if !isUpdate && clientSecret != "" {
-		clientSecrets[clientID] = clientSecret
-		log.Printf("✅ [REGISTRATION] Original client secret stored for client: %s", clientID)
+	// Store the original secret for dynamic clients (only for new clients, not updates, and not for public clients)
+	if !isUpdate && !isPublic && clientSecret != "" {
+		// Encrypt and store the secret
+		encryptedSecret, err := h.secretManager.EncryptSecret(clientSecret)
+		if err != nil {
+			log.Printf("❌ [REGISTRATION] Failed to encrypt client secret: %v", err)
+			http.Error(w, "Failed to encrypt client secret", http.StatusInternalServerError)
+			return
+		}
+
+		if err := h.storage.StoreClientSecret(r.Context(), clientID, encryptedSecret); err != nil {
+			log.Printf("❌ [REGISTRATION] Failed to store encrypted client secret: %v", err)
+			http.Error(w, "Failed to store client secret", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("✅ [REGISTRATION] Encrypted client secret stored for client: %s", clientID)
 	}
 
 	// Store the attestation config for dynamic clients
 	if finalAttestationConfig != nil {
-		clientAttestationConfigs[clientID] = finalAttestationConfig
+		if err := h.storage.StoreAttestationConfig(r.Context(), clientID, finalAttestationConfig); err != nil {
+			log.Printf("❌ [REGISTRATION] Failed to store attestation config: %v", err)
+			http.Error(w, "Failed to store attestation config", http.StatusInternalServerError)
+			return
+		}
 		log.Printf("✅ [REGISTRATION] Attestation config stored for client: %s", clientID)
 	}
 
 	// Prepare the response
 	log.Printf("🔍 [REGISTRATION] Preparing response")
 	now := time.Now().Unix()
+	var responseSecret string
+	if isPublic {
+		responseSecret = "" // Don't return secret for public clients
+	} else {
+		responseSecret = clientSecret
+	}
 	response := ClientResponse{
 		ClientID:                clientID,
-		ClientSecret:            clientSecret, // Return unhashed secret only for new clients
-		ClientSecretExpiresAt:   0,            // 0 means no expiration
+		ClientSecret:            responseSecret,
+		ClientSecretExpiresAt:   0, // 0 means no expiration
 		ClientIdIssuedAt:        now,
 		RegistrationAccessToken: "", // Not implemented in this example
 		RegistrationClientURI:   "", // Not implemented in this example
@@ -458,13 +511,25 @@ func (h *RegistrationHandler) resolveTrustAnchors(attestationConfig *config.Clie
 }
 
 // GetClientSecret retrieves the original unhashed client secret for a given client ID
-func GetClientSecret(clientID string) (string, bool) {
-	secret, exists := clientSecrets[clientID]
-	return secret, exists
+func GetClientSecret(clientID string, storage store.Storage, secretManager *store.SecretManager) (string, bool) {
+	encryptedSecret, err := storage.GetClientSecret(context.Background(), clientID)
+	if err != nil {
+		return "", false
+	}
+
+	decryptedSecret, err := secretManager.DecryptSecret(encryptedSecret)
+	if err != nil {
+		return "", false
+	}
+
+	return decryptedSecret, true
 }
 
 // GetClientAttestationConfig retrieves the attestation config for a given client ID
-func GetClientAttestationConfig(clientID string) (*config.ClientAttestationConfig, bool) {
-	config, exists := clientAttestationConfigs[clientID]
-	return config, exists
+func GetClientAttestationConfig(clientID string, storage store.Storage) (*config.ClientAttestationConfig, bool) {
+	config, err := storage.GetAttestationConfig(context.Background(), clientID)
+	if err != nil {
+		return nil, false
+	}
+	return config, true
 }

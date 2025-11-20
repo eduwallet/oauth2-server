@@ -1,7 +1,10 @@
 .PHONY: build test clean run dev
 
-# Default target
-all: build
+# Test configuration variables (can be overridden)
+TEST_DATABASE_TYPE ?= memory
+TEST_USERNAME ?= john.doe
+TEST_PASSWORD ?= password123
+TEST_SCOPE ?= openid profile email
 
 # Build the application
 build:
@@ -170,7 +173,7 @@ test: build
 	@echo "📦 Building server..."
 	@$(MAKE) build
 	@echo "🚀 Starting OAuth2 server in background..."
-	@./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 3
 	@echo "🔍 Testing server health..."
@@ -181,10 +184,10 @@ test: build
 	fi
 	@echo "✅ Server is healthy, running test scripts..."
 	@passed=0; failed=0; \
-	for script in samples/test_*.sh; do \
+	for script in tests/test_*.sh; do \
 		if [ -f "$$script" ]; then \
 			echo "🧪 Running $$script..."; \
-			if bash "$$script"; then \
+			if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash "$$script"; then \
 				echo "✅ $$script passed"; \
 				passed=$$((passed + 1)); \
 			else \
@@ -214,7 +217,7 @@ test-verbose: build
 	@echo "📦 Building server..."
 	@$(MAKE) build
 	@echo "🚀 Starting OAuth2 server in background..."
-	@./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 3
 	@echo "🔍 Testing server health..."
@@ -227,10 +230,10 @@ test-verbose: build
 	fi
 	@echo "✅ Server is healthy, running test scripts..."
 	@passed=0; failed=0; \
-	for script in samples/test_*.sh; do \
+	for script in tests/test_*.sh; do \
 		if [ -f "$$script" ]; then \
 			echo "🧪 Running $$script..."; \
-			if bash -x "$$script"; then \
+			if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash -x "$$script"; then \
 				echo "✅ $$script passed"; \
 				passed=$$((passed + 1)); \
 			else \
@@ -262,15 +265,15 @@ test-script:
 		echo "❌ Please specify a script: make test-script SCRIPT=test_device_native.sh"; \
 		exit 1; \
 	fi
-	@if [ ! -f "samples/$(SCRIPT)" ]; then \
-		echo "❌ Script samples/$(SCRIPT) not found"; \
+	@if [ ! -f "tests/$(SCRIPT)" ]; then \
+		echo "❌ Script tests/$(SCRIPT) not found"; \
 		exit 1; \
 	fi
 	@echo "🧪 Testing single script: $(SCRIPT)"
 	@echo "📦 Building server..."
 	@$(MAKE) build
 	@echo "🚀 Starting OAuth2 server in background..."
-	@./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 3
 	@echo "🔍 Testing server health..."
@@ -281,7 +284,7 @@ test-script:
 		exit 1; \
 	fi
 	@echo "✅ Server is healthy, running $(SCRIPT)..."
-	@if bash samples/$(SCRIPT); then \
+	@if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash tests/$(SCRIPT); then \
 		echo "✅ $(SCRIPT) passed"; \
 		result=0; \
 	else \
@@ -296,10 +299,12 @@ test-script:
 	rm -f server-test.log; \
 	exit $$result
 
-# Test coverage
-test-coverage:
-	go test -race -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
+# Test with memory database
+test-memory:
+	@$(MAKE) test TEST_DATABASE_TYPE=memory
+
+test-sqlite:
+	@$(MAKE) test TEST_DATABASE_TYPE=sqlite
 
 # Help target
 help:
@@ -321,6 +326,16 @@ help:
 	@echo "  test-verbose       - Run tests with verbose output and logs"
 	@echo "  test-script        - Run specific test script (SCRIPT=filename)"
 	@echo "  test-coverage      - Run tests and generate coverage report"
+	@echo "  test-memory        - Run tests with memory database (TEST_DATABASE_TYPE=memory)"
+	@echo ""
+	@echo "Test Configuration Variables:"
+	@echo "  TEST_DATABASE_TYPE - Database type for tests (default: sqlite)"
+	@echo "  TEST_USERNAME      - Username for test authentication (default: john.doe)"
+	@echo "  TEST_PASSWORD      - Password for test authentication (default: password123)"
+	@echo "  TEST_SCOPE         - OAuth scopes for tests (default: 'openid profile email')"
+	@echo "  Examples:"
+	@echo "    make test TEST_DATABASE_TYPE=memory"
+	@echo "    make test TEST_USERNAME=testuser TEST_PASSWORD=testpass"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt                - Format Go code"
@@ -343,7 +358,7 @@ help:
 	@echo "Examples:"
 	@echo "  make tag                               - Create a new version tag"
 	@echo "  make test                              - Run all tests"
-	@echo "  make test-script SCRIPT=test_device_native.sh  - Run specific test"
+	@echo "  make test-script SCRIPT=test_complete_flow.sh  - Run specific test"
 	@echo "  make test-verbose                      - Run tests with detailed output"
 
 # Update .PHONY to include new targets

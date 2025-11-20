@@ -20,6 +20,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/ory/fosite/storage"
+	"github.com/ory/fosite/token/jwt"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ory/fosite"
@@ -32,6 +33,7 @@ import (
 	"oauth2-server/internal/handlers"
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/middleware"
+	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 )
@@ -52,7 +54,8 @@ var (
 
 	// OAuth2 provider and stores
 	oauth2Provider fosite.OAuth2Provider
-	memoryStore    *storage.MemoryStore
+	dataStore      store.Storage        // Use our custom storage interface
+	customStorage  *store.CustomStorage // Custom storage wrapper
 
 	// TokenStrategy
 	AccessTokenStrategy  oauth2.AccessTokenStrategy
@@ -75,6 +78,9 @@ var (
 	userinfoHandler        *handlers.UserInfoHandler
 	callbackHandler        *handlers.CallbackHandler
 	trustAnchorHandler     *handlers.TrustAnchorHandler
+
+	// Secret manager for encrypted storage
+	secretManager *store.SecretManager
 
 	// Metrics collector
 	metricsCollector *metrics.MetricsCollector
@@ -180,6 +186,10 @@ func main() {
 
 	log.Printf("✅ Configuration loaded successfully")
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
+
+	// Initialize secret manager for encrypted storage
+	secretManager = store.NewSecretManager([]byte(configuration.Security.EncryptionKey))
+	log.Printf("✅ Secret manager initialized")
 
 	if configuration.IsProxyMode() {
 		log.Printf("🔄 Identity Provider Mode: PROXY (upstream provider)")
@@ -298,31 +308,30 @@ func main() {
 	// Initialize trust anchor handler first (needed for attestation manager)
 	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
 
-	// Initialize stores (needed before attestation manager)
-	memoryStore = storage.NewMemoryStore()
-
-	// Initialize attestation manager if attestation is enabled
-	if configuration.Attestation != nil && configuration.Attestation.Enabled {
-		// Load trust anchor certificates from config file
-		trustAnchors, err := attestation.LoadTrustAnchorsFromConfig("config.yaml")
+	// Initialize stores based on configuration
+	if configuration.Database.Type == "sqlite" {
+		sqliteStore, err := store.NewSQLiteStore(configuration.Database.Path, log)
 		if err != nil {
-			log.Fatalf("❌ Failed to load trust anchors: %v", err)
+			log.Fatalf("❌ Failed to initialize SQLite store: %v", err)
 		}
-		log.Printf("✅ Loaded %d trust anchors", len(trustAnchors))
-
-		attestationManager = attestation.NewVerifierManager(configuration.Attestation, trustAnchors, log, handlers.GetClientAttestationConfig, trustAnchorHandler.ResolvePath)
-		if err := attestationManager.PreloadVerifiers(); err != nil {
-			log.Fatalf("❌ Failed to preload attestation verifiers: %v", err)
-		}
-		log.Printf("✅ Attestation manager initialized with %d clients", len(configuration.Attestation.Clients))
+		dataStore = sqliteStore
+		log.Printf("✅ SQLite store initialized at: %s", configuration.Database.Path)
+	} else {
+		// Default to memory store
+		memoryStore := storage.NewMemoryStore()
+		dataStore = store.NewMemoryStoreWrapper(memoryStore)
+		log.Printf("✅ Memory store initialized")
 	}
 
-	// Initialize OAuth2 provider
-	if err := initializeOAuth2Provider(); err != nil {
-		log.Fatalf("❌ Failed to initialize OAuth2 provider: %v", err)
+	// Initialize custom storage wrapper
+	customStorage = &store.CustomStorage{
+		Storage: dataStore,
+		Clients: make(map[string]fosite.Client),
+		Users:   make(map[string]storage.MemoryUserRelation),
 	}
+	log.Printf("✅ Custom storage wrapper initialized")
 
-	// Now initialize clients with the hasher
+	// Now initialize clients with the hasher BEFORE initializing OAuth2 provider
 	if err := initializeClients(); err != nil {
 		log.Fatalf("❌ Failed to initialize clients: %v", err)
 	}
@@ -334,6 +343,32 @@ func main() {
 		}
 	} else {
 		log.Printf("🔄 Proxy mode: skipping local user initialization")
+	}
+
+	// Initialize attestation manager if attestation is enabled
+	if configuration.Attestation != nil && configuration.Attestation.Enabled {
+		// Load trust anchor certificates from config file
+		trustAnchors, err := attestation.LoadTrustAnchorsFromConfig("config.yaml")
+		if err != nil {
+			log.Fatalf("❌ Failed to load trust anchors: %v", err)
+		}
+		log.Printf("✅ Loaded %d trust anchors", len(trustAnchors))
+
+		// Create a wrapper function for dynamic config checking that matches the expected signature
+		dynamicConfigChecker := func(clientID string) (*config.ClientAttestationConfig, bool) {
+			return handlers.GetClientAttestationConfig(clientID, dataStore)
+		}
+
+		attestationManager = attestation.NewVerifierManager(configuration.Attestation, trustAnchors, log, dynamicConfigChecker, trustAnchorHandler.ResolvePath)
+		if err := attestationManager.PreloadVerifiers(); err != nil {
+			log.Fatalf("❌ Failed to preload attestation verifiers: %v", err)
+		}
+		log.Printf("✅ Attestation manager initialized with %d clients", len(configuration.Attestation.Clients))
+	}
+
+	// Initialize OAuth2 provider
+	if err := initializeOAuth2Provider(); err != nil {
+		log.Fatalf("❌ Failed to initialize OAuth2 provider: %v", err)
 	}
 
 	// Load templates
@@ -360,41 +395,52 @@ func main() {
 }
 
 func initializeClients() error {
-	// Load clients from config if any
-	if len(configuration.Clients) > 0 {
-
-		// Register each client in the memory store
-		for _, client := range configuration.Clients {
-			hashedSecret, err := utils.HashSecret(client.Secret)
-			if err != nil {
-				return fmt.Errorf("failed to hash secret for client %s: %w", client.ID, err)
+	// First, load any existing clients from the database
+	if sqliteStore, ok := dataStore.(*store.SQLiteStore); ok {
+		log.Printf("🔍 Loading existing clients from database...")
+		clients, err := sqliteStore.GetAllClients(context.Background())
+		if err != nil {
+			log.Printf("⚠️ Failed to load clients from database: %v", err)
+		} else {
+			for _, client := range clients {
+				customStorage.Clients[client.GetID()] = client
+				log.Printf("✅ Loaded client from database: %s", client.GetID())
 			}
-
-			log.Println("Registering client:", client.ID)
-
-			if len(client.Audience) == 0 {
-				client.Audience = []string{client.ID}
-			}
-
-			newClient := &fosite.DefaultClient{
-				ID:            client.ID,
-				Secret:        hashedSecret,
-				RedirectURIs:  client.RedirectURIs,
-				GrantTypes:    client.GrantTypes,
-				ResponseTypes: client.ResponseTypes,
-				Scopes:        client.Scopes,
-				Audience:      client.Audience,
-				Public:        client.Public,
-			}
-
-			memoryStore.Clients[client.ID] = newClient
+			log.Printf("✅ Loaded %d clients from database", len(clients))
 		}
 	}
 
-	log.Printf("✅ Stores initialized with %d clients", len(memoryStore.Clients))
+	// Register each client from configuration (this will overwrite any database clients with the same ID)
+	for _, client := range configuration.Clients {
+		hashedSecret, err := utils.HashSecret(client.Secret)
+		if err != nil {
+			return fmt.Errorf("failed to hash secret for client %s: %w", client.ID, err)
+		}
+
+		log.Println("Registering client:", client.ID)
+
+		if len(client.Audience) == 0 {
+			client.Audience = []string{client.ID}
+		}
+
+		newClient := &fosite.DefaultClient{
+			ID:            client.ID,
+			Secret:        hashedSecret,
+			RedirectURIs:  client.RedirectURIs,
+			GrantTypes:    client.GrantTypes,
+			ResponseTypes: client.ResponseTypes,
+			Scopes:        client.Scopes,
+			Audience:      client.Audience,
+			Public:        client.Public,
+		}
+
+		customStorage.Clients[client.ID] = newClient
+	}
+
+	log.Printf("✅ Stores initialized with %d clients", len(customStorage.Clients))
 
 	// Update metrics with initial client count
-	metricsCollector.UpdateRegisteredClients(float64(len(memoryStore.Clients)))
+	metricsCollector.UpdateRegisteredClients(float64(len(customStorage.Clients)))
 
 	return nil
 
@@ -413,72 +459,24 @@ func initializeUsers() error {
 				Password: user.Password,
 			}
 
-			memoryStore.Users[user.ID] = newUser
+			customStorage.Users[user.ID] = newUser
 
 			log.Printf("✅ Registered user: %s (%s)", user.Username, user.ID)
 		}
 	}
 
-	log.Printf("✅ User store initialized with %d users", len(memoryStore.Users))
+	log.Printf("✅ User store initialized with %d users", len(customStorage.Users))
 
 	// Update metrics with initial user count
-	metricsCollector.UpdateRegisteredUsers(float64(len(memoryStore.Users)))
+	metricsCollector.UpdateRegisteredUsers(float64(len(customStorage.Users)))
 
 	return nil
-}
-
-// CustomStorage wraps MemoryStore but provides custom client management
-type CustomStorage struct {
-	*storage.MemoryStore
-}
-
-// GetClient returns a client but makes it appear public to skip Fosite's authentication
-func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client, error) {
-	client, exists := s.MemoryStore.Clients[id]
-	if !exists {
-		return nil, fosite.ErrInvalidClient
-	}
-
-	// Return a wrapper that makes the client appear public
-	return &PublicClientWrapper{Client: client}, nil
-}
-
-// ClientAssertionJWTValid delegates to the underlying memory store
-func (s *CustomStorage) ClientAssertionJWTValid(ctx context.Context, jti string) error {
-	return s.MemoryStore.ClientAssertionJWTValid(ctx, jti)
-}
-
-// SetClientAssertionJWT delegates to the underlying memory store
-func (s *CustomStorage) SetClientAssertionJWT(ctx context.Context, jti string, exp time.Time) error {
-	return s.MemoryStore.SetClientAssertionJWT(ctx, jti, exp)
-}
-
-// PublicClientWrapper makes any client appear public to Fosite
-type PublicClientWrapper struct {
-	fosite.Client
-}
-
-func (w *PublicClientWrapper) IsPublic() bool {
-	// Check if client has a secret (hashed or not)
-	// Clients with secrets should not be public for proper authentication
-	if w.Client.GetHashedSecret() != nil && len(w.Client.GetHashedSecret()) > 0 {
-		return false // Not public if it has a secret
-	}
-
-	// Check if client supports client_credentials grant
-	grantTypes := w.Client.GetGrantTypes()
-	for _, grantType := range grantTypes {
-		if grantType == "client_credentials" {
-			return false // Not public if it supports client_credentials
-		}
-	}
-	return true // Public for other grants
 }
 
 func initializeOAuth2Provider() error {
 	log.Printf("🔍 Initializing OAuth2 provider...")
 	log.Printf("🔍 Configuration: %v", configuration != nil)
-	log.Printf("🔍 MemoryStore: %v", memoryStore != nil)
+	log.Printf("🔍 MemoryStore: %v", dataStore != nil)
 
 	// Generate RSA key for JWT signing
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -518,30 +516,50 @@ func initializeOAuth2Provider() error {
 	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
 	log.Printf("✅ Token strategies created")
 
-	// Create custom storage that delegates client management to skip authentication
-	customStorage := &CustomStorage{
-		MemoryStore: memoryStore,
+	// Custom storage should already be created in main()
+	// Just ensure it's properly initialized
+	if customStorage == nil {
+		log.Fatalf("❌ Custom storage not initialized")
 	}
-	log.Printf("✅ Custom storage created")
 
-	// Create a simple OAuth2 provider without complex strategies
-	log.Printf("🔍 About to call compose.ComposeAllEnabled...")
-	oauth2Provider = compose.ComposeAllEnabled(
+	// Create a selective OAuth2 provider with only the features we need
+	log.Printf("🔍 About to call compose.Compose with selective factories...")
+
+	// Define key getter for JWT signing
+	keyGetter := func(context.Context) (interface{}, error) {
+		return privateKey, nil
+	}
+
+	oauth2Provider = compose.Compose(
 		config,
-		customStorage, // Use custom storage instead of memoryStore
-		privateKey,
+		customStorage,
+		&compose.CommonStrategy{
+			CoreStrategy:               compose.NewOAuth2HMACStrategy(config),
+			RFC8628CodeStrategy:        compose.NewDeviceStrategy(config),
+			OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(keyGetter, config),
+			Signer:                     &jwt.DefaultSigner{GetPrivateKey: keyGetter},
+		},
+		compose.OAuth2AuthorizeExplicitFactory,
+		compose.OAuth2ClientCredentialsGrantFactory,
+		compose.OAuth2RefreshTokenGrantFactory,
+		compose.OAuth2TokenIntrospectionFactory,
+		compose.OAuth2TokenRevocationFactory,
+		compose.OAuth2PKCEFactory,
+		compose.RFC8628DeviceFactory,
+		compose.RFC8693TokenExchangeFactory,
 	)
 	log.Printf("✅ OAuth2 provider created")
 
 	// Initialize RFC8693 handler but don't append it to all token requests
 	// The token exchange functionality should be handled by the default fosite provider
 	// when TokenExchangeEnabled is true in the config
+	// Note: RFC8693 handler requires additional storage methods not in our interface
 	_ = &rfc8693.Handler{
 		Config:               config,
 		AccessTokenStrategy:  AccessTokenStrategy,
 		RefreshTokenStrategy: RefreshTokenStrategy,
-		AccessTokenStorage:   memoryStore,
-		RefreshTokenStorage:  memoryStore,
+		AccessTokenStorage:   customStorage,
+		RefreshTokenStorage:  customStorage,
 	}
 	log.Printf("✅ RFC8693 handler initialized")
 
@@ -556,14 +574,14 @@ func initializeHandlers() {
 	handlers.SetVersionInfo(Version, GitCommit, BuildTime)
 
 	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
-	registrationHandler = handlers.NewRegistrationHandler(memoryStore, trustAnchorHandler, attestationManager)
-	healthHandler = handlers.NewHealthHandler(configuration, memoryStore)
+	registrationHandler = handlers.NewRegistrationHandler(customStorage, secretManager, trustAnchorHandler, attestationManager)
+	healthHandler = handlers.NewHealthHandler(configuration, dataStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)
 
 	// Initialize OAuth2 flow handlers
-	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, memoryStore, &UpstreamSessionMap)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, memoryStore, &authCodeToStateMap)
-	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, log, attestationManager, memoryStore)
+	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap)
+	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)
 
@@ -576,7 +594,7 @@ func initializeHandlers() {
 	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler)
 
 	// Initialize device flow handler
-	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, memoryStore, templates, configuration, log)
+	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, dataStore, templates, configuration, log)
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }
@@ -656,8 +674,8 @@ func setupRoutes() {
 	// Stats endpoint
 	http.Handle("/stats", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		statisticsHandler := handlers.StatisticsHandler{
-			MemoryStore: memoryStore,
-			Metrics:     metricsCollector,
+			Storage: customStorage,
+			Metrics: metricsCollector,
 		}
 		statisticsHandler.ServeHTTP(w, r)
 	}))))

@@ -99,6 +99,7 @@ type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Security SecurityConfig `yaml:"security"`
 	Logging  LoggingConfig  `yaml:"logging"`
+	Database DatabaseConfig `yaml:"database"`
 
 	// Legacy fields for backward compatibility
 	BaseURL string
@@ -145,9 +146,15 @@ type SecurityConfig struct {
 	RequireHTTPS                   bool   `yaml:"require_https"`
 
 	// API protection settings
-	APIKey                string `yaml:"api_key,omitempty"`
-	EnableRegistrationAPI bool   `yaml:"enable_registration_api"`
-	EnableTrustAnchorAPI  bool   `yaml:"enable_trust_anchor_api"`
+	APIKey                string `yaml:"api_key,omitempty" env:"API_KEY"`
+	EnableRegistrationAPI bool   `yaml:"enable_registration_api" env:"ENABLE_REGISTRATION_API"`
+	EnableTrustAnchorAPI  bool   `yaml:"enable_trust_anchor_api" env:"ENABLE_TRUST_ANCHOR_API"`
+
+	// Privileged client for server operations
+	PrivilegedClientID string `yaml:"privileged_client_id,omitempty"`
+
+	// Encryption settings
+	EncryptionKey string `yaml:"encryption_key"`
 }
 
 // LoggingConfig holds logging configuration
@@ -155,6 +162,12 @@ type LoggingConfig struct {
 	Level       string `yaml:"level"`
 	Format      string `yaml:"format"`
 	EnableAudit bool   `yaml:"enable_audit"`
+}
+
+// DatabaseConfig holds database configuration
+type DatabaseConfig struct {
+	Type string `yaml:"type"` // "memory" or "sqlite"
+	Path string `yaml:"path"` // SQLite database file path (ignored for memory)
 }
 
 // ClientConfig represents a client configuration from YAML
@@ -219,6 +232,14 @@ func (c ClientConfig) ValidateRedirectURI(requestedURI string) bool {
 func (c *Config) Validate() error {
 	if c.Security.JWTSecret == "" {
 		return fmt.Errorf("JWT secret is required")
+	}
+
+	if c.Security.EncryptionKey == "" {
+		return fmt.Errorf("encryption key is required")
+	}
+
+	if len(c.Security.EncryptionKey) != 32 {
+		return fmt.Errorf("encryption key must be exactly 32 bytes (256 bits) for AES-256")
 	}
 
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
@@ -310,6 +331,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate database configuration
+	if err := c.validateDatabaseConfig(); err != nil {
+		return fmt.Errorf("database configuration: %w", err)
+	}
+
 	return nil
 }
 
@@ -320,6 +346,35 @@ func (c *Config) validateAttestationConfig(client ClientConfig) error {
 	}
 
 	return client.AttestationConfig.Validate()
+}
+
+// validateDatabaseConfig validates the database configuration
+func (c *Config) validateDatabaseConfig() error {
+	// Validate database type
+	if c.Database.Type == "" {
+		return fmt.Errorf("database type is required")
+	}
+
+	validTypes := []string{"memory", "sqlite"}
+	if !contains(validTypes, c.Database.Type) {
+		return fmt.Errorf("invalid database type '%s', must be one of: %s", c.Database.Type, strings.Join(validTypes, ", "))
+	}
+
+	// Validate database path for SQLite
+	if c.Database.Type == "sqlite" {
+		if c.Database.Path == "" {
+			return fmt.Errorf("database path is required when using sqlite database type")
+		}
+		// Basic path validation - should not be just a directory separator or contain invalid characters
+		if strings.TrimSpace(c.Database.Path) == "" {
+			return fmt.Errorf("database path cannot be empty or only whitespace")
+		}
+		if strings.Contains(c.Database.Path, "..") {
+			return fmt.Errorf("database path cannot contain '..' for security reasons")
+		}
+	}
+
+	return nil
 }
 
 // Type alias for backward compatibility
@@ -399,13 +454,21 @@ func (c *Config) SetDefaults() {
 		c.Security.DeviceCodeExpirySeconds = 1800 // 30 minutes
 	}
 
+	// Set default database values
+	if c.Database.Type == "" {
+		c.Database.Type = "memory" // Default to memory storex
+	}
+	if c.Database.Path == "" && c.Database.Type == "sqlite" {
+		c.Database.Path = "oauth2.db" // Default SQLite path
+	}
+
 	// Set default API protection values (disabled by default for security)
 	// These should be explicitly enabled by administrators
-	if c.Security.EnableRegistrationAPI == false && os.Getenv("ENABLE_REGISTRATION_API") == "" {
+	if !c.Security.EnableRegistrationAPI && os.Getenv("ENABLE_REGISTRATION_API") == "" {
 		// Default is false - registration API is disabled
 		c.Security.EnableRegistrationAPI = false
 	}
-	if c.Security.EnableTrustAnchorAPI == false && os.Getenv("ENABLE_TRUST_ANCHOR_API") == "" {
+	if !c.Security.EnableTrustAnchorAPI && os.Getenv("ENABLE_TRUST_ANCHOR_API") == "" {
 		// Default is false - trust anchor API is disabled
 		c.Security.EnableTrustAnchorAPI = false
 	}

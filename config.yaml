@@ -10,12 +10,16 @@ server:
 
 security:
   jwt_signing_key: "abcdefghijklmnopqrstuvwxyz123456"
+  encryption_key: "abcdefghijklmnopqrstuvwxyz123456" # 32 bytes for AES-256
   token_expiry_seconds: 3600
   refresh_token_expiry_seconds: 86400
   device_code_expiry_seconds: 600
   authorization_code_expiry_seconds: 300
   enable_pkce: true
   require_https: false
+  api_key: ""
+  enable_registration_api: true
+  privileged_client_id: "server-owned-client"
 
 proxy:
   trust_headers: true
@@ -29,6 +33,10 @@ logging:
   level: "debug"
   format: "json"
   enable_audit: true
+
+database:
+  type: "sqlite" # Options: "memory" or "sqlite"
+  path: "oauth2.db" # SQLite database file path (only used when type is "sqlite")
 
 # OAuth 2.0 Attestation-Based Client Authentication
 # https://datatracker.ietf.org/doc/html/draft-ietf-oauth-attestation-based-client-auth-07
@@ -208,7 +216,8 @@ clients:
   name: "Smart TV Application"
   description: "Smart TV or IoT device application"
   public: true
-  redirect_uris: []
+  redirect_uris:
+  - "urn:ietf:wg:oauth:2.0:oob"
   grant_types:
   - "urn:ietf:params:oauth:grant-type:device_code"
   - "refresh_token"
@@ -220,9 +229,28 @@ clients:
   - "offline_access"
   audience:
   - "api-service"
-  token_endpoint_auth_method: "client_secret_basic"
+  token_endpoint_auth_method: "none"
   enabled_flows:
   - "device_code"
+
+# Server-owned privileged client for administrative operations
+- id: "server-owned-client"
+  secret: "server-admin-secret"
+  name: "Server Admin Client"
+  description: "Privileged client owned by the OAuth server for administrative operations"
+  redirect_uris: []
+  grant_types:
+  - "client_credentials"
+  response_types: []
+  scopes:
+  - "openid"
+  - "admin"
+  audience:
+  - "api-service"
+  token_endpoint_auth_method: "client_secret_basic"
+  public: false
+  enabled_flows:
+  - "client_credentials"
 
 users:
 # Test users for development and testing

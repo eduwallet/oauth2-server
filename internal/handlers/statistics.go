@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"oauth2-server/internal/metrics"
-
-	"github.com/ory/fosite/storage"
+	"oauth2-server/internal/store"
 )
 
 // StatisticsHandler handles statistics requests
 type StatisticsHandler struct {
-	MemoryStore *storage.MemoryStore
-	Metrics     *metrics.MetricsCollector
+	Storage store.Storage
+	Metrics *metrics.MetricsCollector
 }
 
 // ServeHTTP implements http.Handler (updated for struct return)
@@ -24,14 +23,19 @@ func (h *StatisticsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get counts from storage (ignore errors for stats)
+	accessTokenCount, _ := h.Storage.GetAccessTokenCount()
+	clientCount, _ := h.Storage.GetClientCount()
+	userCount, _ := h.Storage.GetUserCount()
+
 	stats := map[string]interface{}{
 		"server": map[string]interface{}{
 			"version": "1.0.0", // You could pull this from config
 			"status":  "running",
 		},
-		"tokens":  len(h.MemoryStore.AccessTokens),
-		"clients": len(h.MemoryStore.Clients),
-		"users":   len(h.MemoryStore.Users),
+		"tokens":  accessTokenCount,
+		"clients": clientCount,
+		"users":   userCount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

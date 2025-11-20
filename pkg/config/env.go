@@ -26,6 +26,14 @@ func (c *Config) LoadFromEnv() {
 		c.Server.Host = host
 	}
 
+	// Database configuration overrides
+	if storageType := os.Getenv("DATABASE_TYPE"); storageType != "" {
+		c.Database.Type = storageType
+	}
+	if storagePath := os.Getenv("DATABASE_PATH"); storagePath != "" {
+		c.Database.Path = storagePath
+	}
+
 	// Proxy configuration overrides
 	if trustHeaders := os.Getenv("TRUST_PROXY_HEADERS"); trustHeaders != "" {
 		c.TrustProxyHeaders = GetEnvBool("TRUST_PROXY_HEADERS", true)

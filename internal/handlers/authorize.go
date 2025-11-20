@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"net/url"
 	"oauth2-server/internal/metrics"
+	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"path/filepath"
 
 	"github.com/ory/fosite"
-	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
 
@@ -20,18 +20,18 @@ type AuthorizeHandler struct {
 	Configuration      *config.Config
 	Log                *logrus.Logger
 	Metrics            *metrics.MetricsCollector
-	MemoryStore        *storage.MemoryStore
+	Storage            store.Storage
 	UpstreamSessionMap *map[string]UpstreamSessionData
 }
 
 // NewAuthorizeHandler creates a new authorization handler
-func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *config.Config, log *logrus.Logger, metricsCollector *metrics.MetricsCollector, memoryStore *storage.MemoryStore, upstreamSessionMap *map[string]UpstreamSessionData) *AuthorizeHandler {
+func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *config.Config, log *logrus.Logger, metricsCollector *metrics.MetricsCollector, storage store.Storage, upstreamSessionMap *map[string]UpstreamSessionData) *AuthorizeHandler {
 	return &AuthorizeHandler{
 		OAuth2Provider:     oauth2Provider,
 		Configuration:      configuration,
 		Log:                log,
 		Metrics:            metricsCollector,
-		MemoryStore:        memoryStore,
+		Storage:            storage,
 		UpstreamSessionMap: upstreamSessionMap,
 	}
 }
@@ -76,25 +76,40 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Log.Printf("🔍 Response types: %v", ar.GetResponseTypes())
 	h.Log.Printf("🔍 Requested scopes: %v", ar.GetRequestedScopes())
 
-	// Normally, this would be the place where you would check if the user is logged in and gives his consent.
-	// We're simplifying things and just checking if the request includes a valid username
 	r.ParseForm()
 	username := r.PostForm.Get("username")
 
 	if username == "" {
-		// Show unified authorization template for login
+		// Show login form
 		h.showAuthorizationTemplate(w, r, ar, "", false)
 		return
 	}
 
-	// let's see what scopes the user gave consent to
+	// Validate user credentials (simplified - just check if user exists)
+	var userExists bool
+	for _, user := range h.Configuration.Users {
+		if user.Username == username {
+			userExists = true
+			break
+		}
+	}
+
+	if !userExists {
+		h.Log.Printf("❌ Invalid username: %s", username)
+		h.showAuthorizationTemplate(w, r, ar, "Invalid username or password", false)
+		return
+	}
+
+	h.Log.Printf("✅ User authenticated: %s", username)
+
+	// Grant requested scopes
 	queryScopes := r.URL.Query()["scope"]
 	if len(queryScopes) > 0 {
 		for _, scope := range queryScopes {
 			ar.GrantScope(scope)
 		}
 	} else {
-		// Default to openid scope when no scope query parameter is provided
+		// Default to openid scope
 		ar.GrantScope("openid")
 	}
 
@@ -309,8 +324,8 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	clientID := q.Get("client_id")
 	redirectURI := q.Get("redirect_uri")
 
-	// Validate client exists in our memory store
-	if _, ok := h.MemoryStore.Clients[clientID]; !ok {
+	// Validate client exists in our storage
+	if _, err := h.Storage.GetClient(r.Context(), clientID); err != nil {
 		http.Error(w, "unknown or unregistered client_id", http.StatusBadRequest)
 		return
 	}

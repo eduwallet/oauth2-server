@@ -3,6 +3,7 @@ package middleware
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -122,20 +123,20 @@ func APIKeyAuth(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
 			}
 
 			if apiKey == "" {
-				log.Printf("⚠️  API key authentication disabled (no API key configured)")
+				log.Printf("⚠️  API key authentication disabled (no API key configured: '%s')", apiKey)
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			// Check for API key in header
-			authHeader := r.Header.Get("X-API-Key")
+			authHeader := strings.TrimSpace(r.Header.Get("X-API-Key"))
 			if authHeader == "" {
 				log.Printf("❌ API key authentication failed: missing X-API-Key header")
 				http.Error(w, "API key required", http.StatusUnauthorized)
 				return
 			}
 
-			if authHeader != apiKey {
+			if authHeader != strings.TrimSpace(apiKey) {
 				log.Printf("❌ API key authentication failed: invalid API key")
 				http.Error(w, "Invalid API key", http.StatusUnauthorized)
 				return
