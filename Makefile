@@ -167,43 +167,27 @@ setup-env:
 	@echo "Or run this command to add it temporarily:"
 	@echo "export PATH=\"$(shell go env GOPATH)/bin:\$$PATH\""
 
-# Test target - runs all test scripts with server lifecycle management
+# Test target - runs all test scripts with server lifecycle management and isolation
 test: build
-	@echo "🧪 Starting automated test suite..."
+	@echo "🧪 Starting automated test suite with test isolation..."
 	@echo "📦 Building server..."
 	@$(MAKE) build
-	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
-	@echo "⏳ Waiting for server to start..."
-	@sleep 3
-	@echo "🔍 Testing server health..."
-	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
-		echo "❌ Server failed to start"; \
-		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
-		exit 1; \
-	fi
-	@echo "✅ Server is healthy, running test scripts..."
+	@echo "✅ Test setup complete, running test scripts with server isolation..."
 	@passed=0; failed=0; \
 	for script in tests/test_*.sh; do \
 		if [ -f "$$script" ]; then \
-			echo "🧪 Running $$script..."; \
-			if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash "$$script"; then \
+			echo "🧪 Running $$script with fresh server instance..."; \
+			$(MAKE) test-script SCRIPT=$$(basename $$script) && { \
 				echo "✅ $$script passed"; \
 				passed=$$((passed + 1)); \
-			else \
+			} || { \
 				echo "❌ $$script failed"; \
 				failed=$$((failed + 1)); \
-			fi; \
+			}; \
 			echo ""; \
 		fi; \
 	done; \
 	echo "📊 Test Results: $$passed passed, $$failed failed"; \
-	if [ -f server.pid ]; then \
-		echo "🛑 Stopping server..."; \
-		kill $$(cat server.pid) 2>/dev/null || true; \
-		rm -f server.pid; \
-	fi; \
-	rm -f server-test.log; \
 	if [ $$failed -gt 0 ]; then \
 		echo "❌ Some tests failed"; \
 		exit 1; \
@@ -211,52 +195,32 @@ test: build
 		echo "✅ All tests passed!"; \
 	fi
 
-# Test with verbose output
+# Test with verbose output and isolation
 test-verbose: build
-	@echo "🧪 Starting automated test suite (verbose mode)..."
+	@echo "🧪 Starting automated test suite (verbose mode with isolation)..."
 	@echo "📦 Building server..."
 	@$(MAKE) build
-	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
-	@echo "⏳ Waiting for server to start..."
-	@sleep 3
-	@echo "🔍 Testing server health..."
-	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
-		echo "❌ Server failed to start"; \
-		echo "Server logs:"; \
-		cat server-test.log; \
-		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
-		exit 1; \
-	fi
-	@echo "✅ Server is healthy, running test scripts..."
+	@echo "✅ Test setup complete, running test scripts with server isolation..."
 	@passed=0; failed=0; \
 	for script in tests/test_*.sh; do \
 		if [ -f "$$script" ]; then \
-			echo "🧪 Running $$script..."; \
-			if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash -x "$$script"; then \
+			echo "🧪 Running $$script with fresh server instance (verbose)..."; \
+			$(MAKE) test-script-verbose SCRIPT=$$(basename $$script) && { \
 				echo "✅ $$script passed"; \
 				passed=$$((passed + 1)); \
-			else \
+			} || { \
 				echo "❌ $$script failed"; \
 				failed=$$((failed + 1)); \
-			fi; \
+			}; \
 			echo ""; \
 		fi; \
 	done; \
 	echo "📊 Test Results: $$passed passed, $$failed failed"; \
-	if [ -f server.pid ]; then \
-		echo "🛑 Stopping server..."; \
-		kill $$(cat server.pid) 2>/dev/null || true; \
-		rm -f server.pid; \
-	fi; \
-	echo "Server logs:"; \
-	cat server-test.log; \
-	rm -f server-test.log; \
 	if [ $$failed -gt 0 ]; then \
 		echo "❌ Some tests failed"; \
 		exit 1; \
 	else \
-		echo "✅ All tests passed!"; \
+	@echo "✅ All tests passed!"; \
 	fi
 
 # Test specific script
@@ -270,10 +234,12 @@ test-script:
 		exit 1; \
 	fi
 	@echo "🧪 Testing single script: $(SCRIPT)"
-	@echo "📦 Building server..."
-	@$(MAKE) build
+	@if [ ! -f "bin/oauth2-server" ]; then \
+		echo "📦 Building server..."; \
+		$(MAKE) build; \
+	fi
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 3
 	@echo "🔍 Testing server health..."
@@ -283,8 +249,64 @@ test-script:
 		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
 		exit 1; \
 	fi
+	@echo "🔧 Setting up test certificates..."
+	@if [ -f "init-certs.sh" ]; then \
+		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" bash init-certs.sh; \
+	else \
+		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
+	fi
 	@echo "✅ Server is healthy, running $(SCRIPT)..."
 	@if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash tests/$(SCRIPT); then \
+		echo "✅ $(SCRIPT) passed"; \
+		result=0; \
+	else \
+		echo "❌ $(SCRIPT) failed"; \
+		result=1; \
+	fi; \
+	if [ -f server.pid ]; then \
+		echo "🛑 Stopping server..."; \
+		kill $$(cat server.pid) 2>/dev/null || true; \
+		rm -f server.pid; \
+	fi; \
+	echo "Server logs:"; \
+	cat server-test.log; \
+	rm -f server-test.log; \
+	exit $$result
+
+# Test specific script with verbose output
+test-script-verbose:
+	@if [ -z "$(SCRIPT)" ]; then \
+		echo "❌ Please specify a script: make test-script-verbose SCRIPT=test_device_native.sh"; \
+		exit 1; \
+	fi
+	@if [ ! -f "tests/$(SCRIPT)" ]; then \
+		echo "❌ Script tests/$(SCRIPT) not found"; \
+		exit 1; \
+	fi
+	@echo "🧪 Testing single script (verbose): $(SCRIPT)"
+	@if [ ! -f "bin/oauth2-server" ]; then \
+		echo "📦 Building server..."; \
+		$(MAKE) build; \
+	fi
+	@echo "🚀 Starting OAuth2 server in background..."
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@echo "⏳ Waiting for server to start..."
+	@sleep 3
+	@echo "🔍 Testing server health..."
+	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
+		echo "❌ Server failed to start"; \
+		cat server-test.log; \
+		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
+		exit 1; \
+	fi
+	@echo "🔧 Setting up test certificates..."
+	@if [ -f "init-certs.sh" ]; then \
+		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" bash init-certs.sh; \
+	else \
+		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
+	fi
+	@echo "✅ Server is healthy, running $(SCRIPT) (verbose)..."
+	@if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash -x tests/$(SCRIPT); then \
 		echo "✅ $(SCRIPT) passed"; \
 		result=0; \
 	else \

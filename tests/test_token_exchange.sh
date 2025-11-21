@@ -235,6 +235,13 @@ test_userinfo() {
         local username=$(echo "$userinfo_response" | jq -r '.username')
         local email=$(echo "$userinfo_response" | jq -r '.email')
         echo "   Username: $username, Email: $email" >&2
+        
+        # Verify username matches TEST_USERNAME
+        if [ "$username" != "$TEST_USERNAME" ]; then
+            echo "❌ UserInfo username mismatch: expected '$TEST_USERNAME', got '$username'" >&2
+            return 1
+        fi
+        echo "✅ UserInfo username verified: $username" >&2
         return 0
     else
         echo "❌ UserInfo failed: $userinfo_response" >&2

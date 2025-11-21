@@ -143,7 +143,7 @@ simulate_consent_approval() {
 
 # Function to poll for device token
 poll_device_token() {
-    local device_code="$1"
+    local device_code_signature="$1"
     local client_id="$2"
     local max_attempts="${3:-5}"
 
@@ -155,7 +155,7 @@ poll_device_token() {
 
         local token_response=$(curl -s -X POST "$BASE_URL/token" \
             -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=$device_code&client_id=$client_id")
+            -d "grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=$DEVICE_CODE&client_id=$client_id")
 
         echo "Token poll response: $token_response" >&2
 
@@ -243,6 +243,9 @@ echo "Device Authorization Response: $DEVICE_RESPONSE"
 # Extract device code and user code
 DEVICE_CODE=$(echo "$DEVICE_RESPONSE" | grep -o '"device_code":"[^"]*"' | sed 's/"device_code":"\([^"]*\)"/\1/')
 USER_CODE=$(echo "$DEVICE_RESPONSE" | grep -o '"user_code":"[^"]*"' | sed 's/"user_code":"\([^"]*\)"/\1/')
+
+# For token request, use the full device code (not just the signature part)
+# DEVICE_CODE_SIGNATURE=$(echo "$DEVICE_CODE" | sed 's/.*\.//')
 
 if [ -z "$DEVICE_CODE" ] || [ -z "$USER_CODE" ]; then
     echo "❌ Failed to get device/user codes"

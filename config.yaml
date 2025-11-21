@@ -44,11 +44,11 @@ attestation:
   enabled: true # Enable attestation feature for demo
   experimental: true # Mark as experimental feature
   trust_anchors:
-  # - name: "hsm_ca"
-  #   type: "hsm"
-  #   certificate_path: "/tmp/certs/hsm_ca.pem"
-  #   enabled: true
-  #   description: "HSM root CA certificate"
+  - name: "hsm_ca"
+    type: "hsm"
+    certificate_path: "/tmp/certs/hsm_ca.pem"
+    enabled: true
+    description: "HSM root CA certificate"
   - name: "test-trust-anchor"
     type: "test"
     certificate_path: "/tmp/certs/test-trust-anchor.pem"

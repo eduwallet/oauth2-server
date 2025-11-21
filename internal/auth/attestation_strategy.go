@@ -65,6 +65,20 @@ func (s *AttestationClientAuthStrategy) AuthenticateClient(ctx context.Context, 
 	return s.authenticateStandard(ctx, r, form)
 }
 
+// AttestationClientWrapper wraps a fosite client to override IsPublic for attestation-authenticated clients
+type AttestationClientWrapper struct {
+	fosite.Client
+	attestationAuthenticated bool
+}
+
+// IsPublic returns false for attestation-authenticated clients to allow client_credentials grant
+func (w *AttestationClientWrapper) IsPublic() bool {
+	if w.attestationAuthenticated {
+		return false
+	}
+	return w.Client.IsPublic()
+}
+
 // authenticateWithAttestation handles attestation-based client authentication
 func (s *AttestationClientAuthStrategy) authenticateWithAttestation(ctx context.Context, form url.Values, authMethod string) (fosite.Client, error) {
 	clientID := form.Get("client_id")
@@ -119,7 +133,13 @@ func (s *AttestationClientAuthStrategy) authenticateWithAttestation(ctx context.
 	// Store attestation result in request context for later use
 	ctx = attestation.WithAttestationResult(ctx, result)
 
-	return client, nil
+	// Wrap the client to override IsPublic for attestation authentication
+	wrappedClient := &AttestationClientWrapper{
+		Client:                   client,
+		attestationAuthenticated: true,
+	}
+
+	return wrappedClient, nil
 }
 
 // authenticateStandard handles standard OAuth2 client authentication methods

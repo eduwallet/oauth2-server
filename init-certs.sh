@@ -1,5 +1,23 @@
 #!/bin/sh
 set -e
+
+# Parse command line arguments
+OAUTH_URL="${OAUTH_URL:-http://oauth2-server:8080}"
+for arg in "$@"; do
+    case $arg in
+        url=*)
+            OAUTH_URL="${arg#url=}"
+            ;;
+        *)
+            echo "Unknown parameter: $arg"
+            echo "Usage: $0 [url=http://oauth-server-url]"
+            exit 1
+            ;;
+    esac
+done
+
+echo "Using OAuth server URL: $OAUTH_URL"
+
 CERT_DIR="/tmp/certs"
 CERT_FILE="$CERT_DIR/hsm_ca.pem"
 
@@ -28,7 +46,7 @@ fi
 
 # Upload certificate to oauth2-server
 echo "Uploading trust anchor certificate to oauth2-server..."
-curl -X POST http://oauth2-server:8080/trust-anchor/hsm_ca \
+curl -X POST "$OAUTH_URL/trust-anchor/hsm_ca" \
     -H "X-API-Key: ${API_KEY}" \
   -F "certificate=@$CERT_FILE" \
   --max-time 30 \

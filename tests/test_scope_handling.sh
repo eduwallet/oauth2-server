@@ -129,6 +129,13 @@ perform_auth_flow() {
                 local email=$(echo "$userinfo_response" | jq -r '.email')
                 echo "   Username: $username" >&2
                 echo "   Email: $email" >&2
+                
+                # Verify username matches TEST_USERNAME
+                if [ "$username" != "$TEST_USERNAME" ]; then
+                    echo "❌ UserInfo username mismatch: expected '$TEST_USERNAME', got '$username'" >&2
+                    return 1
+                fi
+                echo "✅ UserInfo username verified: $username" >&2
             else
                 echo "❌ UserInfo failed: $userinfo_response" >&2
                 return 1

@@ -40,19 +40,17 @@ print_status() {
 create_mock_jwt() {
     local client_id="$1"
 
-    print_status "info" "Creating mock JWT attestation token..."
-
-    # Create JWT header with x5c (certificate chain) - required for attestation
-    local header='{"alg":"ES256","typ":"JWT","x5c":["MIIDjTCCAnWgAwIBAgIUQ/009jM/VwvsjqJ3soKcP82Or8cwDQYJKoZIhvcNAQELBQAwVjELMAkGA1UEBhMCVVMxDTALBgNVBAgMBFRlc3QxDTALBgNVBAcMBFRlc3QxDTALBgNVBAoMBFRlc3QxGjAYBgNVBAMMEXRlc3QtdHJ1c3QtYW5jaG9yMB4XDTI1MTEyMDE0MzcwNFoXDTI2MTEyMDE0MzcwNFowVjELMAkGA1UEBhMCVVMxDTALBgNVBAgMBFRlc3QxDTALBgNVBAcMBFRlc3QxDTALBgNVBAoMBFRlc3QxGjAYBgNVBAMMEXRlc3QtdHJ1c3QtYW5jaG9yMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5i+Re4kBNjL4FDEAO3HbANAEBxJ2XDxrpIdlt5X4IxPjtDRQnzJHcR4hFtG/vd+DcCxvn39ZSkk1CZUQ4POkhwC6QEiriCSiruiMH2rfDQBrpHPK/TU9HHEEHukvXeRsxq6UUNANkfC0D4JbhoGwY88MgqsAVUlad8cXXibU3ALhltn4NJkhER04C6bP"]}'
-    local header_b64=$(echo -n "$header" | base64 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
+    # Create JWT header (no x5c for simplified testing)
+    local header='{"alg":"ES256","typ":"JWT"}'
+    local header_b64=$(echo -n "$header" | base64 -w 0 | tr '+/' '-_' | tr -d '=')
 
     # Create JWT payload with attestation claims
     local now=$(date +%s)
     local exp=$((now + 3600))
     local iat=$now
 
-    local payload="{\"iss\":\"test-attestor\",\"sub\":\"$client_id\",\"aud\":\"$SERVER_URL\",\"iat\":$iat,\"exp\":$exp,\"cnf\":{\"jwk\":{\"kty\":\"RSA\",\"n\":\"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtmUAmh9K8X1GYTAJwTDFbU4Y6iWJ\",\"e\":\"AQAB\"}},\"att_type\":\"hsm\",\"att_level\":\"high\",\"att_hardware_backed\":true,\"att_device_integrity\":\"verified\",\"nonce\":\"test-nonce-123\"}"
-    local payload_b64=$(echo -n "$payload" | base64 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
+    local payload="{\"iss\":\"test-attestor\",\"sub\":\"$client_id\",\"aud\":\"$SERVER_URL\",\"iat\":$iat,\"exp\":$exp,\"att_type\":\"hsm\",\"att_level\":\"high\",\"att_hardware_backed\":true,\"att_device_integrity\":\"verified\",\"nonce\":\"test-nonce-123\"}"
+    local payload_b64=$(echo -n "$payload" | base64 -w 0 | tr '+/' '-_' | tr -d '=')
 
     # Create a simple signature (this won't validate cryptographically but allows testing the parsing)
     local signature="dGVzdCBzaWduYXR1cmU"  # base64url encoded "test signature"

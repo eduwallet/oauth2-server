@@ -92,6 +92,15 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 
 	grantType := r.FormValue("grant_type")
 
+	// WORKAROUND: Fosite incorrectly validates redirect_uri for device_code grant type
+	// Add redirect_uri to the request for device_code grant type to work around the bug
+	if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
+		if r.FormValue("redirect_uri") == "" {
+			r.Form.Set("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+			h.Log.Printf("🔄 WORKAROUND: Added redirect_uri for device_code grant type")
+		}
+	}
+
 	// Check if proxy mode is enabled and if we should proxy this request
 	if h.Configuration.IsProxyMode() && grantType == "authorization_code" {
 		h.handleProxyToken(w, r)
@@ -110,9 +119,13 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	// Let fosite handle ALL token requests natively, including device code flow and refresh tokens
 	// Use a consistent session for all requests - fosite will manage session retrieval for refresh tokens
 	session := &openid.DefaultSession{}
-	if grantType != "authorization_code" {
+	h.Log.Printf("🔍 Token: Grant type check - grantType='%s', is_auth_code=%t, is_device_code=%t", grantType, grantType == "authorization_code", grantType == "urn:ietf:params:oauth:grant-type:device_code")
+	if grantType != "authorization_code" && grantType != "urn:ietf:params:oauth:grant-type:device_code" {
 		session.Subject = clientID
 		session.Username = clientID
+		h.Log.Printf("🔍 Token: Set session to client_id for grant type: %s", grantType)
+	} else {
+		h.Log.Printf("🔍 Token: Left session empty for grant type: %s", grantType)
 	}
 	// Initialize session claims to prevent nil pointer issues
 	if session.Claims == nil {
@@ -184,17 +197,20 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 			session.Claims.Subject, session.Claims.Issuer)
 	}
 
-	// For client_credentials flow, fosite doesn't automatically grant scopes
-	// We need to set the granted scopes based on client configuration
+	// For client_credentials flow, fosite doesn't automatically grant scopes or audiences
+	// We need to set the granted scopes and audiences based on client configuration
 	if grantType == "client_credentials" {
 		client := accessRequest.GetClient()
 		requestedScopes := accessRequest.GetRequestedScopes()
 		clientScopes := client.GetScopes()
+		requestedAudiences := accessRequest.GetRequestedAudience()
+		clientAudiences := client.GetAudience()
 
-		h.Log.Printf("🔍 Client credentials scope handling - Client: %s, Requested: %v, Client scopes: %v",
-			client.GetID(), requestedScopes, clientScopes)
+		h.Log.Printf("🔍 Client credentials scope and audience handling - Client: %s, Requested Scopes: %v, Client scopes: %v, Requested Audiences: %v, Client audiences: %v",
+			client.GetID(), requestedScopes, clientScopes, requestedAudiences, clientAudiences)
 
 		var grantedScopes []string
+		var grantedAudiences []string
 
 		if len(requestedScopes) == 0 {
 			// If no scopes requested, grant all client scopes
@@ -213,12 +229,35 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 			h.Log.Printf("🔍 Granted intersection of scopes: %v", grantedScopes)
 		}
 
+		if len(requestedAudiences) == 0 {
+			// If no audiences requested, grant all client audiences
+			grantedAudiences = clientAudiences
+			h.Log.Printf("🔍 No audiences requested, granting all client audiences: %v", grantedAudiences)
+		} else {
+			// Grant intersection of requested and client audiences
+			for _, reqAudience := range requestedAudiences {
+				for _, clientAudience := range clientAudiences {
+					if reqAudience == clientAudience {
+						grantedAudiences = append(grantedAudiences, reqAudience)
+						break
+					}
+				}
+			}
+			h.Log.Printf("🔍 Granted intersection of audiences: %v", grantedAudiences)
+		}
+
 		// Set the granted scopes on the access request
-		// Grant the scopes we want (fosite should not have granted any for client_credentials)
 		for _, scope := range grantedScopes {
 			accessRequest.GrantScope(scope)
 		}
+
+		// Set the granted audiences on the access request
+		for _, audience := range grantedAudiences {
+			accessRequest.GrantAudience(audience)
+		}
+
 		h.Log.Printf("✅ Set granted scopes for client_credentials: %v", grantedScopes)
+		h.Log.Printf("✅ Set granted audiences for client_credentials: %v", grantedAudiences)
 	}
 
 	// Let fosite create the access response

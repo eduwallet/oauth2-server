@@ -170,8 +170,8 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	// Determine if client is public
 	// Check if explicitly set in request, otherwise infer from auth method
 	isPublic := metadata.Public
-	if !metadata.Public && metadata.TokenEndpointAuthMethod == "" {
-		// If not explicitly set and no auth method specified, infer from auth method
+	if !metadata.Public {
+		// If not explicitly set, infer from auth method
 		isPublic = (metadata.TokenEndpointAuthMethod == "none")
 	}
 	h.log.Printf("🔍 [REGISTRATION] Client is public: %v (explicit: %v, auth_method: %s, has_attestation: %v)", isPublic, metadata.Public, metadata.TokenEndpointAuthMethod, metadata.AttestationConfig != nil)
@@ -333,13 +333,13 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		h.log.Printf("🔍 [REGISTRATION] Added client ID to audience: %v", audience)
 	}
 
-	// For public clients (auth_method = "none"), add the privileged client to audience for token introspection
-	h.log.Printf("🔍 [REGISTRATION] Checking privileged client addition: auth_method='%s', config=%v, privileged_id='%s'", metadata.TokenEndpointAuthMethod, h.config != nil, h.config.Security.PrivilegedClientID)
-	if metadata.TokenEndpointAuthMethod == "none" && h.config != nil && h.config.Security.PrivilegedClientID != "" {
+	// For public clients OR clients with attestation config, add the privileged client to audience for token introspection
+	h.log.Printf("🔍 [REGISTRATION] Checking privileged client addition: isPublic=%v, hasAttestation=%v, config=%v, privileged_id='%s'", isPublic, finalAttestationConfig != nil, h.config != nil, h.config.Security.PrivilegedClientID)
+	if (isPublic || finalAttestationConfig != nil) && h.config != nil && h.config.Security.PrivilegedClientID != "" {
 		h.log.Printf("🔍 [REGISTRATION] Condition met for privileged client addition")
 		if !contains(audience, h.config.Security.PrivilegedClientID) {
 			audience = append(audience, h.config.Security.PrivilegedClientID)
-			h.log.Printf("🔍 [REGISTRATION] Added privileged client %s to audience for public client (auth_method=none): %v", h.config.Security.PrivilegedClientID, audience)
+			h.log.Printf("🔍 [REGISTRATION] Added privileged client %s to audience for client: %v", h.config.Security.PrivilegedClientID, audience)
 		} else {
 			h.log.Printf("🔍 [REGISTRATION] Privileged client %s already in audience", h.config.Security.PrivilegedClientID)
 		}
