@@ -14,6 +14,18 @@ else
     echo "Certificate already exists at $CERT_FILE"
 fi
 
+# Also create a test trust anchor certificate
+TEST_CERT_FILE="$CERT_DIR/test-trust-anchor.pem"
+if [ ! -f "$TEST_CERT_FILE" ]; then
+    echo "Generating test trust anchor certificate..."
+    openssl ecparam -name prime256v1 -genkey -noout -out "$CERT_DIR/test-trust-anchor.key"
+    openssl req -x509 -new -key "$CERT_DIR/test-trust-anchor.key" -sha256 -days 365 -out "$TEST_CERT_FILE" -subj "/CN=TestTrustAnchor/O=Demo/C=US"
+    echo "Test certificate generated at $TEST_CERT_FILE"
+else
+    echo "Test certificate already exists at $TEST_CERT_FILE"
+fi
+
+
 # Upload certificate to oauth2-server
 echo "Uploading trust anchor certificate to oauth2-server..."
 curl -X POST http://oauth2-server:8080/trust-anchor/hsm_ca \

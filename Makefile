@@ -173,7 +173,7 @@ test: build
 	@echo "📦 Building server..."
 	@$(MAKE) build
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 3
 	@echo "🔍 Testing server health..."
@@ -217,7 +217,7 @@ test-verbose: build
 	@echo "📦 Building server..."
 	@$(MAKE) build
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 3
 	@echo "🔍 Testing server health..."
@@ -273,7 +273,7 @@ test-script:
 	@echo "📦 Building server..."
 	@$(MAKE) build
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 3
 	@echo "🔍 Testing server health..."
@@ -296,6 +296,8 @@ test-script:
 		kill $$(cat server.pid) 2>/dev/null || true; \
 		rm -f server.pid; \
 	fi; \
+	echo "Server logs:"; \
+	cat server-test.log; \
 	rm -f server-test.log; \
 	exit $$result
 

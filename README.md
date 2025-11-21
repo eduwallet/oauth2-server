@@ -47,6 +47,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **Multiple Methods**: Support for JWT-based and TLS certificate-based attestation
 - **Proxy Mode Support**: Attestation verification in proxy flows before upstream communication
 - **Comprehensive Debugging**: Detailed logging for attestation verification steps
+- **Privileged Client Audience Inclusion**: Attestation-enabled clients automatically get privileged clients added to their audience for token introspection access
 - **Standards Compliance**: Follows draft-ietf-oauth-attestation-based-client-auth-07
 
 ### 🛡️ Trust Anchor Management
@@ -75,6 +76,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 
 ### Extensions
 - 🛡️ **Trust Anchor Management API** - Dynamic certificate management for attestation validation
+- 🔐 **Privileged Client Audience Inclusion** - Automatic audience management for attestation-enabled clients enabling privileged client token introspection
 
 ### Production Features
 - ✅ Kubernetes native
@@ -97,11 +99,8 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **pkg/config/**: Configuration management.
 - **helm/oauth2-server/**: Kubernetes Helm chart for deployment.
 - **.env.example**: Environment variables template for proxy mode and server configuration.
-- **static/**: Static web assets (minimal, if any).
-- **docker-compose.yml**: Docker Compose configuration for local development.
-- **Dockerfile**: Container image definition.
-- **Makefile**: Build and development automation.
-- **go.mod** / **go.sum**: Go module dependencies.
+- **tests/**: Comprehensive test suite for OAuth2 flows, attestation features, and privileged client functionality
+  - `test_attestation_privileged_audience.sh`: Validates privileged client audience inclusion for attestation-enabled clients
 
 ## Features
 
@@ -140,6 +139,68 @@ go run cmd/server/main.go
 kubectl create namespace oauth2-server
 helm install oauth2-server ./helm/oauth2-server -n oauth2-server --set config.server.baseUrl="https://your-domain.com" --set config.jwt.secret="your-jwt-secret"
 ```
+
+## Testing
+
+The server includes comprehensive test suites for validating OAuth2 flows, attestation features, and security functionality.
+
+### Running Tests
+
+```bash
+# Run all tests
+make test
+
+# Run specific test script
+make test-script SCRIPT=test_attestation_privileged_audience.sh
+
+# Run tests with coverage
+make test-coverage
+```
+
+### Test Scripts
+
+The `tests/` directory contains automated test scripts for various OAuth2 flows:
+
+- **`test_attestation_privileged_audience.sh`**: Validates privileged client audience inclusion for attestation-enabled clients
+  - Tests automatic `client_credentials` grant type addition
+  - Verifies privileged client inclusion in audience
+  - Confirms privileged client token introspection capabilities
+  - End-to-end validation of audience-based access control
+
+- **`test_auth_code_pkce.sh`**: Authorization Code flow with PKCE
+- **`test_client_registration.sh`**: Dynamic client registration
+- **`test_complete_flow.sh`**: Full OAuth2 authorization code flow
+- **`test_device_flow.sh`**: Device authorization grant
+- **`test_introspection.sh`**: Token introspection
+- **`test_oauth2_flow.sh`**: Basic OAuth2 flows
+- **`test_privileged_introspection.sh`**: Privileged client introspection
+- **`test_public_client_flow.sh`**: Public client flows
+- **`test_scope_handling.sh`**: Scope validation and handling
+- **`test_token_exchange.sh`**: Token exchange functionality
+- **`test_userinfo.sh`**: UserInfo endpoint validation
+
+### Attestation Privileged Audience Test
+
+The `test_attestation_privileged_audience.sh` script specifically validates the privileged client audience inclusion feature:
+
+```bash
+# Test privileged client audience inclusion
+make test-script SCRIPT=test_attestation_privileged_audience.sh
+```
+
+**Test Flow:**
+1. **Client Registration**: Registers attestation-enabled client with trust anchor
+2. **Grant Type Verification**: Confirms `client_credentials` grant type was automatically added
+3. **Audience Verification**: Validates privileged client (`server-owned-client`) is in audience
+4. **Token Acquisition**: Obtains privileged client access token
+5. **Introspection Validation**: Confirms privileged client can introspect attestation client tokens
+
+**Expected Results:**
+- ✅ Attestation client registration succeeds
+- ✅ `client_credentials` grant type automatically added
+- ✅ Privileged client included in audience array
+- ✅ Privileged client token retrieval works
+- ✅ Audience-based token introspection functions correctly
 
 ## Configuration
 
@@ -256,6 +317,69 @@ curl -X POST https://oauth2-server.example.com/oauth/token \
   --cert client-cert.pem \
   --key client-key.pem \
   -d "grant_type=client_credentials&client_id=attested-client"
+```
+
+### Privileged Client Audience Inclusion
+
+Attestation-enabled clients automatically receive privileged clients in their audience during dynamic registration, enabling token introspection by privileged clients. This feature ensures that privileged clients (configured as `server-owned-client` by default) can introspect tokens issued to attestation-enabled clients.
+
+#### How It Works
+
+1. **Client Registration**: When registering a client with `attestation_config`, the server automatically:
+   - Adds `client_credentials` grant type if not present
+   - Includes the privileged client ID in the client's audience array
+   - Logs the privileged client inclusion for audit purposes
+
+2. **Token Introspection**: Privileged clients can introspect tokens from attestation-enabled clients using the `/introspect` endpoint
+
+3. **Configuration**: The privileged client ID is configurable via the `PRIVILEGED_CLIENT_ID` environment variable or `config.security.privilegedClientId` in configuration files
+
+#### Example Registration
+
+```bash
+curl -X POST http://localhost:8080/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "HSM Wallet App",
+    "token_endpoint_auth_method": "attest_jwt_client_auth",
+    "grant_types": ["authorization_code"],
+    "redirect_uris": ["https://wallet.example.com/callback"],
+    "attestation_config": {
+      "allowed_methods": ["attest_jwt_client_auth"],
+      "trust_anchors": ["hsm_ca"],
+      "required_level": "high"
+    }
+  }'
+```
+
+**Response with Privileged Client Audience:**
+```json
+{
+  "client_id": "generated-client-id",
+  "client_secret_expires_at": 0,
+  "grant_types": ["authorization_code", "client_credentials"],
+  "audience": ["generated-client-id", "server-owned-client"],
+  "attestation_config": {
+    "client_id": "generated-client-id",
+    "allowed_methods": ["attest_jwt_client_auth"],
+    "trust_anchors": ["hsm_ca"],
+    "required_level": "high"
+  }
+}
+```
+
+#### Privileged Client Token Introspection
+
+```bash
+# Get privileged client token
+curl -X POST http://localhost:8080/token \
+  -u "server-owned-client:server-admin-secret" \
+  -d "grant_type=client_credentials&scope=admin"
+
+# Introspect attestation client token
+curl -X POST http://localhost:8080/introspect \
+  -u "server-owned-client:server-admin-secret" \
+  -d "token=<attestation_client_token>"
 ```
 
 ### Configuration
@@ -651,7 +775,7 @@ curl -X POST http://localhost:8080/register \
 
 #### Client Registration with Attestation Configuration
 
-Register a client with attestation-based authentication:
+Register a client with attestation-based authentication. **Attestation-enabled clients automatically receive privileged clients in their audience for token introspection access**:
 
 ```bash
 curl -X POST http://localhost:8080/register \
@@ -671,7 +795,7 @@ curl -X POST http://localhost:8080/register \
   }'
 ```
 
-**Response:**
+**Response with Privileged Client Audience:**
 ```json
 {
   "client_id": "generated-client-id",
@@ -682,11 +806,11 @@ curl -X POST http://localhost:8080/register \
   "client_id_issued_at": 1699275600,
   "redirect_uris": ["https://wallet.example.com/callback"],
   "token_endpoint_auth_method": "attest_jwt_client_auth",
-  "grant_types": ["authorization_code", "refresh_token"],
+  "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
   "response_types": ["code"],
   "client_name": "HSM Attestation Wallet",
   "scope": "openid profile",
-  "audience": ["generated-client-id"],
+  "audience": ["generated-client-id", "server-owned-client"],
   "attestation_config": {
     "client_id": "hsm-wallet-client",
     "allowed_methods": ["attest_jwt_client_auth"],
@@ -696,7 +820,7 @@ curl -X POST http://localhost:8080/register \
 }
 ```
 
-**Note**: Trust anchor names in the `attestation_config.trust_anchors` array are automatically resolved to their file paths during registration. The uploaded trust anchor "hsm-ca" becomes "/tmp/trust-anchors/hsm-ca.pem" in the stored configuration.
+**Note**: The `client_credentials` grant type and privileged client (`server-owned-client`) are automatically added to attestation-enabled clients for token introspection capabilities.
 
 ### Complete Attestation Setup Workflow
 

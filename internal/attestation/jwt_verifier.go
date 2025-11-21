@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"strings"
@@ -50,22 +51,19 @@ func NewJWTVerifier(clientID string, trustAnchors []string, logger *logrus.Logge
 func (v *JWTVerifier) VerifyAttestation(token string) (*AttestationResult, error) {
 	fmt.Printf("[DEBUG] JWT attestation verification starting for client: %s\n", v.clientID)
 
-	// Parse the JWT without verification first to get the header
-	unverifiedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		// Return nil to get an unverified token for header inspection
-		return nil, fmt.Errorf("unverified")
-	})
-
-	fmt.Printf("[DEBUG] JWT header: %+v\n", unverifiedToken.Header)
-	if err != nil && unverifiedToken == nil {
-		fmt.Printf("[DEBUG] Failed to parse JWT: %v\n", err)
+	// Parse the JWT header manually to extract x5c without full verification
+	header, _, _, err := v.parseJWTManually(token)
+	if err != nil {
+		fmt.Printf("[DEBUG] Failed to parse JWT manually: %v\n", err)
 		return nil, fmt.Errorf("failed to parse JWT: %w", err)
 	}
 
+	fmt.Printf("[DEBUG] JWT header parsed manually: %+v\n", header)
+
 	// Extract certificate chain from x5c header
-	x5cHeader, ok := unverifiedToken.Header["x5c"]
+	x5cHeader, ok := header["x5c"]
 	if !ok {
-		fmt.Printf("[DEBUG] x5c header missing in JWT header: %+v\n", unverifiedToken.Header)
+		fmt.Printf("[DEBUG] x5c header missing in JWT header: %+v\n", header)
 		return nil, fmt.Errorf("missing x5c certificate chain in JWT header")
 	}
 
@@ -104,11 +102,6 @@ func (v *JWTVerifier) VerifyAttestation(token string) (*AttestationResult, error
 		return nil, fmt.Errorf("failed to parse leaf certificate: %w", err)
 	}
 	fmt.Printf("[DEBUG] Leaf certificate parsed successfully - Subject: %s, Issuer: %s\n", leafCert.Subject.String(), leafCert.Issuer.String())
-
-	// // Verify certificate chain
-	// if err := v.verifyCertificateChain(x5cArray); err != nil {
-	// 	return nil, fmt.Errorf("certificate chain verification failed: %w", err)
-	// }
 
 	// Parse and verify the JWT with the leaf certificate's public key
 	fmt.Printf("[DEBUG] Verifying JWT signature with leaf certificate public key\n")
@@ -406,6 +399,28 @@ func parseCertificateFromBase64(certB64 string) (*x509.Certificate, error) {
 	}
 
 	return cert, nil
+}
+
+// parseJWTManually parses a JWT token manually to extract header, payload, and signature without verification
+func (v *JWTVerifier) parseJWTManually(token string) (map[string]interface{}, string, string, error) {
+	// Split the JWT into parts
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, "", "", fmt.Errorf("invalid JWT format: expected 3 parts, got %d", len(parts))
+	}
+
+	// Decode header
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, "", "", fmt.Errorf("failed to decode JWT header: %w", err)
+	}
+
+	var header map[string]interface{}
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		return nil, "", "", fmt.Errorf("failed to unmarshal JWT header: %w", err)
+	}
+
+	return header, parts[1], parts[2], nil
 }
 
 // AttestationClaims represents structured attestation claims

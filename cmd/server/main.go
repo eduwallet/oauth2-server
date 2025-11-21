@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"oauth2-server/internal/attestation"
+	"oauth2-server/internal/auth"
 	"oauth2-server/internal/handlers"
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/middleware"
@@ -144,6 +145,8 @@ func main() {
 	_ = godotenv.Load()
 	log.Printf("✅ Environment variables loaded (if .env file exists)")
 
+	log.Printf("DEBUG: UPSTREAM_PROVIDER_URL: %s", os.Getenv("UPSTREAM_PROVIDER_URL"))
+
 	// Load configuration from YAML
 	var err error
 	configuration, err = config.Load()
@@ -186,6 +189,7 @@ func main() {
 
 	log.Printf("✅ Configuration loaded successfully")
 	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
+	log.Printf("🔧 Privileged Client ID: %s", configuration.Security.PrivilegedClientID)
 
 	// Initialize secret manager for encrypted storage
 	secretManager = store.NewSecretManager([]byte(configuration.Security.EncryptionKey))
@@ -423,6 +427,23 @@ func initializeClients() error {
 			client.Audience = []string{client.ID}
 		}
 
+		if client.Public {
+			// Add privileged client to audience for token introspection
+			privilegedID := configuration.Security.PrivilegedClientID
+			if privilegedID != "" {
+				found := false
+				for _, aud := range client.Audience {
+					if aud == privilegedID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					client.Audience = append(client.Audience, privilegedID)
+				}
+			}
+		}
+
 		newClient := &fosite.DefaultClient{
 			ID:            client.ID,
 			Secret:        hashedSecret,
@@ -511,6 +532,13 @@ func initializeOAuth2Provider() error {
 	}
 	log.Printf("✅ Fosite config created")
 
+	// Set up custom client authentication strategy for attestation support
+	if attestationManager != nil {
+		authStrategy := auth.NewAttestationClientAuthStrategy(attestationManager, customStorage, configuration)
+		config.ClientAuthenticationStrategy = authStrategy
+		log.Printf("✅ Custom attestation client authentication strategy configured")
+	}
+
 	// Setup the RFC8693 handler...
 	AccessTokenStrategy = compose.NewOAuth2HMACStrategy(config)
 	RefreshTokenStrategy = compose.NewOAuth2HMACStrategy(config)
@@ -574,7 +602,7 @@ func initializeHandlers() {
 	handlers.SetVersionInfo(Version, GitCommit, BuildTime)
 
 	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
-	registrationHandler = handlers.NewRegistrationHandler(customStorage, secretManager, trustAnchorHandler, attestationManager)
+	registrationHandler = handlers.NewRegistrationHandler(customStorage, secretManager, trustAnchorHandler, attestationManager, configuration, log)
 	healthHandler = handlers.NewHealthHandler(configuration, dataStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)
 

@@ -28,6 +28,7 @@ import (
 type fositeClientKey string
 
 const clientContextKey fositeClientKey = "client"
+const proxyTokenContextKey = "proxy_token"
 
 // TokenHandler manages OAuth2 token requests using pure fosite implementation
 type TokenHandler struct {
@@ -101,60 +102,8 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	clientID := r.FormValue("client_id")
 	h.Log.Printf("🔍 Token request - Grant Type: %s, Client ID: %s", grantType, clientID)
 
-	// Check for attestation-based authentication
-	attestationPerformed := false
-	if performed, err := h.handleAttestationAuthentication(r); err != nil {
-		h.Log.Printf("❌ Attestation authentication failed: %v", err)
-		if h.Metrics != nil {
-			h.Metrics.RecordTokenRequest(grantType, clientID, "attestation_error")
-		}
-		http.Error(w, "Attestation authentication failed", http.StatusUnauthorized)
-		return
-	} else {
-		attestationPerformed = performed
-		if attestationPerformed {
-			h.Log.Printf("✅ Attestation verified for client: %s", clientID)
-		}
-	}
-
-	// Check for standard JWT client assertion authentication
-	jwtAssertionPerformed := false
-	if !attestationPerformed && r.FormValue("client_assertion_type") == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
-		if err := h.handleJWTClientAssertion(r); err != nil {
-			h.Log.Printf("❌ JWT client assertion failed: %v", err)
-			if h.Metrics != nil {
-				h.Metrics.RecordTokenRequest(grantType, clientID, "jwt_assertion_error")
-			}
-			http.Error(w, "JWT client assertion failed", http.StatusUnauthorized)
-			return
-		}
-		jwtAssertionPerformed = true
-		h.Log.Printf("✅ JWT client assertion verified for client: %s", clientID)
-	}
-
-	// If attestation or JWT assertion was performed, remove the client_assertion parameters
-	// Fosite will skip client authentication since authentication is complete
-	if attestationPerformed || jwtAssertionPerformed {
-		if err := r.ParseForm(); err == nil {
-			// Remove assertion parameters since authentication is complete
-			r.Form.Del("client_assertion")
-			r.Form.Del("client_assertion_type")
-			r.PostForm.Del("client_assertion")
-			r.PostForm.Del("client_assertion_type")
-		}
-		// For attestation/JWT clients, use client_credentials grant type to mimic local token call
-		// But keep authorization_code grant type for authorization code flows
-		if grantType != "authorization_code" {
-			r.Form.Set("grant_type", "client_credentials")
-			// Set basic auth like in proxy token handling
-			if secret, ok := GetClientSecret(clientID, h.Storage, h.SecretManager); ok {
-				r.SetBasicAuth(clientID, secret)
-				h.Log.Printf("✅ Set basic auth for attestation/JWT client: %s", clientID)
-			}
-		} else {
-			h.Log.Printf("✅ Keeping authorization_code grant type for attested client: %s", clientID)
-		}
-	}
+	// Client authentication is now handled by our custom AuthenticateClient strategy
+	// No pre-processing needed - Fosite will call our strategy during NewAccessRequest
 
 	ctx := r.Context()
 
@@ -176,22 +125,8 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	h.Log.Printf("🔍 Token: Session before NewAccessRequest - Subject: '%s'", session.GetSubject())
 
 	// Store attestation information in session claims if attestation was performed
-	if attestationPerformed {
-		h.storeAttestationInSession(ctx, session)
-	} // Check for traditional client ID/secret authentication if neither attestation nor JWT assertion was used
-	// Skip authentication for proxy requests that are already authenticated
-	if !attestationPerformed && !jwtAssertionPerformed && r.FormValue("client_assertion") == "" && r.FormValue("proxy_authenticated") == "" {
-		if err := h.handleTraditionalAuthentication(r); err != nil {
-			h.Log.Printf("❌ Traditional authentication failed: %v", err)
-			if h.Metrics != nil {
-				h.Metrics.RecordTokenRequest(grantType, clientID, "auth_error")
-			}
-			http.Error(w, "Client authentication failed", http.StatusUnauthorized)
-			return
-		}
-	} else if r.FormValue("proxy_authenticated") == "true" {
-		h.Log.Printf("✅ Proxy request authentication bypassed for client: %s", clientID)
-	}
+	// Our AuthenticateClient strategy handles this automatically during authentication
+	h.storeAttestationInSession(ctx, session)
 
 	// Store issuer_state in session claims if available (for authorization code flow)
 	h.storeIssuerStateInSession(r, session)
@@ -394,112 +329,6 @@ func (h *TokenHandler) storeIssuerStateInSession(r *http.Request, session *openi
 			delete(*h.AuthCodeToStateMap, authCode)
 		}
 	}
-}
-
-// handleAttestationAuthentication handles attestation-based client authentication
-// Returns true if attestation was performed and succeeded, false otherwise
-func (h *TokenHandler) handleAttestationAuthentication(r *http.Request) (bool, error) {
-	// Skip if attestation manager is not available
-	if h.AttestationManager == nil {
-		return false, nil
-	}
-
-	clientID := r.FormValue("client_id")
-	if clientID == "" {
-		// Client ID might be in Authorization header for some auth methods
-		return false, nil
-	}
-
-	// Check if attestation is enabled for this client
-	if !h.AttestationManager.IsAttestationEnabled(clientID) {
-		return false, nil // Attestation not required for this client
-	}
-
-	// Determine the authentication method
-	authMethod := h.determineAuthMethod(r)
-	if authMethod == "" {
-		return false, nil // No attestation method detected
-	}
-
-	h.Log.Printf("🔍 Processing attestation auth - Client: %s, Method: %s", clientID, authMethod)
-
-	// Get the appropriate verifier
-	verifier, err := h.AttestationManager.GetVerifier(clientID, authMethod)
-	if err != nil {
-		return false, err
-	}
-
-	// Perform attestation verification based on method
-	var result *attestation.AttestationResult
-
-	h.Log.Printf("[DEBUG] Attestation verification starting for method: %s", authMethod)
-	clientAssertion := r.FormValue("client_assertion")
-	if clientAssertion != "" {
-		h.Log.Printf("[DEBUG] Raw client_assertion JWT: %s", clientAssertion)
-		// Print JWT header, payload, and signature
-		parts := strings.Split(clientAssertion, ".")
-		if len(parts) == 3 {
-			headerB64, payloadB64, sigB64 := parts[0], parts[1], parts[2]
-			h.Log.Printf("[DEBUG] JWT header (b64): %s", headerB64)
-			h.Log.Printf("[DEBUG] JWT payload (b64): %s", payloadB64)
-			h.Log.Printf("[DEBUG] JWT signature (b64): %s", sigB64)
-		} else {
-			h.Log.Printf("[DEBUG] JWT does not have 3 parts, got: %d", len(parts))
-		}
-	}
-
-	// Continue with verification
-	switch authMethod {
-	case "attest_jwt_client_auth":
-		// Extract JWT from client_assertion parameter
-		clientAssertion := r.FormValue("client_assertion")
-		if clientAssertion == "" {
-			return false, fosite.ErrInvalidRequest.WithHint("Missing client_assertion for JWT attestation")
-		}
-
-		if jwtVerifier, ok := verifier.(attestation.AttestationVerifier); ok {
-			result, err = jwtVerifier.VerifyAttestation(clientAssertion)
-		} else {
-			return false, fosite.ErrServerError.WithHint("Invalid JWT verifier")
-		}
-
-	case "attest_tls_client_auth":
-		// For TLS attestation, we need the TLS connection state
-		if tlsVerifier, ok := verifier.(attestation.TLSAttestationVerifier); ok {
-			result, err = tlsVerifier.VerifyAttestation(r)
-		} else {
-			return false, fosite.ErrServerError.WithHint("Invalid TLS verifier")
-		}
-
-	default:
-		return false, fosite.ErrInvalidRequest.WithHintf("Unsupported attestation method: %s", authMethod)
-	}
-
-	if err != nil {
-		h.Log.Printf("❌ Attestation verification failed: %v", err)
-		return false, err
-	}
-
-	if !result.Valid {
-		h.Log.Printf("❌ Invalid attestation result")
-		return false, fosite.ErrInvalidClient.WithHint("Invalid attestation")
-	}
-
-	h.Log.Printf("✅ Attestation verification successful - Client: %s, Trust Level: %s",
-		result.ClientID, result.TrustLevel)
-
-	// Get the client from store and set it in context for Fosite
-	client, err := h.Storage.GetClient(r.Context(), result.ClientID)
-	if err != nil {
-		return false, fosite.ErrInvalidClient.WithHint("Unknown client")
-	}
-	ctx := context.WithValue(r.Context(), clientContextKey, client)
-	*r = *r.WithContext(ctx)
-
-	// Store attestation result in request context for later use
-	*r = *r.WithContext(attestation.WithAttestationResult(r.Context(), result))
-
-	return true, nil
 }
 
 // handleJWTClientAssertion handles standard JWT client assertion authentication
@@ -788,24 +617,6 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 
 	h.Log.Printf("✅ [PROXY] Client validation passed for: %s", clientID)
 
-	// 🔐 [PROXY] Verify attestation for attestation-enabled clients BEFORE proxying
-	if h.AttestationManager != nil && h.AttestationManager.IsAttestationEnabled(clientID) {
-		h.Log.Printf("🔐 [PROXY] Attestation required for client: %s", clientID)
-
-		if performed, err := h.handleAttestationAuthentication(r); err != nil {
-			h.Log.Printf("❌ [PROXY] Attestation verification failed for client %s: %v", clientID, err)
-			if h.Metrics != nil {
-				h.Metrics.RecordTokenRequest("proxy_token", clientID, "attestation_error")
-			}
-			http.Error(w, "Attestation verification failed", http.StatusUnauthorized)
-			return
-		} else if performed {
-			h.Log.Printf("✅ [PROXY] Attestation verification successful for client: %s", clientID)
-		}
-	} else {
-		h.Log.Printf("ℹ️ [PROXY] Attestation not required for client: %s", clientID)
-	}
-
 	// Log original request parameters (excluding sensitive data)
 	originalParams := make(map[string]string)
 	for key, values := range r.Form {
@@ -869,7 +680,8 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 
 	h.Log.Printf("📄 [PROXY] Upstream response body: %s", string(respBody))
 
-	// Parse upstream token response and issue proxy token
+	// For attestation-enabled clients, create proxy token (attestation verification happens in Fosite)
+	// The attestation strategy will handle verification during NewAccessRequest
 	var tokenResponse map[string]interface{}
 	if err := json.Unmarshal(respBody, &tokenResponse); err != nil {
 		h.Log.Printf("❌ [PROXY] Failed to parse upstream token response as JSON: %v", err)
@@ -904,58 +716,67 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 
 			// Store issuer_state in proxy session claims if available
 			h.storeIssuerStateInSession(r, proxySession)
-			// Create a new request for local token creation instead of modifying the original
-			localTokenForm := url.Values{}
-			localTokenForm.Set("grant_type", "client_credentials")
-			localTokenForm.Set("client_id", clientID)
-			// Note: redirect_uri not needed for client_credentials flow
 
-			// Use openid scope for proxy tokens (required for OIDC)
-			localTokenForm.Set("scope", "openid")
-			h.Log.Printf("🔄 [PROXY] Using openid scope for proxy token")
-
-			// Add internal flag to bypass authentication for proxy requests
-			localTokenForm.Set("proxy_authenticated", "true")
-
-			localTokenReq, err := http.NewRequest("POST", "http://localhost:8080/token", strings.NewReader(localTokenForm.Encode()))
+			// Get the downstream client for proxy token creation
+			downstreamClient, err := h.Storage.GetClient(r.Context(), clientID)
 			if err != nil {
-				h.Log.Printf("❌ [PROXY] Failed to create local token request: %v", err)
-				http.Error(w, "failed to create local token request", http.StatusInternalServerError)
+				h.Log.Printf("❌ [PROXY] Failed to get downstream client: %v", err)
+				http.Error(w, "failed to get client", http.StatusInternalServerError)
 				return
 			}
-			localTokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			localTokenReq.PostForm = localTokenForm
 
-			if secret, ok := GetClientSecret(clientID, h.Storage, h.SecretManager); ok {
-				localTokenReq.SetBasicAuth(clientID, secret)
-				h.Log.Printf("✅ [PROXY] Used stored original secret for basic auth")
+			h.Log.Printf("🔍 [PROXY] Downstream client found: %t, Public: %t, GrantTypes: %v", downstreamClient != nil, downstreamClient.IsPublic(), downstreamClient.GetGrantTypes())
+
+			// Create proxy token request - attestation verification happens in Fosite strategy
+			h.Log.Printf("🔄 [PROXY] Using simplified proxy token creation (attestation handled by strategy)")
+			proxyForm := make(url.Values)
+			proxyForm.Set("grant_type", "client_credentials")
+			proxyForm.Set("client_id", clientID)
+			proxyForm.Set("scope", "openid")
+
+			proxyReq, err := http.NewRequest("POST", "/token", strings.NewReader(proxyForm.Encode()))
+			if err != nil {
+				h.Log.Printf("❌ [PROXY] Failed to create proxy request: %v", err)
+				http.Error(w, "failed to create proxy request", http.StatusInternalServerError)
+				return
 			}
+			proxyReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			proxyReq = proxyReq.WithContext(r.Context())
 
-			// Debug: Dump the full request as curl command
-			curlCmd := h.buildCurlCommand(localTokenReq)
-			h.Log.Printf("🔍 [PROXY] Local token request curl command:\n%s", curlCmd)
+			// Set proxy context and client for simplified authentication
+			proxyCtx := context.WithValue(proxyReq.Context(), clientContextKey, downstreamClient)
+			proxyCtx = context.WithValue(proxyCtx, proxyTokenContextKey, true)
+			proxyReq = proxyReq.WithContext(proxyCtx)
 
-			// Use the same logic as local mode: create access request with local request and proxy session
-			ctx := r.Context()
-			proxyAccessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, localTokenReq, proxySession)
+			h.Log.Printf("🔄 [PROXY] Creating proxy access request with client_credentials grant")
+
+			// Create proxy access request using Fosite (attestation strategy handles authentication)
+			proxyAccessRequest, err := h.OAuth2Provider.NewAccessRequest(proxyReq.Context(), proxyReq, proxySession)
 			if err != nil {
 				h.Log.Printf("❌ [PROXY] Failed to create proxy access request: %v", err)
+				h.Log.Printf("❌ [PROXY] Error type: %T", err)
+				h.Log.Printf("❌ [PROXY] Error details: %+v", err)
+				if fositeErr, ok := err.(*fosite.RFC6749Error); ok {
+					h.Log.Printf("❌ [PROXY] Fosite error name: %s", fositeErr.ErrorField)
+					h.Log.Printf("❌ [PROXY] Fosite error description: %s", fositeErr.DescriptionField)
+					h.Log.Printf("❌ [PROXY] Fosite error hint: %s", fositeErr.HintField)
+				}
 				http.Error(w, "failed to create proxy access request", http.StatusInternalServerError)
 				return
 			}
 
-			// Issue proxy access response using fosite (same as local mode)
-			proxyAccessResponse, err := h.OAuth2Provider.NewAccessResponse(ctx, proxyAccessRequest)
+			// Issue proxy access response using Fosite
+			proxyAccessResponse, err := h.OAuth2Provider.NewAccessResponse(proxyReq.Context(), proxyAccessRequest)
 			if err != nil {
 				h.Log.Printf("❌ [PROXY] Failed to create proxy access response: %v", err)
 				http.Error(w, "failed to create proxy token", http.StatusInternalServerError)
 				return
 			}
 
-			// Extract the fosite-generated proxy token
+			// Extract the Fosite-generated proxy token
 			proxyToken := proxyAccessResponse.GetAccessToken()
 			if proxyToken == "" {
-				h.Log.Printf("❌ [PROXY] Failed to extract proxy access token from fosite response")
+				h.Log.Printf("❌ [PROXY] Failed to extract proxy access token from Fosite response")
 				http.Error(w, "failed to extract proxy token", http.StatusInternalServerError)
 				return
 			}
@@ -975,7 +796,7 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 
-			h.Log.Printf("✅ [PROXY] Successfully issued fosite-controlled proxy access token")
+			h.Log.Printf("✅ [PROXY] Successfully issued Fosite-controlled proxy access token")
 
 			// Record metrics for successful proxy token issuance
 			if h.Metrics != nil {
@@ -1002,8 +823,8 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Fallback: return original upstream response if proxy token creation fails
-	h.Log.Printf("⚠️ [PROXY] Falling back to upstream token response")
+	// For non-attestation clients or when proxy token creation fails, return upstream response directly
+	h.Log.Printf("ℹ️ [PROXY] Returning upstream response directly (non-attestation client or proxy creation failed)")
 	// Copy response headers and status
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -1016,48 +837,4 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 	if _, err := w.Write(respBody); err != nil {
 		h.Log.Printf("❌ [PROXY] Failed to write response body to client: %v", err)
 	}
-}
-
-// buildCurlCommand builds a curl command string that represents the given HTTP request
-func (h *TokenHandler) buildCurlCommand(req *http.Request) string {
-	var cmd strings.Builder
-	cmd.WriteString("curl -X ")
-	cmd.WriteString(req.Method)
-	cmd.WriteString(" '")
-	cmd.WriteString(req.URL.String())
-	cmd.WriteString("'")
-
-	// Add headers
-	for key, values := range req.Header {
-		for _, value := range values {
-			if key == "Authorization" {
-				cmd.WriteString(" \\\n  -H '")
-				cmd.WriteString(key)
-				cmd.WriteString(": ")
-				cmd.WriteString("[REDACTED]")
-				cmd.WriteString("'")
-			} else {
-				cmd.WriteString(" \\\n  -H '")
-				cmd.WriteString(key)
-				cmd.WriteString(": ")
-				cmd.WriteString(value)
-				cmd.WriteString("'")
-			}
-		}
-	}
-
-	// Add body if present
-	if req.Body != nil {
-		// Read the body
-		bodyBytes, err := io.ReadAll(req.Body)
-		if err == nil && len(bodyBytes) > 0 {
-			// Restore the body for the actual request
-			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-			cmd.WriteString(" \\\n  -d '")
-			cmd.WriteString(string(bodyBytes))
-			cmd.WriteString("'")
-		}
-	}
-
-	return cmd.String()
 }

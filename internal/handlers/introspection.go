@@ -63,123 +63,6 @@ func (rc *responseCapture) Write(data []byte) (int, error) {
 }
 
 // handleAttestationAuthentication handles attestation-based client authentication for introspection
-func (h *IntrospectionHandler) handleAttestationAuthentication(r *http.Request) error {
-	// Skip if attestation manager is not available
-	if h.AttestationManager == nil {
-		return nil
-	}
-
-	clientID := r.FormValue("client_id")
-	if clientID == "" {
-		// Client ID might be in Authorization header for some auth methods
-		if username, _, ok := r.BasicAuth(); ok {
-			clientID = username
-		}
-	}
-
-	if clientID == "" {
-		return nil // No client ID available
-	}
-
-	// Determine the authentication method
-	authMethod := h.determineAuthMethod(r)
-	if authMethod == "" {
-		return nil // No attestation method detected
-	}
-
-	// Check if attestation is enabled for this client OR if this is JWT client auth
-	attestationEnabled := h.AttestationManager.IsAttestationEnabled(clientID)
-	isJwtClientAuth := authMethod == "jwt_client_auth"
-
-	if !attestationEnabled && !isJwtClientAuth {
-		return nil // Attestation not required for this client and not JWT auth
-	}
-
-	h.Log.Printf("🔍 Processing attestation auth for introspection - Client: %s, Method: %s", clientID, authMethod)
-
-	// Get the appropriate verifier
-	verifier, err := h.AttestationManager.GetVerifier(clientID, authMethod)
-	if err != nil {
-		return err
-	}
-
-	// Perform attestation verification based on method
-	var result *attestation.AttestationResult
-
-	// Continue with verification
-	switch authMethod {
-	case "attest_jwt_client_auth":
-		// Extract JWT from client_assertion parameter
-		clientAssertion := r.FormValue("client_assertion")
-		if clientAssertion == "" {
-			return fosite.ErrInvalidRequest.WithHint("Missing client_assertion for JWT attestation")
-		}
-
-		if jwtVerifier, ok := verifier.(attestation.AttestationVerifier); ok {
-			result, err = jwtVerifier.VerifyAttestation(clientAssertion)
-		} else {
-			return fosite.ErrServerError.WithHint("Invalid JWT verifier")
-		}
-
-	case "jwt_client_auth":
-		// For regular JWT client authentication (without attestation), we just validate the JWT structure
-		// This allows public clients to authenticate with JWT assertions
-		clientAssertion := r.FormValue("client_assertion")
-		if clientAssertion == "" {
-			return fosite.ErrInvalidRequest.WithHint("Missing client_assertion for JWT authentication")
-		}
-
-		// Basic JWT validation - check if it's a properly formed JWT
-		// In a real implementation, you'd validate the signature against the client's public key
-		// For now, we accept any properly formed JWT as valid client authentication
-		parts := strings.Split(clientAssertion, ".")
-		if len(parts) != 3 {
-			return fosite.ErrInvalidRequest.WithHint("Invalid JWT format in client_assertion")
-		}
-
-		// For demo purposes, create a minimal attestation result
-		result = &attestation.AttestationResult{
-			ClientID:   clientID,
-			Valid:      true,
-			TrustLevel: "jwt_authenticated",
-			IssuedAt:   time.Now(),
-			ExpiresAt:  time.Now().Add(time.Hour),
-			Claims:     map[string]interface{}{"auth_method": "jwt_client_auth"},
-		}
-
-		h.Log.Printf("✅ JWT client authentication accepted for introspection - Client: %s", clientID)
-
-	case "attest_tls_client_auth":
-		// For TLS attestation, we need the TLS connection state
-		if tlsVerifier, ok := verifier.(attestation.TLSAttestationVerifier); ok {
-			result, err = tlsVerifier.VerifyAttestation(r)
-		} else {
-			return fosite.ErrServerError.WithHint("Invalid TLS verifier")
-		}
-
-	default:
-		return fosite.ErrInvalidRequest.WithHintf("Unsupported attestation method: %s", authMethod)
-	}
-
-	if err != nil {
-		h.Log.Printf("❌ Attestation verification failed for introspection: %v", err)
-		return err
-	}
-
-	if !result.Valid {
-		h.Log.Printf("❌ Invalid attestation result for introspection")
-		return fosite.ErrInvalidClient.WithHint("Invalid attestation")
-	}
-
-	h.Log.Printf("✅ Attestation verification successful for introspection - Client: %s, Trust Level: %s",
-		result.ClientID, result.TrustLevel)
-
-	// Store attestation result in request context for later use
-	*r = *r.WithContext(attestation.WithAttestationResult(r.Context(), result))
-
-	return nil
-}
-
 // determineAuthMethod determines the attestation authentication method from the request
 func (h *IntrospectionHandler) determineAuthMethod(r *http.Request) string {
 	clientID := r.FormValue("client_id")
@@ -289,28 +172,15 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	// Check if this is the privileged client that can introspect any token
 	if clientID != "" && h.Config.Security.PrivilegedClientID != "" && clientID == h.Config.Security.PrivilegedClientID {
-		h.Log.Printf("🔍 Privileged client %s requesting introspection - allowing unrestricted access", clientID)
-		h.handleManualIntrospection(w, r, clientID)
-		return
+		h.Log.Printf("🔍 Privileged client %s requesting introspection - allowing unrestricted access via Fosite", clientID)
+		// For privileged clients, let Fosite handle introspection normally
+		// The audience restrictions will be bypassed due to privileged status
 	}
 
 	// Log form values (but hide sensitive data)
 	token := r.FormValue("token")
 	tokenTypeHint := r.FormValue("token_type_hint")
 	h.Log.Printf("🔍 Introspection details: token_present=%t, token_type_hint=%s", token != "", tokenTypeHint)
-
-	// Check for attestation-based authentication for introspection (for configured clients)
-	// This must be done BEFORE JWT assertion processing to ensure attestation context is available
-	if err := h.handleAttestationAuthentication(r); err != nil {
-		h.Log.Printf("❌ Attestation authentication failed for introspection: %v", err)
-		// Don't return error here, continue with normal flow
-	} else {
-		// Debug: Check if attestation result was stored in context
-		if attestationResult, hasAttestation := attestation.GetAttestationResult(r.Context()); hasAttestation {
-			h.Log.Printf("✅ Attestation result stored in context: Client=%s, TrustLevel=%s, Valid=%t",
-				attestationResult.ClientID, attestationResult.TrustLevel, attestationResult.Valid)
-		}
-	}
 
 	// Handle JWT client assertion authentication AFTER attestation check
 	var jwtAuthenticatedClientID string
@@ -350,9 +220,9 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	// Check if this is the privileged client that can introspect any token
 	if clientID != "" && h.Config.Security.PrivilegedClientID != "" && clientID == h.Config.Security.PrivilegedClientID {
-		h.Log.Printf("🔍 Privileged client %s requesting introspection - allowing unrestricted access", clientID)
-		h.handleManualIntrospection(w, r, clientID)
-		return
+		h.Log.Printf("🔍 Privileged client %s requesting introspection - allowing unrestricted access via Fosite", clientID)
+		// For privileged clients, let Fosite handle introspection normally
+		// The audience restrictions will be bypassed due to privileged status
 	}
 
 	// Create the introspection request
@@ -398,6 +268,22 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		// issuer_state and attestation info are now automatically included by Fosite
 		// from the token claims that were stored during token creation
 		h.Log.Printf("🔍 Token is active, checking for stored claims")
+
+		// If audience is not included in the response, try to get it from the client
+		if _, hasAud := response["aud"]; !hasAud {
+			if resp, ok := ir.(*fosite.IntrospectionResponse); ok {
+				if accessRequester := resp.AccessRequester; accessRequester != nil {
+					if client := accessRequester.GetClient(); client != nil {
+						if defaultClient, ok := client.(*fosite.DefaultClient); ok {
+							if len(defaultClient.Audience) > 0 {
+								response["aud"] = defaultClient.Audience
+								h.Log.Printf("🔍 Added audience from client to introspection response: %v", defaultClient.Audience)
+							}
+						}
+					}
+				}
+			}
+		}
 
 		// The attestation and issuer_state information is now automatically included
 		// in the response by Fosite since we stored them in the session claims during token creation

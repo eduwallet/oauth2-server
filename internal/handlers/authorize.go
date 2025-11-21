@@ -38,11 +38,18 @@ func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *co
 
 // ServeHTTP handles authorization requests following fosite-example patterns
 func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.Log.Printf("🚀 [AUTH-HANDLER] Authorization request received: %s %s", r.Method, r.URL.String())
+
+	h.Log.Printf("🔍 IsProxyMode: %t, ProviderURL: %s", h.Configuration.IsProxyMode(), h.Configuration.UpstreamProvider.ProviderURL)
+
 	// Check if proxy mode is enabled
 	if h.Configuration.IsProxyMode() {
+		h.Log.Printf("🔄 [AUTH-HANDLER] Proxy mode detected, calling handleProxyAuthorize")
 		h.handleProxyAuthorize(w, r)
 		return
 	}
+
+	h.Log.Printf("🏠 [AUTH-HANDLER] Local mode, proceeding with regular authorization")
 
 	// Add panic recovery to catch any internal fosite panics
 	defer func() {
@@ -315,7 +322,10 @@ func (h *AuthorizeHandler) showAuthorizationTemplate(w http.ResponseWriter, r *h
 // mapping state/nonce/pkce to internal proxy values so we can correlate the
 // upstream callback back to the original client redirect.
 func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.Request) {
+	h.Log.Printf("🔄 [PROXY-AUTH] Starting proxy authorization request: %s", r.URL.String())
+
 	if h.Configuration.UpstreamProvider.Metadata == nil {
+		h.Log.Printf("❌ [PROXY-AUTH] Upstream provider metadata not configured")
 		http.Error(w, "upstream provider not configured", http.StatusBadGateway)
 		return
 	}
@@ -323,12 +333,16 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	q := r.URL.Query()
 	clientID := q.Get("client_id")
 	redirectURI := q.Get("redirect_uri")
+	h.Log.Printf("🔍 [PROXY-AUTH] ClientID: %s, RedirectURI: %s", clientID, redirectURI)
 
 	// Validate client exists in our storage
+	h.Log.Printf("🔍 [PROXY-AUTH] Validating client exists: %s", clientID)
 	if _, err := h.Storage.GetClient(r.Context(), clientID); err != nil {
+		h.Log.Printf("❌ [PROXY-AUTH] Client validation failed: %v", err)
 		http.Error(w, "unknown or unregistered client_id", http.StatusBadRequest)
 		return
 	}
+	h.Log.Printf("✅ [PROXY-AUTH] Client validation passed")
 
 	originalState := q.Get("state")
 	originalNonce := q.Get("nonce")
@@ -340,6 +354,7 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	proxyCodeChallenge := originalCodeChallenge
 
 	sessionID := proxyState
+	h.Log.Printf("🔄 [PROXY-AUTH] Generated session ID: %s", sessionID)
 
 	(*h.UpstreamSessionMap)[sessionID] = UpstreamSessionData{
 		OriginalIssuerState:   originalIssuerState,
@@ -351,13 +366,16 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 		ProxyNonce:            proxyNonce,
 		ProxyCodeChallenge:    proxyCodeChallenge,
 	}
+	h.Log.Printf("✅ [PROXY-AUTH] Session data stored")
 
 	// Build upstream authorization URL
 	authzEndpoint, _ := h.Configuration.UpstreamProvider.Metadata["authorization_endpoint"].(string)
 	if authzEndpoint == "" {
+		h.Log.Printf("❌ [PROXY-AUTH] Authorization endpoint not available in metadata")
 		http.Error(w, "upstream authorization_endpoint not available", http.StatusBadGateway)
 		return
 	}
+	h.Log.Printf("🔗 [PROXY-AUTH] Upstream auth endpoint: %s", authzEndpoint)
 
 	vals := make(url.Values)
 	vals.Set("client_id", h.Configuration.UpstreamProvider.ClientID)
@@ -374,5 +392,7 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	}
 
 	upstreamURL := authzEndpoint + "?" + vals.Encode()
+	h.Log.Printf("🔄 [PROXY-AUTH] Redirecting to upstream: %s", upstreamURL)
 	http.Redirect(w, r, upstreamURL, http.StatusFound)
+	h.Log.Printf("✅ [PROXY-AUTH] Redirect sent")
 }

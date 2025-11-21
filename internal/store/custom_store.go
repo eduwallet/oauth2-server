@@ -325,6 +325,13 @@ func (s *CustomStorage) GetRefreshTokenCount() (int, error) {
 func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client, error) {
 	log.Printf("🔍 CustomStorage.GetClient: looking for client %s (total clients in map: %d)", id, len(s.Clients))
 
+	// Check if this is a proxy token creation request
+	isProxyToken := ctx.Value("proxy_token") != nil
+	log.Printf("🔍 CustomStorage.GetClient: context values - proxy_token: %v", ctx.Value("proxy_token"))
+	if isProxyToken {
+		log.Printf("🔄 CustomStorage.GetClient: proxy token request detected for client %s", id)
+	}
+
 	client, exists := s.Clients[id]
 	if !exists {
 		log.Printf("⚠️ CustomStorage.GetClient: client %s not found in map, checking underlying storage", id)
@@ -373,8 +380,8 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 			authMethod = "none"
 		}
 
-		// If client is configured as public or has no secret, make it public
-		if defaultClient.Public || (defaultClient.GetHashedSecret() == nil || len(defaultClient.GetHashedSecret()) == 0) {
+		// If client is configured as public or has no secret, make it public (unless this is a proxy token request)
+		if !isProxyToken && (defaultClient.Public || (defaultClient.GetHashedSecret() == nil || len(defaultClient.GetHashedSecret()) == 0)) {
 			log.Printf("🔄 CustomStorage.GetClient: making client %s public (auth_method: %s)", id, authMethod)
 
 			// Create a copy of the client and set Public = true
@@ -389,6 +396,20 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 				Public:        true, // Make it public
 			}
 			return publicClient, nil
+		} else if isProxyToken && defaultClient.Public {
+			log.Printf("🔄 CustomStorage.GetClient: keeping client %s confidential for proxy token (was public)", id)
+			// For proxy token requests, keep the client as confidential even if it was public
+			confidentialClient := &fosite.DefaultClient{
+				ID:            defaultClient.ID,
+				Secret:        defaultClient.Secret,
+				RedirectURIs:  defaultClient.RedirectURIs,
+				GrantTypes:    defaultClient.GrantTypes,
+				ResponseTypes: defaultClient.ResponseTypes,
+				Scopes:        defaultClient.Scopes,
+				Audience:      defaultClient.Audience,
+				Public:        false, // Keep it confidential for proxy token
+			}
+			return confidentialClient, nil
 		}
 	}
 

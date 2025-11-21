@@ -26,10 +26,10 @@ services:
       - PUBLIC_BASE_URL=http://localhost:8080
       - PORT=8080
 
-      # - UPSTREAM_PROVIDER_URL=${UPSTREAM_PROVIDER_URL}
-      # - UPSTREAM_CLIENT_ID=${UPSTREAM_CLIENT_ID}
-      # - UPSTREAM_CLIENT_SECRET=${UPSTREAM_CLIENT_SECRET}
-      # - UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
+      - UPSTREAM_PROVIDER_URL=${UPSTREAM_PROVIDER_URL}
+      - UPSTREAM_CLIENT_ID=${UPSTREAM_CLIENT_ID}
+      - UPSTREAM_CLIENT_SECRET=${UPSTREAM_CLIENT_SECRET}
+      - UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
 
       - DATABASE_TYPE=memory
       - DATABASE_PATH=/app/oauth2.db
@@ -40,6 +40,7 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./oauth2.db:/app/oauth2.db
+      - certs:/tmp/certs
     healthcheck:
       test: ["CMD", "sh", "-c", "curl -f http://localhost:8080/health | grep -q '\"status\":\"healthy\"'"]
       interval: 30s
