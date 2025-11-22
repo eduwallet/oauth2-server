@@ -488,6 +488,7 @@ func isValidGrantType(grantType string) bool {
 	validGrantTypes := []string{
 		"authorization_code",
 		"client_credentials",
+		"password",
 		"refresh_token",
 		"urn:ietf:params:oauth:grant-type:device_code",
 		"urn:ietf:params:oauth:grant-type:token-exchange",

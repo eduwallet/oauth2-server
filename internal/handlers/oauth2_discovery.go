@@ -51,10 +51,11 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		"jwks_uri":               baseURL + "/.well-known/jwks.json",
 
 		// Optional but recommended fields
-		"registration_endpoint":  baseURL + "/register",
-		"revocation_endpoint":    baseURL + "/revoke",
-		"introspection_endpoint": baseURL + "/introspect",
-		"userinfo_endpoint":      baseURL + "/userinfo",
+		"registration_endpoint":                baseURL + "/register",
+		"revocation_endpoint":                  baseURL + "/revoke",
+		"introspection_endpoint":               baseURL + "/introspect",
+		"userinfo_endpoint":                    baseURL + "/userinfo",
+		"authorization_introspection_endpoint": baseURL + "/authorization-introspection",
 
 		// Device Flow (RFC 8628)
 		"device_authorization_endpoint": baseURL + "/device/authorize",

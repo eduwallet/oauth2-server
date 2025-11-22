@@ -435,26 +435,16 @@ func (h *DeviceCodeHandler) completeDeviceAuthorization(ctx context.Context, use
 
 // findDeviceAuthorization finds a device authorization by user code
 func (h *DeviceCodeHandler) findDeviceAuthorization(userCode string) (fosite.DeviceRequester, string, error) {
-	pendingAuths, err := h.Storage.GetPendingDeviceAuths(context.Background())
+	h.Logger.Infof("🔍 Looking for device authorization with user code: %s", userCode)
+
+	deviceReq, deviceCode, err := h.Storage.GetDeviceAuthByUserCode(context.Background(), userCode)
 	if err != nil {
-		h.Logger.WithError(err).Error("❌ Failed to get pending device authorizations")
-		return nil, "", err
+		h.Logger.WithError(err).Errorf("❌ Failed to find device authorization for user code %s", userCode)
+		return nil, "", fmt.Errorf("failed to find device authorization for user code %s: %w", userCode, err)
 	}
 
-	h.Logger.Infof("🔍 Debug: Looking for user code '%s' in %d pending authorizations", userCode, len(pendingAuths))
-
-	// In our simple implementation, we'll assume the first pending authorization
-	// is for this user code. This works in our simple test scenario but would
-	// need improvement for production (e.g., store user code mapping)
-	for deviceCode, auth := range pendingAuths {
-		h.Logger.Infof("🔍 Found pending device authorization with device code: %s", deviceCode)
-		if deviceReq, ok := auth.(fosite.DeviceRequester); ok {
-			return deviceReq, deviceCode, nil
-		}
-	}
-
-	h.Logger.Warnf("❌ No pending device authorization found for user code: %s", userCode)
-	return nil, "", fmt.Errorf("no pending device authorization found for user code: %s", userCode)
+	h.Logger.Infof("✅ Found device authorization for user code '%s' with device code '%s'", userCode, deviceCode)
+	return deviceReq, deviceCode, nil
 }
 
 // DeviceAuthTemplateData represents the data structure for the unified authorization template (device flow)

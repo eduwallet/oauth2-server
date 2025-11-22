@@ -9,6 +9,7 @@ import (
 
 	"oauth2-server/internal/attestation"
 	"oauth2-server/internal/store"
+	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 
 	"github.com/ory/fosite"
@@ -131,7 +132,7 @@ func (s *AttestationClientAuthStrategy) authenticateWithAttestation(ctx context.
 	}
 
 	// Store attestation result in request context for later use
-	ctx = attestation.WithAttestationResult(ctx, result)
+	attestation.WithAttestationResult(ctx, result)
 
 	// Wrap the client to override IsPublic for attestation authentication
 	wrappedClient := &AttestationClientWrapper{
@@ -165,18 +166,9 @@ func (s *AttestationClientAuthStrategy) authenticateStandard(ctx context.Context
 						return nil, fosite.ErrInvalidClient.WithHint("Unknown client")
 					}
 
-					// Verify client secret
-					if err := s.Storage.ClientAssertionJWTValid(ctx, clientID); err != nil {
-						// For basic auth, we need to check the client secret
-						// This is a simplified check - in real implementation, use proper secret verification
-						if hashedSecret := client.GetHashedSecret(); len(hashedSecret) > 0 {
-							// Compare secrets (this should use proper hashing in production)
-							if string(hashedSecret) != clientSecret {
-								return nil, fosite.ErrInvalidClient.WithHint("Invalid client credentials")
-							}
-						} else {
-							return nil, fosite.ErrInvalidClient.WithHint("Client has no secret")
-						}
+					// Verify client secret using proper bcrypt validation
+					if !utils.ValidateSecret(clientSecret, client.GetHashedSecret()) {
+						return nil, fosite.ErrInvalidClient.WithHint("Invalid client credentials")
 					}
 
 					return client, nil
@@ -194,14 +186,9 @@ func (s *AttestationClientAuthStrategy) authenticateStandard(ctx context.Context
 				return nil, fosite.ErrInvalidClient.WithHint("Unknown client")
 			}
 
-			// Verify client secret
-			if hashedSecret := client.GetHashedSecret(); len(hashedSecret) > 0 {
-				// Compare secrets (this should use proper hashing in production)
-				if string(hashedSecret) != clientSecret {
-					return nil, fosite.ErrInvalidClient.WithHint("Invalid client credentials")
-				}
-			} else {
-				return nil, fosite.ErrInvalidClient.WithHint("Client has no secret")
+			// Verify client secret using proper bcrypt validation
+			if !utils.ValidateSecret(clientSecret, client.GetHashedSecret()) {
+				return nil, fosite.ErrInvalidClient.WithHint("Invalid client credentials")
 			}
 
 			return client, nil

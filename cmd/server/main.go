@@ -63,22 +63,23 @@ var (
 	RefreshTokenStrategy oauth2.RefreshTokenStrategy
 
 	// Handlers
-	registrationHandler    *handlers.RegistrationHandler
-	deviceCodeHandler      *handlers.DeviceCodeHandler
-	introspectionHandler   *handlers.IntrospectionHandler
-	discoveryHandler       *handlers.DiscoveryHandler
-	statusHandler          *handlers.StatusHandler
-	tokenHandler           *handlers.TokenHandler
-	revokeHandler          *handlers.RevokeHandler
-	jwksHandler            *handlers.JWKSHandler
-	healthHandler          *handlers.HealthHandler
-	oauth2DiscoveryHandler *handlers.OAuth2DiscoveryHandler
-	authorizeHandler       *handlers.AuthorizeHandler
-	claimsHandler          *handlers.ClaimsHandler
-	versionHandler         *handlers.VersionHandler
-	userinfoHandler        *handlers.UserInfoHandler
-	callbackHandler        *handlers.CallbackHandler
-	trustAnchorHandler     *handlers.TrustAnchorHandler
+	registrationHandler               *handlers.RegistrationHandler
+	deviceCodeHandler                 *handlers.DeviceCodeHandler
+	introspectionHandler              *handlers.IntrospectionHandler
+	authorizationIntrospectionHandler *handlers.AuthorizationIntrospectionHandler
+	discoveryHandler                  *handlers.DiscoveryHandler
+	statusHandler                     *handlers.StatusHandler
+	tokenHandler                      *handlers.TokenHandler
+	revokeHandler                     *handlers.RevokeHandler
+	jwksHandler                       *handlers.JWKSHandler
+	healthHandler                     *handlers.HealthHandler
+	oauth2DiscoveryHandler            *handlers.OAuth2DiscoveryHandler
+	authorizeHandler                  *handlers.AuthorizeHandler
+	claimsHandler                     *handlers.ClaimsHandler
+	versionHandler                    *handlers.VersionHandler
+	userinfoHandler                   *handlers.UserInfoHandler
+	callbackHandler                   *handlers.CallbackHandler
+	trustAnchorHandler                *handlers.TrustAnchorHandler
 
 	// Secret manager for encrypted storage
 	secretManager *store.SecretManager
@@ -456,6 +457,10 @@ func initializeClients() error {
 		}
 
 		customStorage.Clients[client.ID] = newClient
+		// Also persist to underlying storage for SQLite
+		if err := customStorage.CreateClient(context.Background(), newClient); err != nil {
+			log.Printf("⚠️ Failed to persist client %s to storage: %v", client.ID, err)
+		}
 	}
 
 	log.Printf("✅ Stores initialized with %d clients", len(customStorage.Clients))
@@ -573,6 +578,7 @@ func initializeOAuth2Provider() error {
 		compose.OAuth2TokenIntrospectionFactory,
 		compose.OAuth2TokenRevocationFactory,
 		compose.OAuth2PKCEFactory,
+		compose.OAuth2ResourceOwnerPasswordCredentialsFactory,
 		compose.RFC8628DeviceFactory,
 		compose.RFC8693TokenExchangeFactory,
 	)
@@ -610,6 +616,7 @@ func initializeHandlers() {
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
 	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager)
+	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)
 
@@ -661,6 +668,7 @@ func setupRoutes() {
 	http.Handle("/authorize", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizeHandler.ServeHTTP))))
 	http.Handle("/token", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(tokenHandler.ServeHTTP))))
 	http.Handle("/introspect", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(introspectionHandler.ServeHTTP))))
+	http.Handle("/authorization-introspection", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizationIntrospectionHandler.ServeHTTP))))
 	http.Handle("/revoke", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(revokeHandler.ServeHTTP))))
 	http.Handle("/userinfo", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(userinfoHandler.ServeHTTP))))
 

@@ -167,6 +167,12 @@ func (s *CustomStorage) GetPendingDeviceAuths(ctx context.Context) (map[string]f
 	}).GetPendingDeviceAuths(ctx)
 }
 
+func (s *CustomStorage) GetDeviceAuthByUserCode(ctx context.Context, userCode string) (fosite.DeviceRequester, string, error) {
+	return s.Storage.(interface {
+		GetDeviceAuthByUserCode(ctx context.Context, userCode string) (fosite.DeviceRequester, string, error)
+	}).GetDeviceAuthByUserCode(ctx, userCode)
+}
+
 func (s *CustomStorage) CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, request fosite.DeviceRequester) error {
 	return s.Storage.(interface {
 		CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, request fosite.DeviceRequester) error

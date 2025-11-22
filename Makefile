@@ -1,10 +1,45 @@
 .PHONY: build test clean run dev
 
-# Test configuration variables (can be overridden)
-TEST_DATABASE_TYPE ?= memory
+# Configuration variables
+OAUTH2_SERVER_URL ?= http://localhost:8080
+TEST_DATABASE_TYPE ?= sqlite
 TEST_USERNAME ?= john.doe
 TEST_PASSWORD ?= password123
 TEST_SCOPE ?= openid profile email
+
+# Check if port 8080 is available and offer to kill occupying process
+check-port:
+	@echo "🔍 Checking if port 8080 is available..."
+	@if lsof -i :8080 >/dev/null 2>&1; then \
+		echo "⚠️  Port 8080 is already in use by:"; \
+		lsof -i :8080 -t | xargs ps -p 2>/dev/null || echo "   Unable to identify process"; \
+		lsof -i :8080; \
+		echo ""; \
+		echo "💡 Options:"; \
+		echo "   1. Kill the process and continue"; \
+		echo "   2. Exit and handle manually"; \
+		echo ""; \
+		read -p "Choose option (1/2) [2]: " choice; \
+		case $$choice in \
+			1) \
+				echo "🔪 Killing process(es) using port 8080..."; \
+				lsof -ti :8080 | xargs kill -9 2>/dev/null || true; \
+				sleep 2; \
+				if lsof -i :8080 >/dev/null 2>&1; then \
+					echo "❌ Failed to free port 8080. Please check manually."; \
+					exit 1; \
+				else \
+					echo "✅ Port 8080 is now free."; \
+				fi; \
+				;; \
+			*) \
+				echo "👋 Exiting. Please free port 8080 manually."; \
+				exit 1; \
+				;; \
+		esac; \
+	else \
+		echo "✅ Port 8080 is available."; \
+	fi
 
 # Build the application
 build:
@@ -238,20 +273,30 @@ test-script:
 		echo "📦 Building server..."; \
 		$(MAKE) build; \
 	fi
+	@$(MAKE) check-port
 	@echo "🚀 Starting OAuth2 server in background..."
 	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
-	@sleep 3
+	@sleep 5
 	@echo "🔍 Testing server health..."
-	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
-		echo "❌ Server failed to start"; \
-		cat server-test.log; \
-		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
-		exit 1; \
-	fi
+	@for i in 1 2 3 4 5; do \
+		if curl -f -s --max-time 5 $(OAUTH2_SERVER_URL)/health > /dev/null 2>&1; then \
+			echo "✅ Server is healthy"; \
+			break; \
+		else \
+			echo "⏳ Waiting for server to respond (attempt $$i/5)..."; \
+			sleep 2; \
+			if [ $$i -eq 5 ]; then \
+				echo "❌ Server failed to start after 5 attempts"; \
+				cat server-test.log; \
+				if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
 	@echo "🔧 Setting up test certificates..."
 	@if [ -f "init-certs.sh" ]; then \
-		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" bash init-certs.sh; \
+		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" OAUTH_URL="$(OAUTH2_SERVER_URL)" bash init-certs.sh; \
 	else \
 		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
 	fi
@@ -288,20 +333,30 @@ test-script-verbose:
 		echo "📦 Building server..."; \
 		$(MAKE) build; \
 	fi
+	@$(MAKE) check-port
 	@echo "🚀 Starting OAuth2 server in background..."
 	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
-	@sleep 3
+	@sleep 5
 	@echo "🔍 Testing server health..."
-	@if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then \
-		echo "❌ Server failed to start"; \
-		cat server-test.log; \
-		if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
-		exit 1; \
-	fi
+	@for i in 1 2 3 4 5; do \
+		if curl -f -s --max-time 5 $(OAUTH2_SERVER_URL)/health > /dev/null 2>&1; then \
+			echo "✅ Server is healthy"; \
+			break; \
+		else \
+			echo "⏳ Waiting for server to respond (attempt $$i/5)..."; \
+			sleep 2; \
+			if [ $$i -eq 5 ]; then \
+				echo "❌ Server failed to start after 5 attempts"; \
+				cat server-test.log; \
+				if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
 	@echo "🔧 Setting up test certificates..."
 	@if [ -f "init-certs.sh" ]; then \
-		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" bash init-certs.sh; \
+		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" OAUTH_URL="$(OAUTH2_SERVER_URL)" bash init-certs.sh ; \
 	else \
 		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
 	fi
@@ -346,9 +401,11 @@ help:
 	@echo "  release            - Trigger GitHub release workflow"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test               - Run all test scripts with server lifecycle"
-	@echo "  test-verbose       - Run tests with verbose output and logs"
-	@echo "  test-script        - Run specific test script (SCRIPT=filename)"
+	@echo "  test               - Run all test scripts with server lifecycle (includes port check)"
+	@echo "  test-verbose       - Run tests with verbose output and logs (includes port check)"
+	@echo "  test-script        - Run specific test script (SCRIPT=filename, includes port check)"
+	@echo "  test-script-verbose- Run specific test script with verbose output (includes port check)"
+	@echo "  check-port         - Check if port 8080 is available and offer to kill occupying process"
 	@echo "  test-coverage      - Run tests and generate coverage report"
 	@echo "  test-memory        - Run tests with memory database (TEST_DATABASE_TYPE=memory)"
 	@echo ""
@@ -386,7 +443,7 @@ help:
 	@echo "  make test-verbose                      - Run tests with detailed output"
 
 # Update .PHONY to include new targets
-.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script help tag version release
+.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script test-script-verbose check-port help tag version release
 
 # Version management targets
 tag:

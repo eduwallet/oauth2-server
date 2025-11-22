@@ -112,6 +112,343 @@ type RequestWithClientID struct {
 	Type          string                `json:"_type"`
 }
 
+// DeviceRequestWithClientID stores a fosite.DeviceRequester with client ID stored separately for proper JSON marshaling
+type DeviceRequestWithClientID struct {
+	DeviceRequest *fosite.DeviceRequest `json:"-"`
+	ClientID      string                `json:"_client_id"`
+	Type          string                `json:"_type"`
+}
+
+// GetClient returns the client
+func (r *DeviceRequestWithClientID) GetClient() fosite.Client {
+	if r.DeviceRequest != nil && r.DeviceRequest.Request.Client != nil {
+		return r.DeviceRequest.Request.Client
+	}
+	return nil
+}
+
+// GetRequestedScopes returns the requested scopes
+func (r *DeviceRequestWithClientID) GetRequestedScopes() fosite.Arguments {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetRequestedScopes()
+	}
+	return nil
+}
+
+// GetGrantedScopes returns the granted scopes
+func (r *DeviceRequestWithClientID) GetGrantedScopes() fosite.Arguments {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetGrantedScopes()
+	}
+	return nil
+}
+
+// GetRequestedAudience returns the requested audience
+func (r *DeviceRequestWithClientID) GetRequestedAudience() fosite.Arguments {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetRequestedAudience()
+	}
+	return nil
+}
+
+// GetGrantedAudience returns the granted audience
+func (r *DeviceRequestWithClientID) GetGrantedAudience() fosite.Arguments {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetGrantedAudience()
+	}
+	return nil
+}
+
+// GetSession returns the session
+func (r *DeviceRequestWithClientID) GetSession() fosite.Session {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetSession()
+	}
+	return nil
+}
+
+// SetSession sets the session
+func (r *DeviceRequestWithClientID) SetSession(session fosite.Session) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.SetSession(session)
+	}
+}
+
+// GetID returns the request ID
+func (r *DeviceRequestWithClientID) GetID() string {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetID()
+	}
+	return ""
+}
+
+// GetRequestedAt returns the requested at time
+func (r *DeviceRequestWithClientID) GetRequestedAt() time.Time {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetRequestedAt()
+	}
+	return time.Time{}
+}
+
+// GetUserCodeState returns the user code state
+func (r *DeviceRequestWithClientID) GetUserCodeState() fosite.UserCodeState {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetUserCodeState()
+	}
+	return fosite.UserCodeUnused
+}
+
+// SetUserCodeState sets the user code state
+func (r *DeviceRequestWithClientID) SetUserCodeState(state fosite.UserCodeState) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.SetUserCodeState(state)
+	}
+}
+
+// GetScopes returns the scopes (alias for GetGrantedScopes)
+func (r *DeviceRequestWithClientID) GetScopes() fosite.Arguments {
+	return r.GetGrantedScopes()
+}
+
+// GetAudience returns the audience (alias for GetGrantedAudience)
+func (r *DeviceRequestWithClientID) GetAudience() fosite.Arguments {
+	return r.GetGrantedAudience()
+}
+
+// GrantScope grants a scope
+func (r *DeviceRequestWithClientID) GrantScope(scope string) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.GrantScope(scope)
+	}
+}
+
+// GrantAudience grants an audience
+func (r *DeviceRequestWithClientID) GrantAudience(audience string) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.GrantAudience(audience)
+	}
+}
+
+// GetRequestForm returns the request form
+func (r *DeviceRequestWithClientID) GetRequestForm() url.Values {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.GetRequestForm()
+	}
+	return nil
+}
+
+// Merge merges another requester
+func (r *DeviceRequestWithClientID) Merge(requester fosite.Requester) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.Merge(requester)
+	}
+}
+
+// Sanitize sanitizes the request
+func (r *DeviceRequestWithClientID) Sanitize(allowedParameters []string) fosite.Requester {
+	if r.DeviceRequest != nil {
+		return r.DeviceRequest.Sanitize(allowedParameters)
+	}
+	return nil
+}
+
+// AppendRequestedScope appends a requested scope
+func (r *DeviceRequestWithClientID) AppendRequestedScope(scope string) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.AppendRequestedScope(scope)
+	}
+}
+
+// SetRequestedAudience sets the requested audience
+func (r *DeviceRequestWithClientID) SetRequestedAudience(audience fosite.Arguments) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.SetRequestedAudience(audience)
+	}
+}
+
+// SetID sets the request ID
+func (r *DeviceRequestWithClientID) SetID(id string) {
+	if r.DeviceRequest != nil {
+		r.DeviceRequest.SetID(id)
+	}
+}
+
+// MarshalJSON implements custom JSON marshaling for DeviceRequestWithClientID
+func (r *DeviceRequestWithClientID) MarshalJSON() ([]byte, error) {
+	if r.DeviceRequest == nil {
+		return nil, fmt.Errorf("no device request to marshal")
+	}
+
+	// Start with the embedded Request marshaling
+	requestData, err := json.Marshal(r.DeviceRequest.Request)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(requestData, &raw); err != nil {
+		return nil, err
+	}
+
+	// Add device-specific fields
+	raw["user_code_state"] = r.DeviceRequest.UserCodeState
+	raw["_client_id"] = r.ClientID
+	raw["_type"] = r.Type
+
+	// Handle the client field specially - include type information
+	if client := r.GetClient(); client != nil {
+		clientData := map[string]interface{}{
+			"type":           "DefaultClient",
+			"id":             r.ClientID,
+			"hashed_secret":  string(client.GetHashedSecret()),
+			"redirect_uris":  client.GetRedirectURIs(),
+			"grant_types":    client.GetGrantTypes(),
+			"response_types": client.GetResponseTypes(),
+			"scopes":         client.GetScopes(),
+			"audience":       client.GetAudience(),
+			"public":         client.IsPublic(),
+		}
+		raw["client"] = clientData
+	}
+
+	// Handle the session field - marshal it separately
+	if session := r.GetSession(); session != nil {
+		sessionData, err := json.Marshal(session)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal session: %w", err)
+		}
+		var sessionMap map[string]interface{}
+		if json.Unmarshal(sessionData, &sessionMap) == nil {
+			raw["session"] = sessionMap
+		}
+	}
+
+	return json.Marshal(raw)
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for DeviceRequestWithClientID
+func (r *DeviceRequestWithClientID) UnmarshalJSON(data []byte) error {
+	// First unmarshal into a map
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	// Extract our fields
+	if clientID, ok := raw["_client_id"].(string); ok {
+		r.ClientID = clientID
+		delete(raw, "_client_id")
+	}
+	if reqType, ok := raw["_type"].(string); ok {
+		r.Type = reqType
+		delete(raw, "_type")
+	}
+
+	// Extract user code state
+	var userCodeState fosite.UserCodeState
+	if ucs, ok := raw["user_code_state"].(float64); ok {
+		userCodeState = fosite.UserCodeState(int16(ucs))
+		delete(raw, "user_code_state")
+	}
+
+	// Handle the client field - extract and unmarshal it separately
+	if clientData, exists := raw["client"]; exists && clientData != nil {
+		delete(raw, "client")
+	}
+
+	// Handle the session field - extract and unmarshal it as the correct concrete type
+	if sessionData, exists := raw["session"]; exists && sessionData != nil {
+		sessionBytes, err := json.Marshal(sessionData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal session data: %w", err)
+		}
+		var session openid.DefaultSession
+		if err := json.Unmarshal(sessionBytes, &session); err != nil {
+			return fmt.Errorf("failed to unmarshal session: %w", err)
+		}
+		delete(raw, "session")
+
+		// Now unmarshal the modified data into the Request
+		modifiedData, err := json.Marshal(raw)
+		if err != nil {
+			return err
+		}
+
+		r.DeviceRequest = &fosite.DeviceRequest{}
+		if err := json.Unmarshal(modifiedData, &r.DeviceRequest.Request); err != nil {
+			return err
+		}
+		r.DeviceRequest.UserCodeState = userCodeState
+		r.DeviceRequest.Request.Session = &session
+	} else {
+		// No session data, just unmarshal the request
+		modifiedData, err := json.Marshal(raw)
+		if err != nil {
+			return err
+		}
+
+		r.DeviceRequest = &fosite.DeviceRequest{}
+		if err := json.Unmarshal(modifiedData, &r.DeviceRequest.Request); err != nil {
+			return err
+		}
+		r.DeviceRequest.UserCodeState = userCodeState
+	}
+
+	return nil
+}
+
+// MarshalDeviceRequestWithClientID marshals a fosite.DeviceRequester with client ID stored separately
+func MarshalDeviceRequestWithClientID(request fosite.DeviceRequester) ([]byte, error) {
+	raw := make(map[string]interface{})
+
+	// Get the underlying request data
+	requestData, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(requestData, &raw); err != nil {
+		return nil, err
+	}
+
+	// Add type information
+	raw["_type"] = "DeviceRequest"
+	if client := request.GetClient(); client != nil {
+		raw["_client_id"] = client.GetID()
+	}
+
+	return json.Marshal(raw)
+}
+
+// UnmarshalDeviceRequestWithClientID unmarshals a fosite.DeviceRequester with client looked up by ID
+func (s *SQLiteStore) UnmarshalDeviceRequestWithClientID(data []byte) (fosite.DeviceRequester, error) {
+	log.Printf("🔍 UnmarshalDeviceRequestWithClientID: starting unmarshal of data (length: %d): %s", len(data), string(data))
+
+	var wrapper DeviceRequestWithClientID
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		log.Printf("❌ UnmarshalDeviceRequestWithClientID: failed to unmarshal wrapper: %v", err)
+		return nil, err
+	}
+
+	log.Printf("🔍 UnmarshalDeviceRequestWithClientID: wrapper type: %s, clientID: %s", wrapper.Type, wrapper.ClientID)
+
+	if wrapper.DeviceRequest == nil {
+		return nil, fmt.Errorf("DeviceRequest is nil")
+	}
+
+	// Set client if we have a client ID
+	if wrapper.ClientID != "" {
+		client, err := s.GetClient(context.Background(), wrapper.ClientID)
+		if err != nil {
+			log.Printf("❌ UnmarshalDeviceRequestWithClientID: GetClient error for %s: %v", wrapper.ClientID, err)
+			return nil, err
+		}
+		wrapper.DeviceRequest.Request.Client = client
+		log.Printf("✅ UnmarshalDeviceRequestWithClientID: set client %s on device request", wrapper.ClientID)
+	}
+
+	log.Printf("✅ UnmarshalDeviceRequestWithClientID: successfully unmarshaled device request")
+	return wrapper.DeviceRequest, nil
+}
+
 // GetClient returns the client
 func (r *RequestWithClientID) GetClient() fosite.Client {
 	if r.Request != nil {
@@ -592,6 +929,7 @@ type Storage interface {
 	UpdateDeviceCodeSession(ctx context.Context, deviceCode string, request fosite.Requester) error
 	InvalidateDeviceCodeSession(ctx context.Context, signature string) error
 	GetPendingDeviceAuths(ctx context.Context) (map[string]fosite.Requester, error)
+	GetDeviceAuthByUserCode(ctx context.Context, userCode string) (fosite.DeviceRequester, string, error)
 	CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, request fosite.DeviceRequester) error
 
 	// Statistics methods
@@ -701,6 +1039,20 @@ func (m *MemoryStoreWrapper) GetPendingDeviceAuths(ctx context.Context) (map[str
 		}
 	}
 	return pending, nil
+}
+
+func (m *MemoryStoreWrapper) GetDeviceAuthByUserCode(ctx context.Context, userCode string) (fosite.DeviceRequester, string, error) {
+	// In memory store, we need to search through all device auths to find one with matching user code
+	// This is inefficient but works for the memory store
+	for deviceCode, auth := range m.MemoryStore.DeviceAuths {
+		// We can't easily get the user code from the device auth in memory store
+		// For now, return the first pending auth (same as before)
+		session := auth.GetSession()
+		if session == nil || session.GetUsername() == "" {
+			return auth, deviceCode, nil
+		}
+	}
+	return nil, "", fmt.Errorf("device authorization not found for user code: %s", userCode)
 }
 
 func (m *MemoryStoreWrapper) CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, request fosite.DeviceRequester) error {
@@ -1183,20 +1535,21 @@ func (s *SQLiteStore) GetDeviceCodeSession(ctx context.Context, deviceCode strin
 	}
 
 	log.Printf("✅ SQLiteStore.GetDeviceCodeSession: found device code data")
-	var request fosite.DeviceRequest
-	if err := json.Unmarshal([]byte(data), &request); err != nil {
-		log.Printf("❌ SQLiteStore.GetDeviceCodeSession: unmarshal error: %v", err)
-		return nil, err
-	}
-
-	log.Printf("✅ SQLiteStore.GetDeviceCodeSession: successfully converted to DeviceRequester")
-	return &request, nil
+	return s.UnmarshalDeviceRequestWithClientID([]byte(data))
 }
 
 func (s *SQLiteStore) CreateDeviceCodeSession(ctx context.Context, deviceCode string, request fosite.Requester) error {
 	log.Printf("🔍 SQLiteStore.CreateDeviceCodeSession: storing device code: %s", deviceCode)
 
-	data, err := json.Marshal(request)
+	// Convert to DeviceRequester if needed
+	var deviceReq fosite.DeviceRequester
+	if dr, ok := request.(fosite.DeviceRequester); ok {
+		deviceReq = dr
+	} else {
+		return fmt.Errorf("request is not a DeviceRequester")
+	}
+
+	data, err := MarshalDeviceRequestWithClientID(deviceReq)
 	if err != nil {
 		return err
 	}
@@ -1216,7 +1569,15 @@ func (s *SQLiteStore) CreateDeviceCodeSession(ctx context.Context, deviceCode st
 func (s *SQLiteStore) UpdateDeviceCodeSession(ctx context.Context, deviceCode string, request fosite.Requester) error {
 	log.Printf("🔍 SQLiteStore.UpdateDeviceCodeSession: updating device code: %s", deviceCode)
 
-	data, err := json.Marshal(request)
+	// Convert to DeviceRequester if needed
+	var deviceReq fosite.DeviceRequester
+	if dr, ok := request.(fosite.DeviceRequester); ok {
+		deviceReq = dr
+	} else {
+		return fmt.Errorf("request is not a DeviceRequester")
+	}
+
+	data, err := MarshalDeviceRequestWithClientID(deviceReq)
 	if err != nil {
 		return err
 	}
@@ -1253,21 +1614,40 @@ func (s *SQLiteStore) GetPendingDeviceAuths(ctx context.Context) (map[string]fos
 			return nil, err
 		}
 
-		var request fosite.DeviceRequest
-		if err := json.Unmarshal([]byte(data), &request); err != nil {
+		deviceReq, err := s.UnmarshalDeviceRequestWithClientID([]byte(data))
+		if err != nil {
 			return nil, err
 		}
 
-		pending[signature] = &request
+		pending[signature] = deviceReq
 	}
 
 	return pending, nil
 }
 
+func (s *SQLiteStore) GetDeviceAuthByUserCode(ctx context.Context, userCode string) (fosite.DeviceRequester, string, error) {
+	var signature string
+	var data string
+	err := s.db.QueryRow("SELECT signature, data FROM device_codes WHERE user_code = ?", userCode).Scan(&signature, &data)
+	if err == sql.ErrNoRows {
+		return nil, "", fmt.Errorf("device authorization not found for user code: %s", userCode)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+
+	deviceReq, err := s.UnmarshalDeviceRequestWithClientID([]byte(data))
+	if err != nil {
+		return nil, "", err
+	}
+
+	return deviceReq, signature, nil
+}
+
 func (s *SQLiteStore) CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, request fosite.DeviceRequester) error {
 	log.Printf("🔍 SQLiteStore.CreateDeviceAuthSession: storing device code: %s, user code: %s", deviceCodeSignature, userCodeSignature)
 
-	data, err := json.Marshal(request)
+	data, err := MarshalDeviceRequestWithClientID(request)
 	if err != nil {
 		return err
 	}

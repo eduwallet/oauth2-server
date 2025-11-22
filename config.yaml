@@ -106,6 +106,7 @@ clients:
   grant_types:
   - "authorization_code"
   - "refresh_token"
+  - "password"
   response_types:
   - "code"
   scopes:
@@ -116,11 +117,13 @@ clients:
   - "offline_access"
   audience:
   - "api-service"
+  - "backend-client"
   token_endpoint_auth_method: "client_secret_basic"
   public: false
   enabled_flows:
   - "authorization_code"
   - "refresh_token"
+  - "password"
 
 # reva Client
 - id: "reva-client"

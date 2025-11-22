@@ -94,6 +94,20 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("🔍 UserInfo: Token subject='%s', username='%s'", subject, username)
 
 	// Check if this is a client credentials flow (no user context)
+	// For client credentials tokens, fosite sets subject/username to the client ID
+	if subject != "" {
+		// Check if the subject matches a known client ID
+		if _, exists := h.Configuration.GetClientByID(subject); exists {
+			log.Printf("❌ UserInfo: Client credentials token - subject '%s' is a client ID, no user context available", subject)
+			if h.Metrics != nil {
+				h.Metrics.RecordUserinfoRequest("error", "no_user_context")
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="UserInfo endpoint requires user-authenticated tokens."`)
+			http.Error(w, "UserInfo requires user authentication", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	if subject == "" && username == "" {
 		log.Printf("❌ UserInfo: Client credentials token - no user context available")
 		if h.Metrics != nil {
@@ -133,12 +147,10 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Add the issuer state from the authorization request if available in the session
-		if session != nil {
-			if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Headers != nil && defaultSession.Headers.Extra != nil {
-				if issuerState, ok := defaultSession.Headers.Extra["issuer_state"].(string); ok && issuerState != "" {
-					// issuer_state moved to introspection endpoint - no longer included in userinfo
-					log.Printf("ℹ️ UserInfo: issuer_state available but moved to introspection endpoint: %s", issuerState)
-				}
+		if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Headers != nil && defaultSession.Headers.Extra != nil {
+			if issuerState, ok := defaultSession.Headers.Extra["issuer_state"].(string); ok && issuerState != "" {
+				// issuer_state moved to introspection endpoint - no longer included in userinfo
+				log.Printf("ℹ️ UserInfo: issuer_state available but moved to introspection endpoint: %s", issuerState)
 			}
 		}
 	} else {
