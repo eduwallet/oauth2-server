@@ -623,7 +623,7 @@ func initializeHandlers() {
 	// Initialize OAuth2 flow handlers
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
 	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap)
-	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager)
+	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager, privilegedClientSecrets)
 	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)

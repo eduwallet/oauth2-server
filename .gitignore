@@ -23,3 +23,4 @@ test_introspection_jwt.sh
 test_jwt_introspection.sh
 oauth2.db
 submodules/fosite
+examples/hsm-attestation-wallet/config.js

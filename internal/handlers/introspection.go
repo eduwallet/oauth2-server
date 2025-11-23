@@ -19,23 +19,25 @@ import (
 
 // IntrospectionHandler manages token introspection requests
 type IntrospectionHandler struct {
-	OAuth2Provider     fosite.OAuth2Provider
-	Config             *config.Config
-	Log                *logrus.Logger
-	AttestationManager *attestation.VerifierManager
-	Storage            store.Storage
-	SecretManager      *store.SecretManager
+	OAuth2Provider          fosite.OAuth2Provider
+	Config                  *config.Config
+	Log                     *logrus.Logger
+	AttestationManager      *attestation.VerifierManager
+	Storage                 store.Storage
+	SecretManager           *store.SecretManager
+	PrivilegedClientSecrets map[string]string
 }
 
 // NewIntrospectionHandler creates a new introspection handler
-func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, attestationManager *attestation.VerifierManager, storage store.Storage, secretManager *store.SecretManager) *IntrospectionHandler {
+func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, attestationManager *attestation.VerifierManager, storage store.Storage, secretManager *store.SecretManager, privilegedClientSecrets map[string]string) *IntrospectionHandler {
 	return &IntrospectionHandler{
-		OAuth2Provider:     oauth2Provider,
-		Config:             config,
-		Log:                log,
-		AttestationManager: attestationManager,
-		Storage:            storage,
-		SecretManager:      secretManager,
+		OAuth2Provider:          oauth2Provider,
+		Config:                  config,
+		Log:                     log,
+		AttestationManager:      attestationManager,
+		Storage:                 storage,
+		SecretManager:           secretManager,
+		PrivilegedClientSecrets: privilegedClientSecrets,
 	}
 }
 
@@ -196,15 +198,43 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			}
 			h.Log.Printf("🔍 Processing JWT client assertion: %s...", assertionPreview)
 
+			// First verify attestation if this is an attestation-based request
 			if extractedClientID := h.extractClientIDFromJWT(clientAssertion); extractedClientID != "" {
-				jwtAuthenticatedClientID = extractedClientID
-				h.Log.Printf("✅ JWT client assertion validated for client: %s", jwtAuthenticatedClientID)
+				h.Log.Printf("✅ Extracted client ID from JWT assertion: %s", extractedClientID)
 
-				// Apply the same trick as token handler: create a local introspection request
-				// with client_credentials authentication that Fosite can handle normally
-				h.Log.Printf("🔄 JWT authenticated client %s, creating local introspection request", jwtAuthenticatedClientID)
-				h.handleLocalIntrospectionWithCredentials(w, r, jwtAuthenticatedClientID)
-				return
+				// Check if this client is configured for attestation
+				if h.AttestationManager != nil && h.AttestationManager.IsAttestationEnabled(extractedClientID) {
+					h.Log.Printf("🔍 Client %s is configured for attestation - verifying attestation first", extractedClientID)
+
+					// Get verifier for JWT attestation
+					verifier, err := h.AttestationManager.GetVerifier(extractedClientID, "attest_jwt_client_auth")
+					if err != nil {
+						h.Log.Printf("❌ Failed to get verifier for client %s: %v", extractedClientID, err)
+					} else if jwtVerifier, ok := verifier.(attestation.AttestationVerifier); ok {
+						if result, err := jwtVerifier.VerifyAttestation(clientAssertion); err == nil && result.Valid {
+							h.Log.Printf("✅ Attestation verified for client: %s", extractedClientID)
+							jwtAuthenticatedClientID = extractedClientID
+
+							// Store attestation result in request context
+							attestation.WithAttestationResult(r.Context(), result)
+
+							// Use privileged client for the actual introspection
+							h.Log.Printf("🔄 Attestation verified - using privileged client for introspection")
+							h.handlePrivilegedIntrospectionWithAttestation(w, r, extractedClientID)
+							return
+						} else {
+							h.Log.Printf("❌ Attestation verification failed: %v", err)
+						}
+					} else {
+						h.Log.Printf("❌ Invalid JWT verifier type for client: %s", extractedClientID)
+					}
+				} else {
+					// Not an attestation client, handle as regular JWT authentication
+					h.Log.Printf("🔍 Client %s not configured for attestation - treating as regular JWT auth", extractedClientID)
+					jwtAuthenticatedClientID = extractedClientID
+					h.handleLocalIntrospectionWithCredentials(w, r, jwtAuthenticatedClientID)
+					return
+				}
 			} else {
 				h.Log.Printf("❌ Failed to extract client ID from JWT assertion")
 			}
@@ -331,6 +361,174 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.Log.Printf("Response response: %v", response)
+
+	// Write the modified response
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.WriteHeader(capture.statusCode)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handlePrivilegedIntrospectionWithAttestation performs introspection using the privileged client
+// after attestation has been verified
+func (h *IntrospectionHandler) handlePrivilegedIntrospectionWithAttestation(w http.ResponseWriter, r *http.Request, attestedClientID string) {
+	tokenValue := r.FormValue("token")
+	if tokenValue == "" {
+		h.Log.Printf("❌ No token provided for privileged introspection")
+		http.Error(w, "invalid_request: missing token", http.StatusBadRequest)
+		return
+	}
+
+	h.Log.Printf("🔄 Creating privileged introspection request for attested client: %s", attestedClientID)
+
+	// Debug: Decode and log token claims
+	if tokenValue != "" {
+		h.logTokenClaims(tokenValue)
+	}
+
+	// Create a new request for local introspection
+	localForm := make(url.Values)
+	localForm.Set("token", tokenValue)
+	if tokenTypeHint := r.FormValue("token_type_hint"); tokenTypeHint != "" {
+		localForm.Set("token_type_hint", tokenTypeHint)
+	}
+
+	localReq, err := http.NewRequest("POST", "http://localhost:8080/introspect", strings.NewReader(localForm.Encode()))
+	if err != nil {
+		h.Log.Printf("❌ Failed to create privileged introspection request: %v", err)
+		http.Error(w, "failed to create privileged introspection request", http.StatusInternalServerError)
+		return
+	}
+	// Copy the context from the original request to preserve attestation information
+	localReq = localReq.WithContext(r.Context())
+	localReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	localReq.PostForm = localForm
+
+	// Use privileged client credentials for authentication
+	privilegedClientID := h.Config.Security.PrivilegedClientID
+	if privilegedClientID == "" {
+		h.Log.Printf("❌ No privileged client configured")
+		http.Error(w, "server configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	privilegedClientSecret, exists := h.PrivilegedClientSecrets[privilegedClientID]
+	if !exists {
+		h.Log.Printf("❌ Privileged client secret not found for client: %s", privilegedClientID)
+		http.Error(w, "server configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	localReq.SetBasicAuth(privilegedClientID, privilegedClientSecret)
+	h.Log.Printf("✅ Using privileged client %s for introspection", privilegedClientID)
+
+	// Create the introspection request using Fosite directly
+	ctx := localReq.Context()
+
+	ir, err := h.OAuth2Provider.NewIntrospectionRequest(ctx, localReq, newSession())
+	if err != nil {
+		h.Log.Printf("❌ Error creating privileged introspection request: %v", err)
+		h.OAuth2Provider.WriteIntrospectionError(ctx, w, err)
+		return
+	}
+
+	// Debug: Log extra claims from the introspection session
+	if resp, ok := ir.(*fosite.IntrospectionResponse); ok {
+		session := resp.AccessRequester.GetSession()
+		if ds, ok := session.(*openid.DefaultSession); ok {
+			h.Log.Printf("🔍 Privileged Introspection Session Subject: '%s'", ds.GetSubject())
+			if ds.Claims != nil {
+				h.Log.Printf("🔍 Privileged Introspection Session Extra Claims: %+v", ds.Claims.Extra)
+				for key, value := range ds.Claims.Extra {
+					h.Log.Printf("🔍 Privileged Introspection Session Extra Claim [%s]: %v", key, value)
+				}
+			} else {
+				h.Log.Printf("🔍 Privileged Introspection Session has no Claims")
+			}
+		}
+	}
+
+	// Capture the response to add issuer_state and attestation
+	capture := newResponseCapture(w)
+	h.OAuth2Provider.WriteIntrospectionResponse(ctx, capture, ir)
+
+	// Parse the JSON response
+	var response map[string]interface{}
+	if err := json.Unmarshal(capture.body.Bytes(), &response); err != nil {
+		h.Log.Printf("❌ Error parsing privileged introspection response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Debug: Log all response keys and values
+	h.Log.Printf("🔍 Privileged Introspection Response Keys: %v", getMapKeys(response))
+	for key, value := range response {
+		h.Log.Printf("🔍 Privileged Response [%s]: %v", key, value)
+	}
+
+	// Add issuer_state if the token is active
+	if active, ok := response["active"].(bool); ok && active {
+		h.Log.Printf("🔍 Token is active, checking for issuer_state and attestation")
+
+		// Add attested client information to the response
+		response["attested_client_id"] = attestedClientID
+		h.Log.Printf("🔍 Added attested client ID to response: %s", attestedClientID)
+
+		// Manually add extra claims from the introspection session
+		if resp, ok := ir.(*fosite.IntrospectionResponse); ok {
+			session := resp.AccessRequester.GetSession()
+			if ds, ok := session.(*openid.DefaultSession); ok && ds.Claims != nil && ds.Claims.Extra != nil {
+				for key, value := range ds.Claims.Extra {
+					response[key] = value
+					h.Log.Printf("🔍 Added extra claim to privileged response [%s]: %v", key, value)
+				}
+			}
+
+			// Add scope to the response if not present
+			if _, hasScope := response["scope"]; !hasScope {
+				if accessRequester := resp.AccessRequester; accessRequester != nil {
+					h.Log.Printf("🔍 Privileged AccessRequester is not nil")
+					scopes := accessRequester.GetGrantedScopes()
+					h.Log.Printf("🔍 Privileged GetGrantedScopes returned: %v", scopes)
+					if len(scopes) > 0 {
+						response["scope"] = strings.Join(scopes, " ")
+						h.Log.Printf("🔍 Added scope to privileged introspection response: %v", scopes)
+					} else {
+						h.Log.Printf("🔍 Privileged No scopes returned from GetGrantedScopes, checking session Extra")
+						// Check if scopes are stored in the session's Extra field
+						if session := resp.AccessRequester.GetSession(); session != nil {
+							if ds, ok := session.(*openid.DefaultSession); ok && ds.Claims != nil && ds.Claims.Extra != nil {
+								if grantedScopes, ok := ds.Claims.Extra["granted_scopes"].([]interface{}); ok {
+									var scopeStrings []string
+									for _, scope := range grantedScopes {
+										if scopeStr, ok := scope.(string); ok {
+											scopeStrings = append(scopeStrings, scopeStr)
+										}
+									}
+									if len(scopeStrings) > 0 {
+										response["scope"] = strings.Join(scopeStrings, " ")
+										h.Log.Printf("🔍 Added scope from session Extra to privileged introspection response: %v", scopeStrings)
+									}
+								} else if grantedScopes, ok := ds.Claims.Extra["granted_scopes"].([]string); ok {
+									if len(grantedScopes) > 0 {
+										response["scope"] = strings.Join(grantedScopes, " ")
+										h.Log.Printf("🔍 Added scope from session Extra to privileged introspection response: %v", grantedScopes)
+									}
+								}
+							}
+						}
+					}
+				} else {
+					h.Log.Printf("🔍 Privileged AccessRequester is nil")
+				}
+			}
+		}
+
+		h.Log.Printf("✅ Attestation and issuer_state info added from privileged introspection session")
+	} else {
+		h.Log.Printf("⚠️ Token is not active (active=%t, ok=%t)", active, ok)
+	}
+
+	h.Log.Printf("🔍 Final privileged response before encoding: %+v", response)
 
 	// Write the modified response
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
