@@ -16,6 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/openid"
+	"github.com/ory/fosite/handler/rfc8693"
 	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
@@ -758,39 +759,111 @@ func (r *RequestWithClientID) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return fmt.Errorf("failed to marshal session data: %w", err)
 		}
+
+		// Try to unmarshal as openid.DefaultSession first (most common)
 		var session openid.DefaultSession
 		if err := json.Unmarshal(sessionBytes, &session); err != nil {
-			return fmt.Errorf("failed to unmarshal session: %w", err)
-		}
-		// Store session to be set later
-		delete(raw, "session")
+			// If that fails, try TokenExchangeSession
+			var tokenExchangeSession rfc8693.TokenExchangeSession
+			if err := json.Unmarshal(sessionBytes, &tokenExchangeSession); err != nil {
+				// If that fails, try fosite.DefaultSession
+				var defaultSession fosite.DefaultSession
+				if err := json.Unmarshal(sessionBytes, &defaultSession); err != nil {
+					return fmt.Errorf("failed to unmarshal session as any known type: %w", err)
+				}
+				// Store default session to be set later
+				delete(raw, "session")
 
-		// Now unmarshal the modified data into the appropriate request type
-		modifiedData, err := json.Marshal(raw)
-		if err != nil {
-			return err
-		}
+				// Now unmarshal the modified data into the appropriate request type
+				modifiedData, err := json.Marshal(raw)
+				if err != nil {
+					return err
+				}
 
-		switch r.Type {
-		case "Request":
-			r.Request = &fosite.Request{}
-			if err := json.Unmarshal(modifiedData, r.Request); err != nil {
+				switch r.Type {
+				case "Request":
+					r.Request = &fosite.Request{}
+					if err := json.Unmarshal(modifiedData, r.Request); err != nil {
+						return err
+					}
+					r.Request.Session = &defaultSession
+				case "AccessRequest":
+					r.AccessRequest = &fosite.AccessRequest{}
+					if err := json.Unmarshal(modifiedData, r.AccessRequest); err != nil {
+						return err
+					}
+					r.AccessRequest.Session = &defaultSession
+				default:
+					// Default to Request
+					r.Request = &fosite.Request{}
+					if err := json.Unmarshal(modifiedData, r.Request); err != nil {
+						return err
+					}
+					r.Request.Session = &defaultSession
+				}
+			} else {
+				// Store token exchange session to be set later
+				delete(raw, "session")
+
+				// Now unmarshal the modified data into the appropriate request type
+				modifiedData, err := json.Marshal(raw)
+				if err != nil {
+					return err
+				}
+
+				switch r.Type {
+				case "Request":
+					r.Request = &fosite.Request{}
+					if err := json.Unmarshal(modifiedData, r.Request); err != nil {
+						return err
+					}
+					r.Request.Session = &tokenExchangeSession
+				case "AccessRequest":
+					r.AccessRequest = &fosite.AccessRequest{}
+					if err := json.Unmarshal(modifiedData, r.AccessRequest); err != nil {
+						return err
+					}
+					r.AccessRequest.Session = &tokenExchangeSession
+				default:
+					// Default to Request
+					r.Request = &fosite.Request{}
+					if err := json.Unmarshal(modifiedData, r.Request); err != nil {
+						return err
+					}
+					r.Request.Session = &tokenExchangeSession
+				}
+			}
+		} else {
+			// Store openid session to be set later
+			delete(raw, "session")
+
+			// Now unmarshal the modified data into the appropriate request type
+			modifiedData, err := json.Marshal(raw)
+			if err != nil {
 				return err
 			}
-			r.Request.Session = &session
-		case "AccessRequest":
-			r.AccessRequest = &fosite.AccessRequest{}
-			if err := json.Unmarshal(modifiedData, r.AccessRequest); err != nil {
-				return err
+
+			switch r.Type {
+			case "Request":
+				r.Request = &fosite.Request{}
+				if err := json.Unmarshal(modifiedData, r.Request); err != nil {
+					return err
+				}
+				r.Request.Session = &session
+			case "AccessRequest":
+				r.AccessRequest = &fosite.AccessRequest{}
+				if err := json.Unmarshal(modifiedData, r.AccessRequest); err != nil {
+					return err
+				}
+				r.AccessRequest.Session = &session
+			default:
+				// Default to Request
+				r.Request = &fosite.Request{}
+				if err := json.Unmarshal(modifiedData, r.Request); err != nil {
+					return err
+				}
+				r.Request.Session = &session
 			}
-			r.AccessRequest.Session = &session
-		default:
-			// Default to Request
-			r.Request = &fosite.Request{}
-			if err := json.Unmarshal(modifiedData, r.Request); err != nil {
-				return err
-			}
-			r.Request.Session = &session
 		}
 	} else {
 		// No session data, just unmarshal the request
@@ -840,7 +913,7 @@ func MarshalRequestWithClientID(request fosite.Requester) ([]byte, error) {
 
 // UnmarshalRequestWithClientID unmarshals a fosite.Requester with client looked up by ID
 func (s *SQLiteStore) UnmarshalRequestWithClientID(data []byte) (fosite.Requester, error) {
-	log.Printf("🔍 UnmarshalRequestWithClientID: starting unmarshal of data (length: %d): %s", len(data), string(data))
+	// log.Printf("🔍 UnmarshalRequestWithClientID: starting unmarshal of data (length: %d): %s", len(data), string(data))
 
 	var wrapper RequestWithClientID
 	if err := json.Unmarshal(data, &wrapper); err != nil {
@@ -848,7 +921,7 @@ func (s *SQLiteStore) UnmarshalRequestWithClientID(data []byte) (fosite.Requeste
 		return nil, err
 	}
 
-	log.Printf("🔍 UnmarshalRequestWithClientID: wrapper type: %s, clientID: %s", wrapper.Type, wrapper.ClientID)
+	//log.Printf("🔍 UnmarshalRequestWithClientID: wrapper type: %s, clientID: %s", wrapper.Type, wrapper.ClientID)
 
 	var request fosite.Requester
 	switch wrapper.Type {

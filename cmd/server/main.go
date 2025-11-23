@@ -26,7 +26,6 @@ import (
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
 	"github.com/ory/fosite/handler/oauth2"
-	"github.com/ory/fosite/handler/rfc8693"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"oauth2-server/internal/attestation"
@@ -98,12 +97,15 @@ var (
 var authCodeToStateMap = make(map[string]string) // authorization_code -> original_state
 var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData)
 
+// Map to store plain text secrets for privileged clients
+var privilegedClientSecrets = make(map[string]string)
+
 type TrustAnchorDispatcher struct {
 	handler *handlers.TrustAnchorHandler
 }
 
 func (d *TrustAnchorDispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("DEBUG: TrustAnchorDispatcher called for path: %s, method: %s", r.URL.Path, r.Method)
+	log.Debugf("TrustAnchorDispatcher called for path: %s, method: %s", r.URL.Path, r.Method)
 	if r.URL.Path == "/trust-anchor/" {
 		// List all trust anchors
 		d.handler.HandleList(w, r)
@@ -188,26 +190,26 @@ func main() {
 		})
 	}
 
-	log.Printf("✅ Configuration loaded successfully")
-	log.Printf("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
-	log.Printf("🔧 Privileged Client ID: %s", configuration.Security.PrivilegedClientID)
+	log.Info("✅ Configuration loaded successfully")
+	log.Infof("🔧 Log Level: %s, Format: %s, Audit: %t", logLevel, logFormat, enableAudit)
+	log.Infof("🔧 Privileged Client ID: %s", configuration.Security.PrivilegedClientID)
 
 	// Initialize secret manager for encrypted storage
 	secretManager = store.NewSecretManager([]byte(configuration.Security.EncryptionKey))
-	log.Printf("✅ Secret manager initialized")
+	log.Info("✅ Secret manager initialized")
 
 	if configuration.IsProxyMode() {
-		log.Printf("🔄 Identity Provider Mode: PROXY (upstream provider)")
+		log.Info("🔄 Identity Provider Mode: PROXY (upstream provider)")
 		if configuration.UpstreamProvider.ProviderURL != "" {
-			log.Printf("🔗 Upstream OAuth2 Provider configured: %s", configuration.UpstreamProvider.ProviderURL)
+			log.Infof("🔗 Upstream OAuth2 Provider configured: %s", configuration.UpstreamProvider.ProviderURL)
 		}
 	} else {
-		log.Printf("🏠 Identity Provider Mode: LOCAL (local users)")
+		log.Info("🏠 Identity Provider Mode: LOCAL (local users)")
 	}
 
 	// Fetch and cache upstream OIDC discovery if upstream provider is configured
 	if configuration.IsProxyMode() && configuration.UpstreamProvider.ProviderURL != "" && configuration.UpstreamProvider.ProviderURL != "https://example.com" {
-		log.Printf("📡 Fetching upstream OIDC discovery from: %s", configuration.UpstreamProvider.ProviderURL+"/.well-known/openid-configuration")
+		log.Infof("📡 Fetching upstream OIDC discovery from: %s", configuration.UpstreamProvider.ProviderURL+"/.well-known/openid-configuration")
 
 		resp, err := http.Get(configuration.UpstreamProvider.ProviderURL + "/.well-known/openid-configuration")
 		if err != nil {
@@ -227,12 +229,12 @@ func main() {
 		// Store the metadata in the config
 		configuration.UpstreamProvider.Metadata = upstreamMetadata
 
-		log.Printf("✅ Fetched upstream OIDC discovery with %d metadata fields", len(upstreamMetadata))
+		log.Debugf("✅ Fetched upstream OIDC discovery with %d metadata fields", len(upstreamMetadata))
 
 		// Auto-register as client with upstream if no credentials provided and registration endpoint exists
 		if configuration.UpstreamProvider.ClientID == "" && configuration.UpstreamProvider.ClientSecret == "" {
 			if registrationEndpoint, ok := upstreamMetadata["registration_endpoint"].(string); ok && registrationEndpoint != "" {
-				log.Printf("🔧 No upstream client credentials provided, attempting auto-registration with upstream provider")
+				log.Info("🔧 No upstream client credentials provided, attempting auto-registration with upstream provider")
 
 				// Get supported scopes, default to openid if not available
 				upstreamScopes := []string{"openid"}
@@ -445,6 +447,12 @@ func initializeClients() error {
 			}
 		}
 
+		// Store plain text secret for privileged clients
+		if client.ID == configuration.Security.PrivilegedClientID {
+			privilegedClientSecrets[client.ID] = client.Secret
+			log.Printf("✅ Stored plain text secret for privileged client: %s", client.ID)
+		}
+
 		newClient := &fosite.DefaultClient{
 			ID:            client.ID,
 			Secret:        hashedSecret,
@@ -588,13 +596,13 @@ func initializeOAuth2Provider() error {
 	// The token exchange functionality should be handled by the default fosite provider
 	// when TokenExchangeEnabled is true in the config
 	// Note: RFC8693 handler requires additional storage methods not in our interface
-	_ = &rfc8693.Handler{
-		Config:               config,
-		AccessTokenStrategy:  AccessTokenStrategy,
-		RefreshTokenStrategy: RefreshTokenStrategy,
-		AccessTokenStorage:   customStorage,
-		RefreshTokenStorage:  customStorage,
-	}
+	// _ = &rfc8693.Handler{
+	// 	Config:               config,
+	// 	AccessTokenStrategy:  AccessTokenStrategy,
+	// 	RefreshTokenStrategy: RefreshTokenStrategy,
+	// 	AccessTokenStorage:   customStorage,
+	// 	RefreshTokenStorage:  customStorage,
+	// }
 	log.Printf("✅ RFC8693 handler initialized")
 
 	log.Printf("✅ OAuth2 provider initialized with fosite storage")
@@ -616,7 +624,7 @@ func initializeHandlers() {
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
 	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager)
-	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager)
+	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
 	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)
 

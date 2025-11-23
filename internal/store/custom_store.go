@@ -329,14 +329,14 @@ func (s *CustomStorage) GetRefreshTokenCount() (int, error) {
 
 // GetClient returns a client but makes it appear public to skip Fosite's authentication
 func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client, error) {
-	log.Printf("🔍 CustomStorage.GetClient: looking for client %s (total clients in map: %d)", id, len(s.Clients))
+	// log.Printf("🔍 CustomStorage.GetClient: looking for client %s (total clients in map: %d)", id, len(s.Clients))
 
 	// Check if this is a proxy token creation request
 	isProxyToken := ctx.Value("proxy_token") != nil
-	log.Printf("🔍 CustomStorage.GetClient: context values - proxy_token: %v", ctx.Value("proxy_token"))
-	if isProxyToken {
-		log.Printf("🔄 CustomStorage.GetClient: proxy token request detected for client %s", id)
-	}
+	// log.Printf("🔍 CustomStorage.GetClient: context values - proxy_token: %v", ctx.Value("proxy_token"))
+	// if isProxyToken {
+	// 	log.Printf("🔄 CustomStorage.GetClient: proxy token request detected for client %s", id)
+	// }
 
 	client, exists := s.Clients[id]
 	if !exists {
@@ -348,7 +348,7 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 		}); ok {
 			underlyingClient, err := storage.GetClient(ctx, id)
 			if err == nil {
-				log.Printf("✅ CustomStorage.GetClient: found client %s in underlying storage", id)
+				// log.Printf("✅ CustomStorage.GetClient: found client %s in underlying storage", id)
 				client = underlyingClient
 				exists = true
 			} else {
@@ -358,7 +358,7 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 			// Check if it's a MemoryStoreWrapper and access the embedded MemoryStore directly
 			if memoryWrapper, ok := s.Storage.(*MemoryStoreWrapper); ok {
 				if memClient, exists := memoryWrapper.MemoryStore.Clients[id]; exists {
-					log.Printf("✅ CustomStorage.GetClient: found client %s in MemoryStore", id)
+					//log.Printf("✅ CustomStorage.GetClient: found client %s in MemoryStore", id)
 					client = memClient
 					exists = true
 				} else {

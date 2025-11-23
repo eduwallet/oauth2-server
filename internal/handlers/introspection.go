@@ -285,8 +285,49 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
-		// The attestation and issuer_state information is now automatically included
-		// in the response by Fosite since we stored them in the session claims during token creation
+		// Add scope to the response if not present
+		if _, hasScope := response["scope"]; !hasScope {
+			if resp, ok := ir.(*fosite.IntrospectionResponse); ok {
+				h.Log.Printf("🔍 IntrospectionResponse type assertion successful")
+				if accessRequester := resp.AccessRequester; accessRequester != nil {
+					h.Log.Printf("🔍 AccessRequester is not nil")
+					scopes := accessRequester.GetGrantedScopes()
+					h.Log.Printf("🔍 GetGrantedScopes returned: %v", scopes)
+					if len(scopes) > 0 {
+						response["scope"] = strings.Join(scopes, " ")
+						h.Log.Printf("🔍 Added scope to introspection response: %v", scopes)
+					} else {
+						h.Log.Printf("🔍 No scopes returned from GetGrantedScopes, checking session Extra")
+						// Check if scopes are stored in the session's Extra field
+						if session := accessRequester.GetSession(); session != nil {
+							if ds, ok := session.(*openid.DefaultSession); ok && ds.Claims != nil && ds.Claims.Extra != nil {
+								if grantedScopes, ok := ds.Claims.Extra["granted_scopes"].([]interface{}); ok {
+									var scopeStrings []string
+									for _, scope := range grantedScopes {
+										if scopeStr, ok := scope.(string); ok {
+											scopeStrings = append(scopeStrings, scopeStr)
+										}
+									}
+									if len(scopeStrings) > 0 {
+										response["scope"] = strings.Join(scopeStrings, " ")
+										h.Log.Printf("🔍 Added scope from session Extra to introspection response: %v", scopeStrings)
+									}
+								} else if grantedScopes, ok := ds.Claims.Extra["granted_scopes"].([]string); ok {
+									if len(grantedScopes) > 0 {
+										response["scope"] = strings.Join(grantedScopes, " ")
+										h.Log.Printf("🔍 Added scope from session Extra to introspection response: %v", grantedScopes)
+									}
+								}
+							}
+						}
+					}
+				} else {
+					h.Log.Printf("🔍 AccessRequester is nil")
+				}
+			} else {
+				h.Log.Printf("🔍 IntrospectionResponse type assertion failed")
+			}
+		}
 	}
 
 	h.Log.Printf("Response response: %v", response)
@@ -400,6 +441,45 @@ func (h *IntrospectionHandler) handleLocalIntrospectionWithCredentials(w http.Re
 				for key, value := range ds.Claims.Extra {
 					response[key] = value
 					h.Log.Printf("🔍 Added extra claim to response [%s]: %v", key, value)
+				}
+			}
+
+			// Add scope to the response if not present
+			if _, hasScope := response["scope"]; !hasScope {
+				if accessRequester := resp.AccessRequester; accessRequester != nil {
+					h.Log.Printf("🔍 Local AccessRequester is not nil")
+					scopes := accessRequester.GetGrantedScopes()
+					h.Log.Printf("🔍 Local GetGrantedScopes returned: %v", scopes)
+					if len(scopes) > 0 {
+						response["scope"] = strings.Join(scopes, " ")
+						h.Log.Printf("🔍 Added scope to local introspection response: %v", scopes)
+					} else {
+						h.Log.Printf("🔍 Local No scopes returned from GetGrantedScopes, checking session Extra")
+						// Check if scopes are stored in the session's Extra field
+						if session := resp.AccessRequester.GetSession(); session != nil {
+							if ds, ok := session.(*openid.DefaultSession); ok && ds.Claims != nil && ds.Claims.Extra != nil {
+								if grantedScopes, ok := ds.Claims.Extra["granted_scopes"].([]interface{}); ok {
+									var scopeStrings []string
+									for _, scope := range grantedScopes {
+										if scopeStr, ok := scope.(string); ok {
+											scopeStrings = append(scopeStrings, scopeStr)
+										}
+									}
+									if len(scopeStrings) > 0 {
+										response["scope"] = strings.Join(scopeStrings, " ")
+										h.Log.Printf("🔍 Added scope from session Extra to local introspection response: %v", scopeStrings)
+									}
+								} else if grantedScopes, ok := ds.Claims.Extra["granted_scopes"].([]string); ok {
+									if len(grantedScopes) > 0 {
+										response["scope"] = strings.Join(grantedScopes, " ")
+										h.Log.Printf("🔍 Added scope from session Extra to local introspection response: %v", grantedScopes)
+									}
+								}
+							}
+						}
+					}
+				} else {
+					h.Log.Printf("🔍 Local AccessRequester is nil")
 				}
 			}
 		}

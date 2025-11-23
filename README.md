@@ -716,6 +716,7 @@ oauth2_attestation_verification_duration_seconds{method="jwt"}
 | `/device/verify` | POST | Device code verification | RFC 8628 |
 | `/device/consent` | POST | Device consent | RFC 8628 |
 | `/introspect` | POST | Token introspection (returns `aud` as array, includes attestation metadata) | RFC 7662 |
+| `/authorization-introspection` | POST | Combined token introspection and userinfo (cross-client access with audience validation) | RFC 7662 + OIDC |
 | `/revoke` | POST | Token revocation | RFC 6749 |
 | `/userinfo` | GET | UserInfo endpoint (requires Authorization header) | OIDC Core |
 | `/register` | POST | Dynamic client registration (with audience and attestation support) |
@@ -868,6 +869,60 @@ curl -X POST http://localhost:8080/token \
   -d "requested_token_type=urn:ietf:params:oauth:token-type:refresh_token" \
   -d "audience=<target_audience>"
 ```
+
+### Authorization-Introspection Endpoint
+
+The `/authorization-introspection` endpoint combines token introspection with userinfo data, enabling cross-client token access based on audience validation. This endpoint allows different clients to introspect tokens if they're in the token's client audience, providing a secure way for backend services to access user information from tokens issued to frontend clients.
+
+**Key Features:**
+- **Cross-Client Access**: Clients can introspect tokens from other clients if they're in the audience
+- **Combined Response**: Returns both token details and userinfo in a single request
+- **Audience Validation**: Enforces that requesting clients are authorized to access the token
+- **Privileged Access**: Privileged clients can introspect any token
+
+**Authentication:** Requires HTTP Basic authentication with client credentials.
+
+**Request:**
+```bash
+curl -X POST http://localhost:8080/authorization-introspection \
+  -u "backend-client:backend-client-secret" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "access-token=<access_token>"
+```
+
+**Response:**
+```json
+{
+  "token-details": {
+    "active": true,
+    "client_id": "web-app-client",
+    "scope": "openid profile email",
+    "token_type": "Bearer",
+    "exp": 1763375669,
+    "iat": 1763372069,
+    "aud": ["api-service", "backend-client"],
+    "iss": "http://localhost:8080",
+    "sub": "user-001"
+  },
+  "user-info": {
+    "sub": "user-001",
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "email_verified": true,
+    "profile": "https://example.com/profile/john.doe"
+  }
+}
+```
+
+**Authorization Rules:**
+1. **Audience Check**: The requesting client must be in the token's client audience
+2. **Privileged Access**: Clients configured as privileged can introspect any token
+3. **Same Client**: Clients can always introspect their own tokens
+
+**Use Cases:**
+- Backend services accessing user data from frontend-issued tokens
+- API gateways validating and enriching requests with user information
+- Microservices architectures with shared user contexts
 
 ### Introspect a Token
 

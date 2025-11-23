@@ -90,4 +90,6 @@ require (
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
 
-replace github.com/ory/fosite => github.com/HarryKodden/fosite v0.0.0-20250815115621-20549a20dc22
+replace github.com/ory/fosite => github.com/HarryKodden/fosite v0.0.0-20251123221212-37e5113d0b78
+
+//replace github.com/ory/fosite => ./submodules/fosite

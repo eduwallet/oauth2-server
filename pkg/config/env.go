@@ -26,6 +26,18 @@ func (c *Config) LoadFromEnv() {
 		c.Server.Host = host
 	}
 
+	// Logging configuration overrides
+	if loglevel := os.Getenv("LOG_LEVEL"); loglevel != "" {
+		c.Logging.Level = loglevel
+	}
+
+	if logformat := os.Getenv("LOG_FORMAT"); logformat != "" {
+		c.Logging.Format = logformat
+	}
+	if enableAudit := os.Getenv("ENABLE_AUDIT_LOGGING"); enableAudit != "" {
+		c.Logging.EnableAudit = GetEnvBool("ENABLE_AUDIT_LOGGING", false)
+	}
+
 	// Database configuration overrides
 	if storageType := os.Getenv("DATABASE_TYPE"); storageType != "" {
 		c.Database.Type = storageType

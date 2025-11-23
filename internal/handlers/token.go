@@ -189,6 +189,36 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// For authorization_code flow, grant scopes that were retrieved from the auth code session
+	if grantType == "authorization_code" {
+		if accessRequest.GetSession() != nil {
+			if ds, ok := accessRequest.GetSession().(*openid.DefaultSession); ok {
+				if ds.Claims != nil && ds.Claims.Extra != nil {
+					if grantedScopes, ok := ds.Claims.Extra["granted_scopes"].([]interface{}); ok {
+						var scopeStrings []string
+						for _, scope := range grantedScopes {
+							if scopeStr, ok := scope.(string); ok {
+								accessRequest.GrantScope(scopeStr)
+								scopeStrings = append(scopeStrings, scopeStr)
+							}
+						}
+						h.Log.Printf("✅ Granted scopes for authorization_code from session: %v", scopeStrings)
+
+						// Store granted scopes in the session for persistence
+						if session.Claims == nil {
+							session.Claims = &jwt.IDTokenClaims{}
+						}
+						if session.Claims.Extra == nil {
+							session.Claims.Extra = make(map[string]interface{})
+						}
+						session.Claims.Extra["granted_scopes"] = scopeStrings
+						h.Log.Printf("✅ Stored granted scopes in session: %v", scopeStrings)
+					}
+				}
+			}
+		}
+	}
+
 	// Debug: Check what session data we got back
 	h.Log.Printf("🔍 Token: Session after NewAccessRequest - Subject: '%s', Username: '%s'",
 		session.GetSubject(), session.GetUsername())
@@ -199,52 +229,49 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 
 	h.Log.Printf("🔍 DEBUG: About to check for token exchange workaround")
 
-	// WORKAROUND: For token exchange, the custom Fosite fork sets the session subject to the client ID,
-	// but according to RFC 8693, it should preserve the subject from the subject token.
-	// Since we can't modify the Fosite fork, we need to fix this here AFTER NewAccessRequest.
-	h.Log.Printf("🔍 Checking grant type: %s", grantType)
-	if grantType == "urn:ietf:params:oauth:grant-type:token-exchange" {
-		h.Log.Printf("🔍 WORKAROUND: Token exchange detected, extracting subject token")
-		// Extract the subject token from the request
-		subjectToken := r.FormValue("subject_token")
-		if subjectToken != "" {
-			h.Log.Printf("🔍 WORKAROUND: Subject token found: %s", subjectToken)
-			// Decode the JWT token directly to extract the subject
-			// Access tokens are JWTs with the subject in the payload
-			parts := strings.Split(subjectToken, ".")
-			h.Log.Printf("🔍 WORKAROUND: JWT parts count: %d", len(parts))
-			if len(parts) == 3 {
-				h.Log.Printf("🔍 WORKAROUND: Decoding JWT payload: %s", parts[1])
-				// Decode the payload (second part)
-				payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-				if err == nil {
-					h.Log.Printf("🔍 WORKAROUND: Decoded payload: %s", string(payload))
-					var claims map[string]interface{}
-					if err := json.Unmarshal(payload, &claims); err == nil {
-						h.Log.Printf("🔍 WORKAROUND: Parsed claims: %+v", claims)
-						if subject, ok := claims["sub"].(string); ok && subject != "" {
-							h.Log.Printf("🔍 Token Exchange: Extracted subject '%s' from subject token JWT, setting on session", subject)
-							session.Subject = subject
-							session.Username = subject
+	// For authorization_code flow, grant scopes that were stored in the session during authorization
+	if grantType == "authorization_code" {
+		authCode := r.FormValue("code")
+		if authCode != "" {
+			// Get the authorization code session to retrieve granted scopes
+			requester, err := h.Storage.GetAuthorizeCodeSession(ctx, authCode, session)
+			if err == nil && requester != nil {
+				// Get granted scopes from the session's Extra field
+				reqSession := requester.GetSession()
+				if defaultSession, ok := reqSession.(*openid.DefaultSession); ok {
+					if defaultSession.Claims != nil && defaultSession.Claims.Extra != nil {
+						if scopes, ok := defaultSession.Claims.Extra["granted_scopes"].([]interface{}); ok {
+							grantedScopes := make([]string, len(scopes))
+							for i, s := range scopes {
+								if str, ok := s.(string); ok {
+									grantedScopes[i] = str
+								}
+							}
+							h.Log.Printf("🔍 Retrieved granted scopes from auth code session: %v", grantedScopes)
+							// Grant the scopes to the access request
+							for _, scope := range grantedScopes {
+								accessRequest.GrantScope(scope)
+							}
+							h.Log.Printf("✅ Granted scopes for authorization_code: %v", grantedScopes)
+
+							// Store granted scopes in the session for persistence
 							if session.Claims == nil {
 								session.Claims = &jwt.IDTokenClaims{}
 							}
-							session.Claims.Subject = subject
-							h.Log.Printf("✅ Token Exchange: Fixed session subject to '%s'", subject)
-						} else {
-							h.Log.Printf("⚠️ WORKAROUND: No subject claim found in JWT payload")
+							if session.Claims.Extra == nil {
+								session.Claims.Extra = make(map[string]interface{})
+							}
+							session.Claims.Extra["granted_scopes"] = grantedScopes
+							h.Log.Printf("✅ Stored granted scopes in session: %v", grantedScopes)
+
+							// Store for later use
+							r = r.WithContext(context.WithValue(r.Context(), "granted_scopes", grantedScopes))
 						}
-					} else {
-						h.Log.Printf("⚠️ WORKAROUND: Failed to unmarshal JWT payload: %v", err)
 					}
-				} else {
-					h.Log.Printf("⚠️ WORKAROUND: Failed to decode JWT payload: %v", err)
 				}
 			} else {
-				h.Log.Printf("⚠️ WORKAROUND: Subject token is not a valid JWT format")
+				h.Log.Printf("❌ Failed to get auth code session: %v", err)
 			}
-		} else {
-			h.Log.Printf("⚠️ WORKAROUND: No subject token found in request")
 		}
 	}
 
@@ -309,6 +336,16 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 
 		h.Log.Printf("✅ Set granted scopes for client_credentials: %v", grantedScopes)
 		h.Log.Printf("✅ Set granted audiences for client_credentials: %v", grantedAudiences)
+
+		// Store granted scopes in the session for persistence
+		if session.Claims == nil {
+			session.Claims = &jwt.IDTokenClaims{}
+		}
+		if session.Claims.Extra == nil {
+			session.Claims.Extra = make(map[string]interface{})
+		}
+		session.Claims.Extra["granted_scopes"] = grantedScopes
+		h.Log.Printf("✅ Stored granted scopes in session for client_credentials: %v", grantedScopes)
 	}
 
 	// Let fosite create the access response

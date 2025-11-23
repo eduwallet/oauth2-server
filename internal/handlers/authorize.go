@@ -123,6 +123,12 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Now that the user is authorized, we set up a session using the proper newSession helper:
 	mySessionData := userSession(h.Configuration.BaseURL, username, []string{})
 
+	// Store granted scopes in session for later retrieval during token exchange
+	if mySessionData.Claims.Extra == nil {
+		mySessionData.Claims.Extra = make(map[string]interface{})
+	}
+	mySessionData.Claims.Extra["granted_scopes"] = ar.GetGrantedScopes()
+
 	// Store the original state from the authorization request in the session
 	// This will be available during userinfo requests
 	issuerState := r.URL.Query().Get("issuer_state")

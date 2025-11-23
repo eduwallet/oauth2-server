@@ -5,7 +5,7 @@ services:
     volumes:
       - certs:/tmp/certs
       - ./init-certs.sh:/init-certs.sh
-    entrypoint: ["/bin/sh", "-c", "apk add --no-cache openssl curl && /init-certs.sh OAUTH_URL=$$OAUTH_URL"]
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache openssl curl && /init-certs.sh url=$$OAUTH_URL"]
     restart: "no"
     environment:
       - API_KEY=${API_KEY}

@@ -1,44 +1,47 @@
 package handlers
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
-	"time"
 
 	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/handler/openid"
 	"github.com/sirupsen/logrus"
 )
 
 // AuthorizationIntrospectionHandler manages authorization introspection requests
 type AuthorizationIntrospectionHandler struct {
-	OAuth2Provider fosite.OAuth2Provider
-	Config         *config.Config
-	Log            *logrus.Logger
-	Storage        store.Storage
-	SecretManager  *store.SecretManager
+	OAuth2Provider          fosite.OAuth2Provider
+	Config                  *config.Config
+	Log                     *logrus.Logger
+	Storage                 store.Storage
+	SecretManager           *store.SecretManager
+	PrivilegedClientSecrets map[string]string
 }
 
 // NewAuthorizationIntrospectionHandler creates a new authorization introspection handler
-func NewAuthorizationIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, storage store.Storage, secretManager *store.SecretManager) *AuthorizationIntrospectionHandler {
+func NewAuthorizationIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, storage store.Storage, secretManager *store.SecretManager, privilegedClientSecrets map[string]string) *AuthorizationIntrospectionHandler {
 	return &AuthorizationIntrospectionHandler{
-		OAuth2Provider: oauth2Provider,
-		Config:         config,
-		Log:            log,
-		Storage:        storage,
-		SecretManager:  secretManager,
+		OAuth2Provider:          oauth2Provider,
+		Config:                  config,
+		Log:                     log,
+		Storage:                 storage,
+		SecretManager:           secretManager,
+		PrivilegedClientSecrets: privilegedClientSecrets,
 	}
 }
 
 // ServeHTTP handles authorization introspection requests
 func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("DEBUG: AuthorizationIntrospectionHandler.ServeHTTP called")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -87,6 +90,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 		return
 	}
 
+	h.Log.Printf("✅ Token introspected successfully: %+v", tokenDetails)
 	// Check if token is active
 	active, _ := tokenDetails["active"].(bool)
 	if !active {
@@ -164,97 +168,101 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	})
 }
 
-// introspectTokenWithPrivilegedAccess performs token introspection by manually decoding HMAC tokens
+// introspectTokenWithPrivilegedAccess performs token introspection using Fosite with privileged access
 func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(tokenValue string) (map[string]interface{}, error) {
-	// For HMAC tokens, manually decode and verify the signature
-	parts := strings.Split(tokenValue, ".")
-	if len(parts) != 3 {
-		return map[string]interface{}{
-			"active": false,
-			"error":  "invalid_token",
-		}, nil
+	previewLen := 20
+	if len(tokenValue) < previewLen {
+		previewLen = len(tokenValue)
 	}
+	fmt.Printf("DEBUG: introspectTokenWithPrivilegedAccess called with token: %s\n", tokenValue[:previewLen]+"...")
+	h.Log.Printf("🔍 Starting privileged introspection for token: %s", tokenValue[:previewLen]+"...")
 
-	// Decode payload
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	// Create a local introspection request that Fosite can handle
+	form := make(url.Values)
+	form.Set("token", tokenValue)
+
+	req, err := http.NewRequest("POST", h.Config.Server.BaseURL+"/introspect", strings.NewReader(form.Encode()))
 	if err != nil {
-		return map[string]interface{}{
-			"active": false,
-			"error":  "invalid_token",
-		}, nil
+		h.Log.Printf("❌ Failed to create HTTP request: %v", err)
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.PostForm = form
+
+	// Use privileged client credentials to bypass audience restrictions
+	privilegedClientID := h.Config.Security.PrivilegedClientID
+	if privilegedClientID == "" {
+		h.Log.Printf("❌ No privileged client configured")
+		return nil, fmt.Errorf("no privileged client configured")
 	}
 
-	// Verify signature
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	h.Log.Printf("🔍 Privileged client ID: %s", privilegedClientID)
+
+	// Get the privileged client's plain text secret from the handler's map
+	privilegedClientSecret, exists := h.PrivilegedClientSecrets[privilegedClientID]
+	if !exists {
+		h.Log.Printf("❌ Privileged client secret not found for client: %s", privilegedClientID)
+		h.Log.Printf("🔍 Available secrets: %v", h.PrivilegedClientSecrets)
+		return nil, fmt.Errorf("privileged client secret not found for client: %s", privilegedClientID)
+	}
+
+	h.Log.Printf("✅ Found privileged client secret, length: %d", len(privilegedClientSecret))
+
+	// Set basic auth with privileged client credentials
+	req.SetBasicAuth(privilegedClientID, privilegedClientSecret)
+	h.Log.Printf("🔍 Set basic auth for privileged client")
+
+	// Create the introspection request using Fosite
+	ctx := req.Context()
+	h.Log.Printf("🔍 Calling NewIntrospectionRequest...")
+	ir, err := h.OAuth2Provider.NewIntrospectionRequest(ctx, req, &openid.DefaultSession{})
 	if err != nil {
+		h.Log.Printf("❌ Error creating privileged introspection request: %v", err)
 		return map[string]interface{}{
 			"active": false,
 			"error":  "invalid_token",
 		}, nil
 	}
 
-	message := parts[0] + "." + parts[1]
-	expectedSignature := hmac.New(sha256.New, []byte(h.Config.Security.JWTSecret))
-	expectedSignature.Write([]byte(message))
-	expectedMAC := expectedSignature.Sum(nil)
+	h.Log.Printf("✅ Privileged introspection request created successfully")
 
-	if !hmac.Equal(signature, expectedMAC) {
-		return map[string]interface{}{
-			"active": false,
-			"error":  "invalid_token",
-		}, nil
+	// Capture the response
+	responseCapture := &authResponseCapture{
+		statusCode: 200,
+		header:     make(http.Header),
+		body:       bytes.Buffer{},
+	}
+	h.Log.Printf("🔍 Writing introspection response...")
+	h.OAuth2Provider.WriteIntrospectionResponse(ctx, responseCapture, ir)
+
+	h.Log.Printf("✅ Introspection response written, status: %d, body length: %d", responseCapture.statusCode, responseCapture.body.Len())
+
+	// Parse the response
+	var response map[string]interface{}
+	if err := json.Unmarshal(responseCapture.body.Bytes(), &response); err != nil {
+		h.Log.Printf("❌ Failed to parse introspection response: %v", err)
+		return nil, fmt.Errorf("failed to parse introspection response: %w", err)
 	}
 
-	// Parse claims
-	var claims map[string]interface{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return map[string]interface{}{
-			"active": false,
-			"error":  "invalid_token",
-		}, nil
-	}
-
-	// Check if token is expired
-	now := time.Now().Unix()
-	var exp int64
-	if expVal, ok := claims["exp"].(float64); ok {
-		exp = int64(expVal)
-	}
-
-	active := exp == 0 || exp > now
-
-	// Build introspection response
-	response := map[string]interface{}{
-		"active": active,
-	}
-
-	if active {
-		// Add standard claims
-		if sub, ok := claims["sub"].(string); ok {
-			response["sub"] = sub
-		}
-		if iss, ok := claims["iss"].(string); ok {
-			response["iss"] = iss
-		}
-		if aud, ok := claims["aud"].(string); ok {
-			response["aud"] = aud
-		}
-		if clientId, ok := claims["client_id"].(string); ok {
-			response["client_id"] = clientId
-		}
-		if scope, ok := claims["scope"].(string); ok {
-			response["scope"] = scope
-		}
-		if tokenType, ok := claims["token_type"].(string); ok {
-			response["token_type"] = tokenType
-		}
-		if exp > 0 {
-			response["exp"] = exp
-		}
-		if iat, ok := claims["iat"].(float64); ok {
-			response["iat"] = int64(iat)
-		}
-	}
-
+	h.Log.Printf("✅ Privileged introspection completed successfully, active: %v", response["active"])
 	return response, nil
+}
+
+// authResponseCapture implements http.ResponseWriter to capture Fosite responses
+type authResponseCapture struct {
+	statusCode int
+	header     http.Header
+	body       bytes.Buffer
+}
+
+func (rc *authResponseCapture) Header() http.Header {
+	return rc.header
+}
+
+func (rc *authResponseCapture) Write(data []byte) (int, error) {
+	return rc.body.Write(data)
+}
+
+func (rc *authResponseCapture) WriteHeader(statusCode int) {
+	rc.statusCode = statusCode
 }

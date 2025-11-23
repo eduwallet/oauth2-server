@@ -2,10 +2,13 @@
 
 # Configuration variables
 OAUTH2_SERVER_URL ?= http://localhost:8080
-TEST_DATABASE_TYPE ?= sqlite
+TEST_DATABASE_TYPE ?= memory
 TEST_USERNAME ?= john.doe
 TEST_PASSWORD ?= password123
 TEST_SCOPE ?= openid profile email
+LOG_LEVEL ?= info
+LOG_FORMAT ?= text
+
 
 # Check if port 8080 is available and offer to kill occupying process
 check-port:
@@ -259,7 +262,7 @@ test-verbose: build
 	fi
 
 # Test specific script
-test-script:
+test-script: build
 	@if [ -z "$(SCRIPT)" ]; then \
 		echo "❌ Please specify a script: make test-script SCRIPT=test_device_native.sh"; \
 		exit 1; \
