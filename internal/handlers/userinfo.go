@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"oauth2-server/internal/metrics"
 	"oauth2-server/pkg/config"
@@ -12,20 +11,23 @@ import (
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/openid"
+	"github.com/sirupsen/logrus"
 )
 
 type UserInfoHandler struct {
 	OAuth2Provider fosite.OAuth2Provider
 	Configuration  *config.Config
 	Metrics        *metrics.MetricsCollector
+	Log            *logrus.Logger
 }
 
 // NewUserInfoHandler creates a new userinfo handler
-func NewUserInfoHandler(config *config.Config, oauth2Provider fosite.OAuth2Provider, metrics *metrics.MetricsCollector) *UserInfoHandler {
+func NewUserInfoHandler(config *config.Config, oauth2Provider fosite.OAuth2Provider, metrics *metrics.MetricsCollector, log *logrus.Logger) *UserInfoHandler {
 	return &UserInfoHandler{
 		Configuration:  config,
 		OAuth2Provider: oauth2Provider,
 		Metrics:        metrics,
+		Log:            log,
 	}
 }
 
@@ -64,7 +66,7 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, token, fosite.AccessToken, &openid.DefaultSession{})
 	if err != nil {
-		log.Printf("❌ UserInfo: Token introspection failed: %v", err)
+		h.Log.Errorf("❌ UserInfo: Token introspection failed: %v", err)
 		if h.Metrics != nil {
 			h.Metrics.RecordUserinfoRequest("error", "invalid_token")
 		}
@@ -74,12 +76,12 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("✅ UserInfo: Token validated successfully")
+	h.Log.Printf("✅ UserInfo: Token validated successfully")
 
 	// Get user info from token claims (the subject)
 	session := requester.GetSession()
 	if session == nil {
-		log.Printf("❌ UserInfo: No session found in token")
+		h.Log.Errorf("❌ UserInfo: No session found in token")
 		if h.Metrics != nil {
 			h.Metrics.RecordUserinfoRequest("error", "no_session")
 		}
@@ -91,14 +93,14 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	subject := session.GetSubject()
 	username := session.GetUsername()
 
-	log.Printf("🔍 UserInfo: Token subject='%s', username='%s'", subject, username)
+	h.Log.Printf("🔍 UserInfo: Token subject='%s', username='%s'", subject, username)
 
 	// Check if this is a client credentials flow (no user context)
 	// For client credentials tokens, fosite sets subject/username to the client ID
 	if subject != "" {
 		// Check if the subject matches a known client ID
 		if _, exists := h.Configuration.GetClientByID(subject); exists {
-			log.Printf("❌ UserInfo: Client credentials token - subject '%s' is a client ID, no user context available", subject)
+			h.Log.Errorf("❌ UserInfo: Client credentials token - subject '%s' is a client ID, no user context available", subject)
 			if h.Metrics != nil {
 				h.Metrics.RecordUserinfoRequest("error", "no_user_context")
 			}
@@ -109,7 +111,7 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if subject == "" && username == "" {
-		log.Printf("❌ UserInfo: Client credentials token - no user context available")
+		h.Log.Errorf("❌ UserInfo: Client credentials token - no user context available")
 		if h.Metrics != nil {
 			h.Metrics.RecordUserinfoRequest("error", "no_user_context")
 		}
@@ -138,7 +140,7 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if found {
-		log.Printf("✅ UserInfo: Found user: %s (%s)", user.Username, user.Name)
+		h.Log.Printf("✅ UserInfo: Found user: %s (%s)", user.Username, user.Name)
 		userInfo = map[string]interface{}{
 			"sub":      user.ID,
 			"name":     user.Name,
@@ -150,11 +152,11 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Headers != nil && defaultSession.Headers.Extra != nil {
 			if issuerState, ok := defaultSession.Headers.Extra["issuer_state"].(string); ok && issuerState != "" {
 				// issuer_state moved to introspection endpoint - no longer included in userinfo
-				log.Printf("ℹ️ UserInfo: issuer_state available but moved to introspection endpoint: %s", issuerState)
+				h.Log.Printf("ℹ️ UserInfo: issuer_state available but moved to introspection endpoint: %s", issuerState)
 			}
 		}
 	} else {
-		log.Printf("❌ UserInfo: User not found for subject='%s', username='%s'", subject, username)
+		h.Log.Errorf("❌ UserInfo: User not found for subject='%s', username='%s'", subject, username)
 		if h.Metrics != nil {
 			h.Metrics.RecordUserinfoRequest("error", "user_not_found")
 		}
@@ -174,38 +176,38 @@ func (h *UserInfoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // handleProxyUserinfo forwards userinfo requests to the upstream userinfo endpoint,
 // using the mapped upstream access token instead of the proxy token.
 func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Request) {
-	log.Printf("🔄 [PROXY] Starting upstream userinfo request")
+	h.Log.Printf("🔄 [PROXY] Starting upstream userinfo request")
 
 	// Extract the proxy access token from Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		log.Printf("❌ [PROXY] Missing authorization header in userinfo request")
+		h.Log.Errorf("❌ [PROXY] Missing authorization header in userinfo request")
 		http.Error(w, "authorization required", http.StatusUnauthorized)
 		return
 	}
 
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
-		log.Printf("❌ [PROXY] Invalid authorization header format")
+		h.Log.Errorf("❌ [PROXY] Invalid authorization header format")
 		http.Error(w, "invalid authorization header", http.StatusUnauthorized)
 		return
 	}
 
 	proxyToken := parts[1]
-	log.Printf("🔑 [PROXY] Received proxy token: %s...", proxyToken[:20]+"...")
+	h.Log.Printf("🔑 [PROXY] Received proxy token: %s...", proxyToken[:20]+"...")
 
 	// Use fosite's introspection to validate the proxy token and get session data
 	ctx := r.Context()
 	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
 	if err != nil {
-		log.Printf("❌ [PROXY] Proxy token introspection failed: %v", err)
+		h.Log.Errorf("❌ [PROXY] Proxy token introspection failed: %v", err)
 		http.Error(w, "invalid proxy token", http.StatusUnauthorized)
 		return
 	}
 
 	session := requester.GetSession()
 	if session == nil {
-		log.Printf("❌ [PROXY] No session found in proxy token")
+		h.Log.Errorf("❌ [PROXY] No session found in proxy token")
 		http.Error(w, "invalid proxy token session", http.StatusUnauthorized)
 		return
 	}
@@ -216,42 +218,42 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 	if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Claims != nil && defaultSession.Claims.Extra != nil {
 		if token, ok := defaultSession.Claims.Extra["upstream_token"].(string); ok {
 			upstreamToken = token
-			log.Printf("✅ [PROXY] Found upstream token in session claims: %s...", upstreamToken[:20])
+			h.Log.Printf("✅ [PROXY] Found upstream token in session claims: %s...", upstreamToken[:20])
 		}
 		if state, ok := defaultSession.Claims.Extra["issuer_state"].(string); ok {
 			issuerState = state
-			log.Printf("✅ [PROXY] Found issuer state in session claims: %s", issuerState)
+			h.Log.Printf("✅ [PROXY] Found issuer state in session claims: %s", issuerState)
 		}
 	}
 
 	if upstreamToken == "" {
-		log.Printf("❌ [PROXY] No upstream token found in proxy session")
+		h.Log.Errorf("❌ [PROXY] No upstream token found in proxy session")
 		http.Error(w, "invalid proxy token", http.StatusUnauthorized)
 		return
 	}
 
 	if h.Configuration.UpstreamProvider.Metadata == nil {
-		log.Printf("❌ [PROXY] Upstream provider metadata not configured")
+		h.Log.Errorf("❌ [PROXY] Upstream provider metadata not configured")
 		http.Error(w, "upstream provider not configured", http.StatusBadGateway)
 		return
 	}
 
 	userinfoEndpoint, _ := h.Configuration.UpstreamProvider.Metadata["userinfo_endpoint"].(string)
 	if userinfoEndpoint == "" {
-		log.Printf("❌ [PROXY] Upstream userinfo_endpoint not available in metadata")
+		h.Log.Errorf("❌ [PROXY] Upstream userinfo_endpoint not available in metadata")
 		http.Error(w, "upstream userinfo_endpoint not available", http.StatusBadGateway)
 		return
 	}
 
-	log.Printf("🔗 [PROXY] Upstream userinfo endpoint: %s", userinfoEndpoint)
+	h.Log.Printf("🔗 [PROXY] Upstream userinfo endpoint: %s", userinfoEndpoint)
 
 	// Create upstream request with the mapped upstream token
 	upstreamAuthHeader := "Bearer " + upstreamToken
-	log.Printf("🔐 [PROXY] Using upstream authorization header: %s...", upstreamAuthHeader[:20]+"...")
+	h.Log.Printf("🔐 [PROXY] Using upstream authorization header: %s...", upstreamAuthHeader[:20]+"...")
 
 	req, err := http.NewRequest("GET", userinfoEndpoint, nil)
 	if err != nil {
-		log.Printf("❌ [PROXY] Failed to create upstream userinfo request: %v", err)
+		h.Log.Errorf("❌ [PROXY] Failed to create upstream userinfo request: %v", err)
 		http.Error(w, "failed to create upstream userinfo request", http.StatusInternalServerError)
 		return
 	}
@@ -259,38 +261,38 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 	req.Header.Set("Authorization", upstreamAuthHeader)
 	req.Header.Set("User-Agent", "OAuth2-Proxy/1.0")
 
-	log.Printf("🚀 [PROXY] Sending userinfo request to upstream endpoint")
+	h.Log.Printf("🚀 [PROXY] Sending userinfo request to upstream endpoint")
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("❌ [PROXY] Upstream userinfo request failed: %v", err)
+		h.Log.Errorf("❌ [PROXY] Upstream userinfo request failed: %v", err)
 		http.Error(w, "upstream userinfo request failed", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
-	log.Printf("📥 [PROXY] Upstream userinfo response status: %d", resp.StatusCode)
-	log.Printf("📥 [PROXY] Upstream userinfo response headers: %+v", resp.Header)
+	h.Log.Printf("📥 [PROXY] Upstream userinfo response status: %d", resp.StatusCode)
+	h.Log.Printf("📥 [PROXY] Upstream userinfo response headers: %+v", resp.Header)
 
 	// Read and log response body for debugging
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("❌ [PROXY] Failed to read upstream userinfo response body: %v", err)
+		h.Log.Errorf("❌ [PROXY] Failed to read upstream userinfo response body: %v", err)
 		http.Error(w, "failed to read upstream response", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("📄 [PROXY] Upstream userinfo response body: %s", string(respBody))
+	h.Log.Printf("📄 [PROXY] Upstream userinfo response body: %s", string(respBody))
 
 	// Parse the upstream userinfo response to add proxy claim
 	var userinfo map[string]interface{}
 	if err := json.Unmarshal(respBody, &userinfo); err != nil {
-		log.Printf("❌ [PROXY] Failed to parse upstream userinfo response as JSON: %v", err)
-		log.Printf("📄 [PROXY] Returning raw upstream response due to parse error")
+		h.Log.Errorf("❌ [PROXY] Failed to parse upstream userinfo response as JSON: %v", err)
+		h.Log.Printf("📄 [PROXY] Returning raw upstream response due to parse error")
 		// Fall back to returning the raw response if JSON parsing fails
 		w.WriteHeader(resp.StatusCode)
 		if _, err := w.Write(respBody); err != nil {
-			log.Printf("❌ [PROXY] Failed to write userinfo response body to client: %v", err)
+			h.Log.Errorf("❌ [PROXY] Failed to write userinfo response body to client: %v", err)
 		}
 		return
 	}
@@ -303,25 +305,25 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 	// Add the issuer_state if available from the proxy token mapping
 	if issuerState != "" {
 		// issuer_state moved to introspection endpoint - no longer included in userinfo
-		log.Printf("ℹ️ [PROXY] issuer_state available but moved to introspection endpoint: %s", issuerState)
+		h.Log.Printf("ℹ️ [PROXY] issuer_state available but moved to introspection endpoint: %s", issuerState)
 	}
 
-	log.Printf("✅ [PROXY] Added proxy claims to userinfo response")
+	h.Log.Printf("✅ [PROXY] Added proxy claims to userinfo response")
 
 	// Re-encode the modified userinfo response
 	modifiedRespBody, err := json.Marshal(userinfo)
 	if err != nil {
-		log.Printf("❌ [PROXY] Failed to encode modified userinfo response: %v", err)
-		log.Printf("📄 [PROXY] Returning original upstream response due to encode error")
+		h.Log.Errorf("❌ [PROXY] Failed to encode modified userinfo response: %v", err)
+		h.Log.Printf("📄 [PROXY] Returning original upstream response due to encode error")
 		// Fall back to returning the original response if encoding fails
 		w.WriteHeader(resp.StatusCode)
 		if _, err := w.Write(respBody); err != nil {
-			log.Printf("❌ [PROXY] Failed to write userinfo response body to client: %v", err)
+			h.Log.Errorf("❌ [PROXY] Failed to write userinfo response body to client: %v", err)
 		}
 		return
 	}
 
-	log.Printf("📄 [PROXY] Modified userinfo response body: %s", string(modifiedRespBody))
+	h.Log.Printf("📄 [PROXY] Modified userinfo response body: %s", string(modifiedRespBody))
 
 	// Copy response headers and status
 	for k, vv := range resp.Header {
@@ -333,6 +335,6 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 
 	// Write modified response body back to client
 	if _, err := w.Write(modifiedRespBody); err != nil {
-		log.Printf("❌ [PROXY] Failed to write modified userinfo response body to client: %v", err)
+		h.Log.Errorf("❌ [PROXY] Failed to write modified userinfo response body to client: %v", err)
 	}
 }

@@ -424,7 +424,7 @@ class OAuth2Client {
             });
 
             // Get x5c from attestationService (same as attestationToken)
-            const x5c = [this.attestationService.getCertificateChain()];
+            const x5c = [await this.attestationService.getCertificateChain()];
 
             const now = this.crypto.getCurrentTimestamp();
             const exp = now + 300; // 5 minutes

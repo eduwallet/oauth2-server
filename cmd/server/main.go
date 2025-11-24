@@ -336,7 +336,7 @@ func main() {
 	log.Printf("✅ Custom storage wrapper initialized")
 
 	// Initialize trust anchor handler with the customStorage
-	trustAnchorHandler = handlers.NewTrustAnchorHandler(customStorage)
+	trustAnchorHandler = handlers.NewTrustAnchorHandler(customStorage, log)
 
 	// Now initialize clients with the hasher BEFORE initializing OAuth2 provider
 	if err := initializeClients(); err != nil {
@@ -592,20 +592,6 @@ func initializeOAuth2Provider() error {
 	)
 	log.Printf("✅ OAuth2 provider created")
 
-	// Initialize RFC8693 handler but don't append it to all token requests
-	// The token exchange functionality should be handled by the default fosite provider
-	// when TokenExchangeEnabled is true in the config
-	// Note: RFC8693 handler requires additional storage methods not in our interface
-	// _ = &rfc8693.Handler{
-	// 	Config:               config,
-	// 	AccessTokenStrategy:  AccessTokenStrategy,
-	// 	RefreshTokenStrategy: RefreshTokenStrategy,
-	// 	AccessTokenStorage:   customStorage,
-	// 	RefreshTokenStorage:  customStorage,
-	// }
-	log.Printf("✅ RFC8693 handler initialized")
-
-	log.Printf("✅ OAuth2 provider initialized with fosite storage")
 	return nil
 }
 
@@ -625,7 +611,7 @@ func initializeHandlers() {
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager, privilegedClientSecrets)
 	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
-	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector)
+	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector, log)
 
 	// Initialize discovery and utility handlers
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)

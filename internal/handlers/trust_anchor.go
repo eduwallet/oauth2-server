@@ -6,9 +6,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 )
 
 // TrustAnchorStorage interface for storing trust anchors
@@ -22,12 +23,14 @@ type TrustAnchorStorage interface {
 // TrustAnchorHandler manages trust anchor certificate uploads
 type TrustAnchorHandler struct {
 	storage TrustAnchorStorage
+	Log     *logrus.Logger
 }
 
 // NewTrustAnchorHandler creates a new trust anchor handler
-func NewTrustAnchorHandler(storage TrustAnchorStorage) *TrustAnchorHandler {
+func NewTrustAnchorHandler(storage TrustAnchorStorage, log *logrus.Logger) *TrustAnchorHandler {
 	return &TrustAnchorHandler{
 		storage: storage,
+		Log:     log,
 	}
 }
 
@@ -85,12 +88,12 @@ func (h *TrustAnchorHandler) HandleUpload(w http.ResponseWriter, r *http.Request
 
 	// Store certificate using the storage backend
 	if err := h.storage.StoreTrustAnchor(r.Context(), name, certData); err != nil {
-		log.Printf("❌ Failed to save certificate %s: %v", name, err)
+		h.Log.Errorf("❌ Failed to save certificate %s: %v", name, err)
 		http.Error(w, "Failed to save certificate", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("✅ Trust anchor certificate uploaded: %s", name)
+	h.Log.Infof("✅ Trust anchor certificate uploaded: %s", name)
 
 	// Return success response
 	w.Header().Set("Content-Type", "application/json")
@@ -136,12 +139,12 @@ func (h *TrustAnchorHandler) HandleDelete(w http.ResponseWriter, r *http.Request
 
 	// Delete trust anchor
 	if err := h.storage.DeleteTrustAnchor(r.Context(), name); err != nil {
-		log.Printf("❌ Failed to delete certificate %s: %v", name, err)
+		h.Log.Errorf("❌ Failed to delete certificate %s: %v", name, err)
 		http.Error(w, "Failed to delete certificate", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("✅ Trust anchor certificate deleted: %s", name)
+	h.Log.Infof("✅ Trust anchor certificate deleted: %s", name)
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"name":"%s","status":"deleted"}`, name)
