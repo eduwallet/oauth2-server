@@ -9,6 +9,7 @@ import (
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"path/filepath"
+	"strings"
 
 	"github.com/ory/fosite"
 	"github.com/sirupsen/logrus"
@@ -110,10 +111,13 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Log.Printf("✅ User authenticated: %s", username)
 
 	// Grant requested scopes
-	queryScopes := r.URL.Query()["scope"]
-	if len(queryScopes) > 0 {
-		for _, scope := range queryScopes {
-			ar.GrantScope(scope)
+	scopeParam := r.Form.Get("scope")
+	if scopeParam != "" {
+		scopes := strings.Split(scopeParam, " ")
+		for _, scope := range scopes {
+			if scope != "" {
+				ar.GrantScope(scope)
+			}
 		}
 	} else {
 		// Default to openid scope

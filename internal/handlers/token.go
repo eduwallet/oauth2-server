@@ -146,28 +146,6 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	h.Log.Debugf("🔍 [DEBUG] Client ID: %s", clientID)
 	h.Log.Debugf("🔍 [DEBUG] Session Subject: '%s', Username: '%s'", session.GetSubject(), session.GetUsername())
 
-	// // Log form values (excluding sensitive data)
-	// h.Log.Debugf("🔍 [DEBUG] Form values:")
-	// for key, values := range r.Form {
-	// 	if key == "client_secret" || key == "client_assertion" {
-	// 		h.Log.Debugf("🔍 [DEBUG]   %s: [REDACTED]", key)
-	// 	} else {
-	// 		h.Log.Debugf("🔍 [DEBUG]   %s: %v", key, values)
-	// 	}
-	// }
-
-	// // Log headers (redacting sensitive ones)
-	// h.Log.Debugf("🔍 [DEBUG] Headers:")
-	// for name, values := range r.Header {
-	// 	for _, value := range values {
-	// 		if strings.ToLower(name) == "authorization" {
-	// 			h.Log.Debugf("🔍 [DEBUG]   %s: [REDACTED]", name)
-	// 		} else {
-	// 			h.Log.Debugf("🔍 [DEBUG]   %s: %s", name, value)
-	// 		}
-	// 	}
-	// }
-
 	accessRequest, err := h.OAuth2Provider.NewAccessRequest(ctx, r, session)
 	if err != nil {
 		h.Log.Errorf("❌ NewAccessRequest failed: %v", err)

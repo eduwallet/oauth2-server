@@ -2,10 +2,10 @@
 
 # Configuration variables
 OAUTH2_SERVER_URL ?= http://localhost:8080
-TEST_DATABASE_TYPE ?= sqlite
+TEST_DATABASE_TYPE ?= memory
 TEST_USERNAME ?= john.doe
 TEST_PASSWORD ?= password123
-TEST_SCOPE ?= openid profile email
+TEST_SCOPE ?= openid profile email offline_access
 LOG_LEVEL ?= info
 LOG_FORMAT ?= text
 
@@ -105,6 +105,16 @@ staticcheck-alt:
 	@echo "🔍 Running staticcheck (alternative method)..."
 	go run honnef.co/go/tools/cmd/staticcheck@latest ./...
 	@echo "✅ staticcheck completed"
+
+check-deadcode:
+	@echo "🔍 Checking for dead code..."
+	@if ! command -v deadcode >/dev/null 2>&1; then \
+		echo "Installing deadcode..."; \
+		go install golang.org/x/tools/cmd/deadcode@latest; \
+	fi
+	@echo "Running deadcode with full Go bin path..."
+	$(shell go env GOPATH)/bin/deadcode ./...
+	@echo "✅ deadcode check completed"
 
 # Enhanced lint target with better error handling
 lint: fmt vet
@@ -428,6 +438,7 @@ help:
 	@echo "  lint               - Run golangci-lint"
 	@echo "  lint-comprehensive - Run comprehensive linting"
 	@echo "  security           - Run security checks with gosec"
+	@echo "  check-deadcode     - Check for unused (dead) code"
 	@echo "  pre-commit         - Run pre-commit checks (fmt, vet, staticcheck, test)"
 	@echo "  full-check         - Run all checks and tests"
 	@echo ""
@@ -444,6 +455,7 @@ help:
 	@echo "  make test                              - Run all tests"
 	@echo "  make test-script SCRIPT=test_complete_flow.sh  - Run specific test"
 	@echo "  make test-verbose                      - Run tests with detailed output"
+	@echo "  make check-deadcode                    - Check for unused code"
 
 # Update .PHONY to include new targets
 .PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script test-script-verbose check-port help tag version release

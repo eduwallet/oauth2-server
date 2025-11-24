@@ -578,7 +578,16 @@ class OAuth2Client {
             if (!response.ok) {
                 const errorText = await response.text();
                 console.error('❌ Userinfo request failed:', errorText);
-                throw new Error(`Userinfo request failed: ${response.status} ${response.statusText}`);
+                
+                // Log the exact CURL command for debugging
+                const curlCommand = `curl -X GET "${this.endpoints.userinfo_endpoint}" \\
+  -H "Authorization: Bearer ${this.tokens.access_token.substring(0, 50)}..." \\
+  -H "Content-Type: application/json"`;
+                
+                console.error('🔍 Exact CURL command that failed:');
+                console.error(curlCommand);
+                
+                throw new Error(`Userinfo request failed: ${response.status} ${response.statusText} - ${errorText}`);
             }
             
             const userInfo = await response.json();
@@ -596,23 +605,14 @@ class OAuth2Client {
         } catch (error) {
             this.log(`User info fetch failed: ${error.message}`, 'error');
             
-            // Fallback to mock data for demo purposes if server request fails
-            this.log('Falling back to mock user info for demo', 'warning');
-            const mockUserInfo = {
-                sub: 'user_12345',
-                email: 'demo@example.com',
-                email_verified: true,
-                name: 'Demo User',
-                preferred_username: 'demouser',
-                given_name: 'Demo',
-                family_name: 'User',
-                picture: 'https://via.placeholder.com/150',
-                wallet_authenticated: true,
-                hsm_backed: true,
-                bio_authenticated: true
-            };
+            // Log the exact CURL command for debugging when request fails
+            console.error('🔍 Failed userinfo request details:');
+            console.error('  - Error:', error.message);
+            console.error('  - Endpoint:', this.endpoints.userinfo_endpoint);
+            console.error('  - Has Access Token:', !!this.tokens?.access_token);
             
-            return mockUserInfo;
+            // Re-throw the error instead of falling back to mock data
+            throw error;
         }
     }
 
@@ -655,7 +655,16 @@ class OAuth2Client {
             if (!response.ok) {
                 const errorText = await response.text();
                 console.error('❌ Introspection request failed:', errorText);
-                throw new Error(`Introspection request failed: ${response.status} ${response.statusText}`);
+                
+                // Log the exact CURL command for debugging
+                const curlCommand = `curl -X POST "${this.endpoints.introspection_endpoint}" \\
+  -H "Content-Type: application/x-www-form-urlencoded" \\
+  -d "${introspectionParams.toString()}"`;
+                
+                console.error('🔍 Exact CURL command that failed:');
+                console.error(curlCommand);
+                
+                throw new Error(`Introspection request failed: ${response.status} ${response.statusText} - ${errorText}`);
             }
             
             const introspectionData = await response.json();
@@ -674,20 +683,15 @@ class OAuth2Client {
         } catch (error) {
             this.log(`Token introspection fetch failed: ${error.message}`, 'error');
             
-            // Fallback to mock data for demo purposes if server request fails
-            this.log('Falling back to mock introspection data for demo', 'warning');
-            const mockIntrospection = {
-                active: true,
-                sub: 'user_12345',
-                client_id: this.config.clientId,
-                scope: this.config.scope,
-                token_type: 'Bearer',
-                exp: Math.floor(Date.now() / 1000) + 3600,
-                iat: Math.floor(Date.now() / 1000),
-                issuer_state: 'demo_issuer_state_12345'
-            };
+            // Log the exact CURL command for debugging when request fails
+            console.error('🔍 Failed introspection request details:');
+            console.error('  - Error:', error.message);
+            console.error('  - Endpoint:', this.endpoints.introspection_endpoint);
+            console.error('  - Has Access Token:', !!this.tokens?.access_token);
+            console.error('  - Client Assertion Created:', !!this.attestationService);
             
-            return mockIntrospection;
+            // Re-throw the error instead of falling back to mock data
+            throw error;
         }
     }
 
