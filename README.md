@@ -101,6 +101,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **.env.example**: Environment variables template for proxy mode and server configuration.
 - **tests/**: Comprehensive test suite for OAuth2 flows, attestation features, and privileged client functionality
   - `test_attestation_privileged_audience.sh`: Validates privileged client audience inclusion for attestation-enabled clients
+  - `test_introspection_jwt_client_assertion.sh`: Validates JWT client assertion authentication for token introspection
   - `test_refresh_token_basic.sh`: Basic refresh token functionality testing
   - `test_refresh_token_exchange.sh`: Advanced refresh token exchange testing
 
@@ -198,6 +199,33 @@ make test-script SCRIPT=test_attestation_privileged_audience.sh
 - ✅ Privileged client included in the client's audience array
 - ✅ Privileged client token acquisition works
 - ✅ Audience-based token introspection functions correctly
+
+#### `test_introspection_jwt_client_assertion.sh` - JWT Client Assertion Introspection Test
+
+Validates JWT client assertion authentication for RFC 7662 token introspection with privileged client access.
+
+```bash
+# Run the JWT client assertion introspection test
+make test-script SCRIPT=test_introspection_jwt_client_assertion.sh
+```
+
+**Test Flow:**
+1. **Trust Anchor Upload**: Uploads X.509 trust anchor certificate for attestation validation
+2. **Client Registration**: Registers attestation-enabled client with JWT client assertion authentication
+3. **JWT Assertion Creation**: Generates signed JWT with attestation claims and certificate chain
+4. **Token Acquisition**: Obtains access token using JWT client assertion authentication
+5. **Privileged Client Setup**: Acquires privileged client token for introspection access
+6. **Token Introspection**: Validates privileged client can introspect attestation client tokens
+7. **Response Verification**: Confirms introspection response includes attestation metadata
+
+**Expected Results:**
+- ✅ Trust anchor certificate upload succeeds
+- ✅ Attestation client registration with JWT assertion method works
+- ✅ JWT assertion generation with attestation claims succeeds
+- ✅ Token acquisition using JWT client assertion authentication works
+- ✅ Privileged client token acquisition for introspection succeeds
+- ✅ Token introspection by privileged client functions correctly
+- ✅ Introspection response includes attestation metadata for attested tokens
 
 #### `test_auth_code_pkce.sh` - Authorization Code Flow with PKCE
 
