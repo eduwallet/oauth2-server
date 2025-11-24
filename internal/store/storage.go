@@ -1016,6 +1016,12 @@ type Storage interface {
 	GetClientSecret(ctx context.Context, clientID string) (string, error)
 	StoreAttestationConfig(ctx context.Context, clientID string, config *config.ClientAttestationConfig) error
 	GetAttestationConfig(ctx context.Context, clientID string) (*config.ClientAttestationConfig, error)
+
+	// Trust anchor storage methods
+	StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error
+	GetTrustAnchor(ctx context.Context, name string) ([]byte, error)
+	ListTrustAnchors(ctx context.Context) ([]string, error)
+	DeleteTrustAnchor(ctx context.Context, name string) error
 }
 
 // MemoryStoreWrapper wraps fosite's MemoryStore to implement our Storage interface
@@ -1023,6 +1029,7 @@ type MemoryStoreWrapper struct {
 	*storage.MemoryStore
 	clientSecrets      map[string]string
 	attestationConfigs map[string]*config.ClientAttestationConfig
+	trustAnchors       map[string][]byte
 }
 
 // NewMemoryStoreWrapper creates a new MemoryStoreWrapper with initialized maps
@@ -1031,6 +1038,7 @@ func NewMemoryStoreWrapper(memoryStore *storage.MemoryStore) *MemoryStoreWrapper
 		MemoryStore:        memoryStore,
 		clientSecrets:      make(map[string]string),
 		attestationConfigs: make(map[string]*config.ClientAttestationConfig),
+		trustAnchors:       make(map[string][]byte),
 	}
 }
 
@@ -1180,6 +1188,40 @@ func (m *MemoryStoreWrapper) GetAttestationConfig(ctx context.Context, clientID 
 	return config, nil
 }
 
+// Trust anchor storage methods
+func (m *MemoryStoreWrapper) StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error {
+	m.trustAnchors[name] = certificateData
+	log.Printf("⚠️  [MEMORY STORE] Trust anchor stored in memory for %s - this will be lost on restart", name)
+	return nil
+}
+
+func (m *MemoryStoreWrapper) GetTrustAnchor(ctx context.Context, name string) ([]byte, error) {
+	data, exists := m.trustAnchors[name]
+	if !exists {
+		return nil, fmt.Errorf("trust anchor not found")
+	}
+	log.Printf("⚠️  [MEMORY STORE] Retrieved trust anchor from memory for %s - this data is not persistent", name)
+	return data, nil
+}
+
+func (m *MemoryStoreWrapper) ListTrustAnchors(ctx context.Context) ([]string, error) {
+	names := make([]string, 0, len(m.trustAnchors))
+	for name := range m.trustAnchors {
+		names = append(names, name)
+	}
+	log.Printf("⚠️  [MEMORY STORE] Listed trust anchors from memory - this data is not persistent")
+	return names, nil
+}
+
+func (m *MemoryStoreWrapper) DeleteTrustAnchor(ctx context.Context, name string) error {
+	if _, exists := m.trustAnchors[name]; !exists {
+		return fmt.Errorf("trust anchor not found")
+	}
+	delete(m.trustAnchors, name)
+	log.Printf("⚠️  [MEMORY STORE] Trust anchor deleted from memory for %s - this data is not persistent", name)
+	return nil
+}
+
 // SQLiteStore implements Fosite storage interfaces using SQLite
 type SQLiteStore struct {
 	db     *sql.DB
@@ -1266,6 +1308,14 @@ func (s *SQLiteStore) initTables() error {
 			user_code TEXT,
 			data TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// Trust anchors table
+		`CREATE TABLE IF NOT EXISTS trust_anchors (
+			name TEXT PRIMARY KEY,
+			certificate_data TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 
@@ -1812,4 +1862,58 @@ func (s *SQLiteStore) GetAttestationConfig(ctx context.Context, clientID string)
 	}
 
 	return &config, nil
+}
+
+// Trust anchor storage methods
+func (s *SQLiteStore) StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error {
+	_, err := s.db.Exec(
+		"INSERT OR REPLACE INTO trust_anchors (name, certificate_data, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+		name, string(certificateData),
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetTrustAnchor(ctx context.Context, name string) ([]byte, error) {
+	var data string
+	err := s.db.QueryRow("SELECT certificate_data FROM trust_anchors WHERE name = ?", name).Scan(&data)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("trust anchor not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return []byte(data), nil
+}
+
+func (s *SQLiteStore) ListTrustAnchors(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Query("SELECT name FROM trust_anchors ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func (s *SQLiteStore) DeleteTrustAnchor(ctx context.Context, name string) error {
+	result, err := s.db.Exec("DELETE FROM trust_anchors WHERE name = ?", name)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("trust anchor not found")
+	}
+	return nil
 }

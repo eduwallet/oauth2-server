@@ -482,3 +482,44 @@ func (s *CustomStorage) GetAttestationConfig(ctx context.Context, clientID strin
 	}
 	return nil, fmt.Errorf("underlying store does not support attestation config storage")
 }
+
+// Trust anchor storage methods
+func (s *CustomStorage) StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.StoreTrustAnchor(ctx, name, certificateData)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.StoreTrustAnchor(ctx, name, certificateData)
+	}
+	return fmt.Errorf("underlying store does not support trust anchor storage")
+}
+
+func (s *CustomStorage) GetTrustAnchor(ctx context.Context, name string) ([]byte, error) {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.GetTrustAnchor(ctx, name)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.GetTrustAnchor(ctx, name)
+	}
+	return nil, fmt.Errorf("underlying store does not support trust anchor storage")
+}
+
+func (s *CustomStorage) ListTrustAnchors(ctx context.Context) ([]string, error) {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.ListTrustAnchors(ctx)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.ListTrustAnchors(ctx)
+	}
+	return nil, fmt.Errorf("underlying store does not support trust anchor storage")
+}
+
+func (s *CustomStorage) DeleteTrustAnchor(ctx context.Context, name string) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.DeleteTrustAnchor(ctx, name)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.DeleteTrustAnchor(ctx, name)
+	}
+	return fmt.Errorf("underlying store does not support trust anchor storage")
+}

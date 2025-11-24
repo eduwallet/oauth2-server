@@ -10,7 +10,6 @@ import (
 	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
-	"os"
 	"strings"
 	"time"
 
@@ -523,14 +522,9 @@ func (h *RegistrationHandler) resolveTrustAnchors(attestationConfig *config.Clie
 	}
 
 	for _, name := range attestationConfig.TrustAnchors {
-		path := h.trustAnchorHandler.ResolvePath(name)
-		if path == "" {
-			return fmt.Errorf("invalid trust anchor name: %s", name)
-		}
-
-		// Check if the file exists
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("trust anchor file not found: %s", name)
+		_, err := h.trustAnchorHandler.ResolvePath(name)
+		if err != nil {
+			return fmt.Errorf("trust anchor not found: %s", name)
 		}
 	}
 

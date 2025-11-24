@@ -18,11 +18,11 @@ type VerifierFactory struct {
 	trustAnchors         map[string]string // name -> certificate PEM content
 	logger               *logrus.Logger
 	dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool)
-	trustAnchorResolver  func(name string) string // resolves trust anchor name to file path
+	trustAnchorResolver  func(name string) ([]byte, error) // resolves trust anchor name to certificate data
 }
 
 // NewVerifierFactory creates a new verifier factory
-func NewVerifierFactory(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger, dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool), trustAnchorResolver func(name string) string) *VerifierFactory {
+func NewVerifierFactory(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger, dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool), trustAnchorResolver func(name string) ([]byte, error)) *VerifierFactory {
 	return &VerifierFactory{
 		config:               config,
 		trustAnchors:         trustAnchorFiles,
@@ -73,12 +73,10 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 			if certPEM, exists = f.trustAnchors[anchorName]; !exists {
 				// Try to load dynamically
 				if f.trustAnchorResolver != nil {
-					path := f.trustAnchorResolver(anchorName)
-					if path != "" {
-						if data, err := ioutil.ReadFile(path); err == nil {
-							certPEM = string(data)
-							exists = true
-						}
+					data, err := f.trustAnchorResolver(anchorName)
+					if err == nil {
+						certPEM = string(data)
+						exists = true
 					}
 				}
 			}
@@ -102,12 +100,10 @@ func (f *VerifierFactory) CreateVerifier(clientID, method string) (interface{}, 
 			if certPEM, exists = f.trustAnchors[anchorName]; !exists {
 				// Try to load dynamically
 				if f.trustAnchorResolver != nil {
-					path := f.trustAnchorResolver(anchorName)
-					if path != "" {
-						if data, err := ioutil.ReadFile(path); err == nil {
-							certPEM = string(data)
-							exists = true
-						}
+					data, err := f.trustAnchorResolver(anchorName)
+					if err == nil {
+						certPEM = string(data)
+						exists = true
 					}
 				}
 			}
@@ -236,7 +232,7 @@ type VerifierManager struct {
 }
 
 // NewVerifierManager creates a new verifier manager
-func NewVerifierManager(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger, dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool), trustAnchorResolver func(name string) string) *VerifierManager {
+func NewVerifierManager(config *config.AttestationConfig, trustAnchorFiles map[string]string, logger *logrus.Logger, dynamicConfigChecker func(clientID string) (*config.ClientAttestationConfig, bool), trustAnchorResolver func(name string) ([]byte, error)) *VerifierManager {
 	return &VerifierManager{
 		factory:              NewVerifierFactory(config, trustAnchorFiles, logger, dynamicConfigChecker, trustAnchorResolver),
 		verifiers:            make(map[string]map[string]interface{}),

@@ -1,30 +1,33 @@
 package handlers
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
+// TrustAnchorStorage interface for storing trust anchors
+type TrustAnchorStorage interface {
+	StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error
+	GetTrustAnchor(ctx context.Context, name string) ([]byte, error)
+	ListTrustAnchors(ctx context.Context) ([]string, error)
+	DeleteTrustAnchor(ctx context.Context, name string) error
+}
+
 // TrustAnchorHandler manages trust anchor certificate uploads
 type TrustAnchorHandler struct {
-	storageDir string
+	storage TrustAnchorStorage
 }
 
 // NewTrustAnchorHandler creates a new trust anchor handler
-func NewTrustAnchorHandler(storageDir string) *TrustAnchorHandler {
-	// Ensure storage directory exists
-	if err := os.MkdirAll(storageDir, 0755); err != nil {
-		log.Printf("⚠️  Failed to create trust anchor storage directory: %v", err)
-	}
+func NewTrustAnchorHandler(storage TrustAnchorStorage) *TrustAnchorHandler {
 	return &TrustAnchorHandler{
-		storageDir: storageDir,
+		storage: storage,
 	}
 }
 
@@ -80,23 +83,19 @@ func (h *TrustAnchorHandler) HandleUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Create filename with .pem extension
-	filename := name + ".pem"
-	filepath := filepath.Join(h.storageDir, filename)
-
-	// Write certificate to file
-	if err := os.WriteFile(filepath, certData, 0644); err != nil {
+	// Store certificate using the storage backend
+	if err := h.storage.StoreTrustAnchor(r.Context(), name, certData); err != nil {
 		log.Printf("❌ Failed to save certificate %s: %v", name, err)
 		http.Error(w, "Failed to save certificate", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("✅ Trust anchor certificate uploaded: %s -> %s", name, filepath)
+	log.Printf("✅ Trust anchor certificate uploaded: %s", name)
 
 	// Return success response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, `{"name":"%s","path":"%s","status":"uploaded"}`, name, filepath)
+	fmt.Fprintf(w, `{"name":"%s","status":"uploaded"}`, name)
 }
 
 // HandleList lists all available trust anchors
@@ -106,18 +105,10 @@ func (h *TrustAnchorHandler) HandleList(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	files, err := os.ReadDir(h.storageDir)
+	anchors, err := h.storage.ListTrustAnchors(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to read trust anchors directory", http.StatusInternalServerError)
+		http.Error(w, "Failed to read trust anchors", http.StatusInternalServerError)
 		return
-	}
-
-	var anchors []string
-	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".pem") {
-			name := strings.TrimSuffix(file.Name(), ".pem")
-			anchors = append(anchors, name)
-		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -137,17 +128,14 @@ func (h *TrustAnchorHandler) HandleDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	filename := name + ".pem"
-	filepath := filepath.Join(h.storageDir, filename)
-
-	// Check if file exists
-	if _, err := os.Stat(filepath); os.IsNotExist(err) {
+	// Check if trust anchor exists
+	if _, err := h.storage.GetTrustAnchor(r.Context(), name); err != nil {
 		http.Error(w, "Trust anchor not found", http.StatusNotFound)
 		return
 	}
 
-	// Delete file
-	if err := os.Remove(filepath); err != nil {
+	// Delete trust anchor
+	if err := h.storage.DeleteTrustAnchor(r.Context(), name); err != nil {
 		log.Printf("❌ Failed to delete certificate %s: %v", name, err)
 		http.Error(w, "Failed to delete certificate", http.StatusInternalServerError)
 		return
@@ -159,10 +147,10 @@ func (h *TrustAnchorHandler) HandleDelete(w http.ResponseWriter, r *http.Request
 	fmt.Fprintf(w, `{"name":"%s","status":"deleted"}`, name)
 }
 
-// ResolvePath resolves a trust anchor name to its file path
-func (h *TrustAnchorHandler) ResolvePath(name string) string {
+// ResolvePath resolves a trust anchor name to its certificate data
+func (h *TrustAnchorHandler) ResolvePath(name string) ([]byte, error) {
 	if strings.Contains(name, "/") || strings.Contains(name, "..") {
-		return "" // Invalid name
+		return nil, fmt.Errorf("invalid trust anchor name")
 	}
-	return filepath.Join(h.storageDir, name+".pem")
+	return h.storage.GetTrustAnchor(context.Background(), name)
 }

@@ -312,9 +312,6 @@ func main() {
 	metricsCollector = metrics.NewMetricsCollector()
 	log.Printf("✅ Metrics collector initialized")
 
-	// Initialize trust anchor handler first (needed for attestation manager)
-	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
-
 	// Initialize stores based on configuration
 	if configuration.Database.Type == "sqlite" {
 		sqliteStore, err := store.NewSQLiteStore(configuration.Database.Path, log)
@@ -337,6 +334,9 @@ func main() {
 		Users:   make(map[string]storage.MemoryUserRelation),
 	}
 	log.Printf("✅ Custom storage wrapper initialized")
+
+	// Initialize trust anchor handler with the customStorage
+	trustAnchorHandler = handlers.NewTrustAnchorHandler(customStorage)
 
 	// Now initialize clients with the hasher BEFORE initializing OAuth2 provider
 	if err := initializeClients(); err != nil {
@@ -615,7 +615,6 @@ func initializeHandlers() {
 	// Set version information in the handlers package
 	handlers.SetVersionInfo(Version, GitCommit, BuildTime)
 
-	trustAnchorHandler = handlers.NewTrustAnchorHandler("/tmp/trust-anchors")
 	registrationHandler = handlers.NewRegistrationHandler(customStorage, secretManager, trustAnchorHandler, attestationManager, configuration, log)
 	healthHandler = handlers.NewHealthHandler(configuration, dataStore)
 	oauth2DiscoveryHandler = handlers.NewOAuth2DiscoveryHandler(configuration, attestationManager)

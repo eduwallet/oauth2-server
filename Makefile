@@ -2,7 +2,7 @@
 
 # Configuration variables
 OAUTH2_SERVER_URL ?= http://localhost:8080
-TEST_DATABASE_TYPE ?= memory
+TEST_DATABASE_TYPE ?= sqlite
 TEST_USERNAME ?= john.doe
 TEST_PASSWORD ?= password123
 TEST_SCOPE ?= openid profile email
