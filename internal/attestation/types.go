@@ -71,13 +71,6 @@ type AttestationError struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
-func (e *AttestationError) Error() string {
-	if e.Detail != "" {
-		return e.Message + ": " + e.Detail
-	}
-	return e.Message
-}
-
 // Common attestation error codes
 var (
 	ErrInvalidAttestationFormat = &AttestationError{

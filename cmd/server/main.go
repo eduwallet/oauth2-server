@@ -100,36 +100,6 @@ var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData)
 // Map to store plain text secrets for privileged clients
 var privilegedClientSecrets = make(map[string]string)
 
-type TrustAnchorDispatcher struct {
-	handler *handlers.TrustAnchorHandler
-}
-
-func (d *TrustAnchorDispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Debugf("TrustAnchorDispatcher called for path: %s, method: %s", r.URL.Path, r.Method)
-	if r.URL.Path == "/trust-anchor/" {
-		// List all trust anchors
-		d.handler.HandleList(w, r)
-		return
-	}
-
-	// Extract name from path /trust-anchor/{name}
-	name := strings.TrimPrefix(r.URL.Path, "/trust-anchor/")
-	log.Printf("DEBUG: Extracted name: %s", name)
-	if name == "" {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	switch r.Method {
-	case "POST":
-		d.handler.HandleUpload(w, r, name)
-	case "DELETE":
-		d.handler.HandleDelete(w, r, name)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
 func main() {
 	// Handle version flag
 	var showVersion = flag.Bool("version", false, "Show version information")

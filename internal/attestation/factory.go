@@ -6,8 +6,6 @@ import (
 	"log"
 	"oauth2-server/pkg/config"
 
-	"net/http"
-
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -171,57 +169,6 @@ func (f *VerifierFactory) AddClientConfig(clientID string, config *config.Client
 	}
 	// Add new
 	f.config.Clients = append(f.config.Clients, *config)
-}
-
-// ValidateClientAuth validates client authentication for attestation
-func (m *VerifierManager) ValidateClientAuth(r *http.Request, clientID string) error {
-	// For now, always succeed for testing
-	return nil
-}
-
-// GetClientConfig returns the attestation configuration for a client
-func (f *VerifierFactory) GetClientConfig(clientID string) (*config.ClientAttestationConfig, error) {
-	// First check static config
-	for _, client := range f.config.Clients {
-		if client.ClientID == clientID {
-			return &client, nil
-		}
-	}
-
-	// Then check dynamic configs
-	if f.dynamicConfigChecker != nil {
-		if config, exists := f.dynamicConfigChecker(clientID); exists {
-			return config, nil
-		}
-	}
-
-	return nil, fmt.Errorf("client not found: %s", clientID)
-}
-
-// GetClientConfig returns the attestation configuration for a client
-func (m *VerifierManager) GetClientConfig(clientID string) (*config.ClientAttestationConfig, error) {
-	return m.factory.GetClientConfig(clientID)
-}
-
-// CreateVerifierForAllMethods creates verifiers for all allowed methods for a client
-func (f *VerifierFactory) CreateVerifierForAllMethods(clientID string) (map[string]interface{}, error) {
-	clientConfig, err := f.GetClientConfig(clientID)
-	if err != nil {
-		return nil, err
-	}
-
-	verifiers := make(map[string]interface{})
-
-	for _, method := range clientConfig.AllowedMethods {
-		verifier, err := f.CreateVerifier(clientID, method)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create verifier for method %s: %w", method, err)
-		}
-
-		verifiers[method] = verifier
-	}
-
-	return verifiers, nil
 }
 
 // VerifierManager manages multiple verifiers and provides a unified interface

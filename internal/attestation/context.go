@@ -19,9 +19,3 @@ func GetAttestationResult(ctx context.Context) (*AttestationResult, bool) {
 	result, ok := ctx.Value(attestationResultKey).(*AttestationResult)
 	return result, ok
 }
-
-// HasAttestationResult checks if the context contains an attestation result
-func HasAttestationResult(ctx context.Context) bool {
-	_, ok := GetAttestationResult(ctx)
-	return ok
-}

@@ -320,27 +320,3 @@ type TLSAttestationConfig struct {
 	MinTrustLevel         string   `yaml:"min_trust_level"`
 	MaxCertAge            string   `yaml:"max_cert_age"`
 }
-
-// Validate validates the TLS attestation configuration
-func (c *TLSAttestationConfig) Validate() error {
-	validTrustLevels := []string{"low", "medium", "high"}
-	found := false
-	for _, level := range validTrustLevels {
-		if c.MinTrustLevel == level {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		return fmt.Errorf("invalid min_trust_level: %s (must be one of: %v)", c.MinTrustLevel, validTrustLevels)
-	}
-
-	if c.MaxCertAge != "" {
-		if _, err := time.ParseDuration(c.MaxCertAge); err != nil {
-			return fmt.Errorf("invalid max_cert_age duration: %w", err)
-		}
-	}
-
-	return nil
-}

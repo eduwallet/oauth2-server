@@ -348,79 +348,6 @@ func (v *JWTVerifier) verifyJWTSignature(token string, keyFunc jwt.Keyfunc) (*At
 	return result, nil
 }
 
-// verifyCertificateChain verifies the X.509 certificate chain
-func (v *JWTVerifier) verifyCertificateChain(x5cArray []interface{}) error {
-	if len(x5cArray) == 0 {
-		return fmt.Errorf("empty certificate chain")
-	}
-
-	// Parse all certificates in the chain
-	var certs []*x509.Certificate
-	for i, certData := range x5cArray {
-		certStr, ok := certData.(string)
-		if !ok {
-			return fmt.Errorf("certificate at index %d is not a string", i)
-		}
-
-		cert, err := parseCertificateFromBase64(certStr)
-		if err != nil {
-			return fmt.Errorf("failed to parse certificate at index %d: %w", i, err)
-		}
-
-		certs = append(certs, cert)
-	}
-
-	leafCert := certs[0]
-
-	// Create certificate pool with trusted roots
-	roots := x509.NewCertPool()
-	for _, root := range v.trustedRoots {
-		roots.AddCert(root)
-	}
-
-	// Check if this is a self-signed certificate (issuer == subject)
-	isSelfSigned := leafCert.Issuer.String() == leafCert.Subject.String()
-
-	if isSelfSigned {
-		fmt.Printf("[DEBUG] Detected self-signed certificate (issuer == subject)\n")
-
-		// Verify the self-signature is valid
-		if err := leafCert.CheckSignatureFrom(leafCert); err != nil {
-			return fmt.Errorf("self-signed certificate signature verification failed: %w", err)
-		}
-
-		fmt.Printf("[DEBUG] Self-signed certificate signature verified successfully\n")
-
-		// For self-signed certificates, add them to the trusted roots dynamically
-		// This allows proper certificate verification while supporting browser-generated certs
-		fmt.Printf("[DEBUG] Adding self-signed certificate to trusted roots for verification\n")
-		roots.AddCert(leafCert)
-	}
-
-	// Create intermediate pool
-	intermediates := x509.NewCertPool()
-	if len(certs) > 1 {
-		for _, cert := range certs[1:] {
-			intermediates.AddCert(cert)
-		}
-	}
-
-	// Verify the leaf certificate using the full chain verification process
-	opts := x509.VerifyOptions{
-		Roots:         roots,
-		Intermediates: intermediates,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-
-	chains, err := certs[0].Verify(opts)
-	if err != nil {
-		return fmt.Errorf("certificate verification failed: %w", err)
-	}
-
-	fmt.Printf("[DEBUG] Certificate chain verified successfully, found %d valid chain(s)\n", len(chains))
-	return nil
-}
-
 // parseCertificate parses a PEM-encoded certificate
 func parseCertificate(certPEM string) (*x509.Certificate, error) {
 	block, _ := pem.Decode([]byte(certPEM))
@@ -502,31 +429,4 @@ type AttestationClaims struct {
 	BiometricAuth      bool                   `json:"att_biometric,omitempty"`
 	DeviceIntegrity    string                 `json:"att_device_integrity,omitempty"`
 	AppIntegrity       string                 `json:"att_app_integrity,omitempty"`
-}
-
-// Valid validates the attestation claims
-func (a *AttestationClaims) Valid() error {
-	if a.Issuer == "" {
-		return fmt.Errorf("missing issuer")
-	}
-
-	if a.Subject == "" {
-		return fmt.Errorf("missing subject")
-	}
-
-	if len(a.Audience) == 0 {
-		return fmt.Errorf("missing audience")
-	}
-
-	now := time.Now().Unix()
-
-	if a.ExpiresAt > 0 && now > a.ExpiresAt {
-		return fmt.Errorf("token has expired")
-	}
-
-	if a.NotBefore > 0 && now < a.NotBefore {
-		return fmt.Errorf("token not yet valid")
-	}
-
-	return nil
 }

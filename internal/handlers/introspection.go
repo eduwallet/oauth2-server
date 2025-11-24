@@ -64,56 +64,6 @@ func (rc *responseCapture) Write(data []byte) (int, error) {
 	return rc.body.Write(data)
 }
 
-// handleAttestationAuthentication handles attestation-based client authentication for introspection
-// determineAuthMethod determines the attestation authentication method from the request
-func (h *IntrospectionHandler) determineAuthMethod(r *http.Request) string {
-	clientID := r.FormValue("client_id")
-	if clientID == "" {
-		if username, _, ok := r.BasicAuth(); ok {
-			clientID = username
-		}
-	}
-
-	// Check for JWT attestation
-	clientAssertionType := r.FormValue("client_assertion_type")
-	if clientAssertionType == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
-		clientAssertion := r.FormValue("client_assertion")
-
-		// Check if the client is configured for attestation-based authentication
-		if h.AttestationManager != nil && h.AttestationManager.IsAttestationEnabled(clientID) {
-			supportedMethods, err := h.AttestationManager.GetSupportedMethods(clientID)
-			if err == nil {
-				// Check if attest_jwt_client_auth is supported
-				for _, method := range supportedMethods {
-					if method == "attest_jwt_client_auth" {
-						return "attest_jwt_client_auth"
-					}
-				}
-			}
-		}
-
-		// Also check if JWT contains attestation-specific claims
-		if strings.Contains(clientAssertion, "att_") {
-			return "attest_jwt_client_auth"
-		}
-
-		// If we have a JWT client assertion but no attestation config, treat it as regular JWT auth
-		// This allows public clients to authenticate with JWT assertions without attestation
-		if clientAssertion != "" {
-			return "jwt_client_auth"
-		}
-	}
-
-	// Check for TLS attestation
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		// This could be TLS client certificate authentication
-		// We need to check if it's specifically for attestation
-		return "attest_tls_client_auth"
-	}
-
-	return ""
-}
-
 // ServeHTTP handles token introspection requests (RFC 7662)
 func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

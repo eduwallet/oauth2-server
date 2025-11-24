@@ -178,11 +178,6 @@ func (mc *MetricsCollector) RecordTokenRequest(grantType, clientID, status strin
 	mc.tokenRequestsTotal.WithLabelValues(grantType, clientID, status).Inc()
 }
 
-// RecordIntrospectRequest records a token introspection request
-func (mc *MetricsCollector) RecordIntrospectRequest(clientID, status string) {
-	mc.introspectRequestsTotal.WithLabelValues(clientID, status).Inc()
-}
-
 // RecordUserinfoRequest records a userinfo request
 func (mc *MetricsCollector) RecordUserinfoRequest(status, errorReason string) {
 	if errorReason == "" {
@@ -205,11 +200,6 @@ func (mc *MetricsCollector) RecordTokenIssued(tokenType, grantType string) {
 	}
 }
 
-// UpdateActiveTokens updates the gauge for active tokens
-func (mc *MetricsCollector) UpdateActiveTokens(count float64) {
-	mc.activeTokens.Set(count)
-}
-
 // UpdateRegisteredClients updates the gauge for registered clients
 func (mc *MetricsCollector) UpdateRegisteredClients(count float64) {
 	mc.registeredClients.Set(count)
@@ -218,11 +208,6 @@ func (mc *MetricsCollector) UpdateRegisteredClients(count float64) {
 // UpdateRegisteredUsers updates the gauge for registered users
 func (mc *MetricsCollector) UpdateRegisteredUsers(count float64) {
 	mc.registeredUsers.Set(count)
-}
-
-// RecordError records an error
-func (mc *MetricsCollector) RecordError(errorType, endpoint string) {
-	mc.errorsTotal.WithLabelValues(errorType, endpoint).Inc()
 }
 
 // Middleware creates an HTTP middleware for recording metrics
