@@ -112,7 +112,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	h.log.Printf("🔍 [REGISTRATION] Origin: %s", r.Header.Get("Origin"))
 
 	if r.Method != "POST" {
-		h.log.Printf("❌ [REGISTRATION] Invalid method: %s", r.Method)
+		h.log.Errorf("❌ [REGISTRATION] Invalid method: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -123,7 +123,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	var metadata ClientMetadata
 	h.log.Printf("🔍 [REGISTRATION] Attempting to decode JSON request body")
 	if err := json.NewDecoder(r.Body).Decode(&metadata); err != nil {
-		h.log.Printf("❌ [REGISTRATION] Failed to decode request body: %v", err)
+		h.log.Errorf("❌ [REGISTRATION] Failed to decode request body: %v", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -157,7 +157,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		var err error
 		clientID, err = generateRandomString(32)
 		if err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to generate client ID: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to generate client ID: %v", err)
 			http.Error(w, "Failed to generate client ID", http.StatusInternalServerError)
 			return
 		}
@@ -184,7 +184,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		h.log.Printf("🔍 [REGISTRATION] Generating client secret for new confidential client")
 		clientSecret, err = generateRandomString(64)
 		if err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to generate client secret: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to generate client secret: %v", err)
 			http.Error(w, "Failed to generate client secret", http.StatusInternalServerError)
 			return
 		}
@@ -194,7 +194,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		h.log.Printf("🔍 [REGISTRATION] Hashing client secret")
 		hashedSecret, err = utils.HashSecret(clientSecret)
 		if err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to hash client secret: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to hash client secret: %v", err)
 			http.Error(w, "Failed to hash client secret", http.StatusInternalServerError)
 			return
 		}
@@ -207,12 +207,12 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 				hashedSecret = defaultClient.Secret
 				h.log.Printf("✅ [REGISTRATION] Retrieved existing hashed secret")
 			} else {
-				h.log.Printf("❌ [REGISTRATION] Failed to cast existing client to DefaultClient")
+				h.log.Errorf("❌ [REGISTRATION] Failed to cast existing client to DefaultClient")
 				http.Error(w, "Failed to access existing client secret", http.StatusInternalServerError)
 				return
 			}
 		} else {
-			h.log.Printf("❌ [REGISTRATION] Existing client not found in storage: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Existing client not found in storage: %v", err)
 			http.Error(w, "Client not found", http.StatusNotFound)
 			return
 		}
@@ -267,13 +267,13 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	if authMethod == "attest_jwt_client_auth" || authMethod == "attest_tls_client_auth" {
 		h.log.Printf("🔍 [REGISTRATION] Attestation-based auth method detected, validating config")
 		if metadata.AttestationConfig == nil {
-			h.log.Printf("❌ [REGISTRATION] Attestation config required but not provided")
+			h.log.Errorf("❌ [REGISTRATION] Attestation config required but not provided")
 			http.Error(w, "Attestation configuration required for attestation-based authentication", http.StatusBadRequest)
 			return
 		}
 		h.log.Printf("🔍 [REGISTRATION] Validating attestation configuration")
 		if err := metadata.AttestationConfig.Validate(); err != nil {
-			h.log.Printf("❌ [REGISTRATION] Invalid attestation configuration: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Invalid attestation configuration: %v", err)
 			http.Error(w, "Invalid attestation configuration: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -281,7 +281,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 
 		// Ensure the attestation config client_id matches the client being registered
 		if metadata.AttestationConfig.ClientID != "" && metadata.AttestationConfig.ClientID != clientID {
-			h.log.Printf("❌ [REGISTRATION] Attestation config client_id mismatch: config=%s, client=%s", metadata.AttestationConfig.ClientID, clientID)
+			h.log.Errorf("❌ [REGISTRATION] Attestation config client_id mismatch: config=%s, client=%s", metadata.AttestationConfig.ClientID, clientID)
 			http.Error(w, "Attestation config client_id must match the registered client_id", http.StatusBadRequest)
 			return
 		}
@@ -294,7 +294,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		// Resolve trust anchor names to file paths
 		h.log.Printf("🔍 [REGISTRATION] Resolving trust anchors: %v", metadata.AttestationConfig.TrustAnchors)
 		if err := h.resolveTrustAnchors(metadata.AttestationConfig); err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to resolve trust anchors: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to resolve trust anchors: %v", err)
 			http.Error(w, "Failed to resolve trust anchors: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -374,14 +374,14 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	h.log.Printf("🔍 [REGISTRATION] Storing client in storage")
 	if isUpdate {
 		if err := h.storage.UpdateClient(r.Context(), clientID, newClient); err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to update client: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to update client: %v", err)
 			http.Error(w, "Failed to update client", http.StatusInternalServerError)
 			return
 		}
 		h.log.Printf("✅ [REGISTRATION] Client updated successfully")
 	} else {
 		if err := h.storage.CreateClient(r.Context(), newClient); err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to create client: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to create client: %v", err)
 			http.Error(w, "Failed to create client", http.StatusInternalServerError)
 			return
 		}
@@ -400,13 +400,13 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		// Encrypt and store the secret
 		encryptedSecret, err := h.secretManager.EncryptSecret(clientSecret)
 		if err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to encrypt client secret: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to encrypt client secret: %v", err)
 			http.Error(w, "Failed to encrypt client secret", http.StatusInternalServerError)
 			return
 		}
 
 		if err := h.storage.StoreClientSecret(r.Context(), clientID, encryptedSecret); err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to store encrypted client secret: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to store encrypted client secret: %v", err)
 			http.Error(w, "Failed to store client secret", http.StatusInternalServerError)
 			return
 		}
@@ -416,7 +416,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	// Store the attestation config for dynamic clients
 	if finalAttestationConfig != nil {
 		if err := h.storage.StoreAttestationConfig(r.Context(), clientID, finalAttestationConfig); err != nil {
-			h.log.Printf("❌ [REGISTRATION] Failed to store attestation config: %v", err)
+			h.log.Errorf("❌ [REGISTRATION] Failed to store attestation config: %v", err)
 			http.Error(w, "Failed to store attestation config", http.StatusInternalServerError)
 			return
 		}
@@ -479,7 +479,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 
 	h.log.Printf("🔍 [REGISTRATION] Encoding response JSON")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		h.log.Printf("❌ [REGISTRATION] Failed to encode response JSON: %v", err)
+		h.log.Errorf("❌ [REGISTRATION] Failed to encode response JSON: %v", err)
 		// Can't send error response here as headers are already written
 		return
 	}

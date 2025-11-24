@@ -48,14 +48,14 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	}
 
 	if err := r.ParseForm(); err != nil {
-		h.Log.Printf("❌ Failed to parse form: %v", err)
+		h.Log.Errorf("❌ Failed to parse form: %v", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
 	accessToken := r.FormValue("access-token")
 	if accessToken == "" {
-		h.Log.Printf("❌ Missing access-token parameter")
+		h.Log.Errorf("❌ Missing access-token parameter")
 		http.Error(w, "Missing access-token parameter", http.StatusBadRequest)
 		return
 	}
@@ -63,7 +63,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Extract client credentials from Basic Auth
 	clientID, clientSecret, ok := r.BasicAuth()
 	if !ok {
-		h.Log.Printf("❌ Missing Basic Auth credentials")
+		h.Log.Errorf("❌ Missing Basic Auth credentials")
 		http.Error(w, "Client authentication required", http.StatusUnauthorized)
 		return
 	}
@@ -71,13 +71,13 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Validate client credentials
 	client, err := h.Storage.GetClient(r.Context(), clientID)
 	if err != nil {
-		h.Log.Printf("❌ Unknown client: %s", clientID)
+		h.Log.Errorf("❌ Unknown client: %s", clientID)
 		http.Error(w, "Invalid client", http.StatusUnauthorized)
 		return
 	}
 
 	if !utils.ValidateSecret(clientSecret, client.GetHashedSecret()) {
-		h.Log.Printf("❌ Invalid client secret for client: %s", clientID)
+		h.Log.Errorf("❌ Invalid client secret for client: %s", clientID)
 		http.Error(w, "Invalid client credentials", http.StatusUnauthorized)
 		return
 	}
@@ -85,7 +85,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Introspect the token using Fosite but bypass client authorization by using privileged client context
 	tokenDetails, err := h.introspectTokenWithPrivilegedAccess(accessToken)
 	if err != nil {
-		h.Log.Printf("❌ Failed to introspect token: %v", err)
+		h.Log.Errorf("❌ Failed to introspect token: %v", err)
 		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
 	}
@@ -94,7 +94,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Check if token is active
 	active, _ := tokenDetails["active"].(bool)
 	if !active {
-		h.Log.Printf("❌ Token is not active")
+		h.Log.Errorf("❌ Token is not active")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"token-details": tokenDetails,
@@ -106,7 +106,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Get client ID from token details
 	tokenClientID, ok := tokenDetails["client_id"].(string)
 	if !ok {
-		h.Log.Printf("❌ Token missing client_id")
+		h.Log.Errorf("❌ Token missing client_id")
 		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
 	}
@@ -114,7 +114,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Check if the authenticated client is an audience of the token's client
 	tokenClient, err := h.Storage.GetClient(r.Context(), tokenClientID)
 	if err != nil {
-		h.Log.Printf("❌ Failed to get token client: %v", err)
+		h.Log.Errorf("❌ Failed to get token client: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -132,7 +132,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	isPrivileged := clientID == h.Config.Security.PrivilegedClientID
 
 	if !isAudience && !isPrivileged {
-		h.Log.Printf("❌ Client %s is not an audience for token client %s and is not privileged", clientID, tokenClientID)
+		h.Log.Errorf("❌ Client %s is not an audience for token client %s and is not privileged", clientID, tokenClientID)
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
@@ -140,7 +140,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Call userinfo endpoint
 	userinfoReq, err := http.NewRequest("GET", h.Config.Server.BaseURL+"/userinfo", nil)
 	if err != nil {
-		h.Log.Printf("❌ Failed to create userinfo request: %v", err)
+		h.Log.Errorf("❌ Failed to create userinfo request: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -148,7 +148,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 
 	userinfoResp, err := http.DefaultClient.Do(userinfoReq)
 	if err != nil {
-		h.Log.Printf("❌ Failed to call userinfo: %v", err)
+		h.Log.Errorf("❌ Failed to call userinfo: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -156,7 +156,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 
 	var userInfo interface{}
 	if err := json.NewDecoder(userinfoResp.Body).Decode(&userInfo); err != nil {
-		h.Log.Printf("❌ Failed to parse userinfo response: %v", err)
+		h.Log.Errorf("❌ Failed to parse userinfo response: %v", err)
 		userInfo = nil
 	}
 
@@ -183,7 +183,7 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 
 	req, err := http.NewRequest("POST", h.Config.Server.BaseURL+"/introspect", strings.NewReader(form.Encode()))
 	if err != nil {
-		h.Log.Printf("❌ Failed to create HTTP request: %v", err)
+		h.Log.Errorf("❌ Failed to create HTTP request: %v", err)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -192,7 +192,7 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 	// Use privileged client credentials to bypass audience restrictions
 	privilegedClientID := h.Config.Security.PrivilegedClientID
 	if privilegedClientID == "" {
-		h.Log.Printf("❌ No privileged client configured")
+		h.Log.Errorf("❌ No privileged client configured")
 		return nil, fmt.Errorf("no privileged client configured")
 	}
 
@@ -201,7 +201,7 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 	// Get the privileged client's plain text secret from the handler's map
 	privilegedClientSecret, exists := h.PrivilegedClientSecrets[privilegedClientID]
 	if !exists {
-		h.Log.Printf("❌ Privileged client secret not found for client: %s", privilegedClientID)
+		h.Log.Errorf("❌ Privileged client secret not found for client: %s", privilegedClientID)
 		h.Log.Printf("🔍 Available secrets: %v", h.PrivilegedClientSecrets)
 		return nil, fmt.Errorf("privileged client secret not found for client: %s", privilegedClientID)
 	}
@@ -217,7 +217,7 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 	h.Log.Printf("🔍 Calling NewIntrospectionRequest...")
 	ir, err := h.OAuth2Provider.NewIntrospectionRequest(ctx, req, &openid.DefaultSession{})
 	if err != nil {
-		h.Log.Printf("❌ Error creating privileged introspection request: %v", err)
+		h.Log.Errorf("❌ Error creating privileged introspection request: %v", err)
 		return map[string]interface{}{
 			"active": false,
 			"error":  "invalid_token",
@@ -240,7 +240,7 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 	// Parse the response
 	var response map[string]interface{}
 	if err := json.Unmarshal(responseCapture.body.Bytes(), &response); err != nil {
-		h.Log.Printf("❌ Failed to parse introspection response: %v", err)
+		h.Log.Errorf("❌ Failed to parse introspection response: %v", err)
 		return nil, fmt.Errorf("failed to parse introspection response: %w", err)
 	}
 

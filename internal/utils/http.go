@@ -3,8 +3,9 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+
+	"github.com/sirupsen/logrus"
 )
 
 // WriteHTMLResponse writes an HTML response with the given status code and content
@@ -73,11 +74,11 @@ func WriteHTMLResponse(w http.ResponseWriter, statusCode int, content string) {
 }
 
 // WriteJSONResponse writes a JSON response with the given status code and data
-func WriteJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
+func WriteJSONResponse(w http.ResponseWriter, statusCode int, data interface{}, logger *logrus.Logger) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("❌ Error encoding JSON response: %v", err)
+		logger.Errorf("❌ Error encoding JSON response: %v", err)
 	}
 }
 

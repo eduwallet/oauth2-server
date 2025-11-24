@@ -3,34 +3,36 @@ package store
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"oauth2-server/pkg/config"
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/storage"
+	"github.com/sirupsen/logrus"
 )
 
 // CustomStorage wraps our storage but provides custom client management
 type CustomStorage struct {
 	Storage fosite.Storage                        // Embed fosite.Storage to get all interface implementations
-	Clients map[string]fosite.Client              // Keep clients in memory for custom management
+	Clients map[string]fosite.Client              // Keep clients in memory for fast access
 	Users   map[string]storage.MemoryUserRelation // Keep users in memory for custom management
+	logger  *logrus.Logger
 }
 
 // NewCustomStorage creates a new CustomStorage instance
-func NewCustomStorage(underlyingStore fosite.Storage) *CustomStorage {
+func NewCustomStorage(underlyingStore fosite.Storage, logger *logrus.Logger) *CustomStorage {
 	return &CustomStorage{
 		Storage: underlyingStore,
 		Clients: make(map[string]fosite.Client),
 		Users:   make(map[string]storage.MemoryUserRelation),
+		logger:  logger,
 	}
 }
 
 // Implement store.Storage interface methods by delegating to underlying store
 func (s *CustomStorage) CreateClient(ctx context.Context, client fosite.Client) error {
-	log.Printf("🔍 CustomStorage.CreateClient: adding client %s to map and persisting to storage", client.GetID())
+	s.logger.Debugf("🔍 CustomStorage.CreateClient: adding client %s to map and persisting to storage", client.GetID())
 
 	// Store in memory map for fast access
 	s.Clients[client.GetID()] = client
@@ -40,19 +42,19 @@ func (s *CustomStorage) CreateClient(ctx context.Context, client fosite.Client) 
 		CreateClient(ctx context.Context, client fosite.Client) error
 	}); ok {
 		if err := storage.CreateClient(ctx, client); err != nil {
-			log.Printf("❌ CustomStorage.CreateClient: failed to persist client %s to storage: %v", client.GetID(), err)
+			s.logger.Errorf("❌ CustomStorage.CreateClient: failed to persist client %s to storage: %v", client.GetID(), err)
 			return err
 		}
 	} else {
-		log.Printf("⚠️ CustomStorage.CreateClient: underlying storage does not support CreateClient")
+		s.logger.Warnf("⚠️ CustomStorage.CreateClient: underlying storage does not support CreateClient")
 	}
 
-	log.Printf("✅ CustomStorage.CreateClient: client %s added to map and persisted (total clients: %d)", client.GetID(), len(s.Clients))
+	s.logger.Debugf("✅ CustomStorage.CreateClient: client %s added to map and persisted (total clients: %d)", client.GetID(), len(s.Clients))
 	return nil
 }
 
 func (s *CustomStorage) UpdateClient(ctx context.Context, id string, client fosite.Client) error {
-	log.Printf("🔍 CustomStorage.UpdateClient: updating client %s in map and storage", id)
+	s.logger.Debugf("🔍 CustomStorage.UpdateClient: updating client %s in map and storage", id)
 
 	// Update in memory map
 	s.Clients[id] = client
@@ -62,19 +64,19 @@ func (s *CustomStorage) UpdateClient(ctx context.Context, id string, client fosi
 		UpdateClient(ctx context.Context, id string, client fosite.Client) error
 	}); ok {
 		if err := storage.UpdateClient(ctx, id, client); err != nil {
-			log.Printf("❌ CustomStorage.UpdateClient: failed to update client %s in storage: %v", id, err)
+			s.logger.Errorf("❌ CustomStorage.UpdateClient: failed to update client %s in storage: %v", id, err)
 			return err
 		}
 	} else {
-		log.Printf("⚠️ CustomStorage.UpdateClient: underlying storage does not support UpdateClient")
+		s.logger.Warnf("⚠️ CustomStorage.UpdateClient: underlying storage does not support UpdateClient")
 	}
 
-	log.Printf("✅ CustomStorage.UpdateClient: client %s updated", id)
+	s.logger.Debugf("✅ CustomStorage.UpdateClient: client %s updated", id)
 	return nil
 }
 
 func (s *CustomStorage) DeleteClient(ctx context.Context, id string) error {
-	log.Printf("🔍 CustomStorage.DeleteClient: deleting client %s from map and storage", id)
+	s.logger.Debugf("🔍 CustomStorage.DeleteClient: deleting client %s from map and storage", id)
 
 	// Delete from memory map
 	delete(s.Clients, id)
@@ -84,14 +86,14 @@ func (s *CustomStorage) DeleteClient(ctx context.Context, id string) error {
 		DeleteClient(ctx context.Context, id string) error
 	}); ok {
 		if err := storage.DeleteClient(ctx, id); err != nil {
-			log.Printf("❌ CustomStorage.DeleteClient: failed to delete client %s from storage: %v", id, err)
+			s.logger.Errorf("❌ CustomStorage.DeleteClient: failed to delete client %s from storage: %v", id, err)
 			return err
 		}
 	} else {
-		log.Printf("⚠️ CustomStorage.DeleteClient: underlying storage does not support DeleteClient")
+		s.logger.Warnf("⚠️ CustomStorage.DeleteClient: underlying storage does not support DeleteClient")
 	}
 
-	log.Printf("✅ CustomStorage.DeleteClient: client %s deleted", id)
+	s.logger.Debugf("✅ CustomStorage.DeleteClient: client %s deleted", id)
 	return nil
 }
 
@@ -329,18 +331,18 @@ func (s *CustomStorage) GetRefreshTokenCount() (int, error) {
 
 // GetClient returns a client but makes it appear public to skip Fosite's authentication
 func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client, error) {
-	// log.Printf("🔍 CustomStorage.GetClient: looking for client %s (total clients in map: %d)", id, len(s.Clients))
+	// s.logger.Debugf("🔍 CustomStorage.GetClient: looking for client %s (total clients in map: %d)", id, len(s.Clients))
 
 	// Check if this is a proxy token creation request
 	isProxyToken := ctx.Value("proxy_token") != nil
-	// log.Printf("🔍 CustomStorage.GetClient: context values - proxy_token: %v", ctx.Value("proxy_token"))
+	// s.logger.Debugf("🔍 CustomStorage.GetClient: context values - proxy_token: %v", ctx.Value("proxy_token"))
 	// if isProxyToken {
-	// 	log.Printf("🔄 CustomStorage.GetClient: proxy token request detected for client %s", id)
+	// 	s.logger.Debugf("🔄 CustomStorage.GetClient: proxy token request detected for client %s", id)
 	// }
 
 	client, exists := s.Clients[id]
 	if !exists {
-		log.Printf("⚠️ CustomStorage.GetClient: client %s not found in map, checking underlying storage", id)
+		s.logger.Warnf("⚠️ CustomStorage.GetClient: client %s not found in map, checking underlying storage", id)
 
 		// Check underlying storage for dynamically registered clients
 		if storage, ok := s.Storage.(interface {
@@ -348,34 +350,34 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 		}); ok {
 			underlyingClient, err := storage.GetClient(ctx, id)
 			if err == nil {
-				// log.Printf("✅ CustomStorage.GetClient: found client %s in underlying storage", id)
+				// s.logger.Debugf("✅ CustomStorage.GetClient: found client %s in underlying storage", id)
 				client = underlyingClient
 				exists = true
 			} else {
-				log.Printf("❌ CustomStorage.GetClient: client %s not found in underlying storage either: %v", id, err)
+				s.logger.Errorf("❌ CustomStorage.GetClient: client %s not found in underlying storage either: %v", id, err)
 			}
 		} else {
 			// Check if it's a MemoryStoreWrapper and access the embedded MemoryStore directly
 			if memoryWrapper, ok := s.Storage.(*MemoryStoreWrapper); ok {
 				if memClient, exists := memoryWrapper.MemoryStore.Clients[id]; exists {
-					//log.Printf("✅ CustomStorage.GetClient: found client %s in MemoryStore", id)
+					//s.logger.Debugf("✅ CustomStorage.GetClient: found client %s in MemoryStore", id)
 					client = memClient
 					exists = true
 				} else {
-					log.Printf("❌ CustomStorage.GetClient: client %s not found in MemoryStore either", id)
+					s.logger.Errorf("❌ CustomStorage.GetClient: client %s not found in MemoryStore either", id)
 				}
 			} else {
-				log.Printf("⚠️ CustomStorage.GetClient: underlying storage does not support GetClient and is not MemoryStoreWrapper")
+				s.logger.Warnf("⚠️ CustomStorage.GetClient: underlying storage does not support GetClient and is not MemoryStoreWrapper")
 			}
 		}
 	}
 
 	if !exists {
-		log.Printf("❌ CustomStorage.GetClient: client %s not found anywhere", id)
+		s.logger.Errorf("❌ CustomStorage.GetClient: client %s not found anywhere", id)
 		return nil, fosite.ErrInvalidClient
 	}
 
-	log.Printf("✅ CustomStorage.GetClient: found client %s (type: %T, Public: %v)", id, client, client.IsPublic())
+	s.logger.Debugf("✅ CustomStorage.GetClient: found client %s (type: %T, Public: %v)", id, client, client.IsPublic())
 
 	// For public clients (token_endpoint_auth_method = "none"), modify the client to be public
 	if defaultClient, ok := client.(*fosite.DefaultClient); ok {
@@ -388,7 +390,7 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 
 		// If client is configured as public or has no secret, make it public (unless this is a proxy token request)
 		if !isProxyToken && (defaultClient.Public || (defaultClient.GetHashedSecret() == nil || len(defaultClient.GetHashedSecret()) == 0)) {
-			log.Printf("🔄 CustomStorage.GetClient: making client %s public (auth_method: %s)", id, authMethod)
+			s.logger.Debugf("🔄 CustomStorage.GetClient: making client %s public (auth_method: %s)", id, authMethod)
 
 			// Create a copy of the client and set Public = true
 			publicClient := &fosite.DefaultClient{
@@ -403,7 +405,7 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 			}
 			return publicClient, nil
 		} else if isProxyToken && defaultClient.Public {
-			log.Printf("🔄 CustomStorage.GetClient: keeping client %s confidential for proxy token (was public)", id)
+			s.logger.Debugf("🔄 CustomStorage.GetClient: keeping client %s confidential for proxy token (was public)", id)
 			// For proxy token requests, keep the client as confidential even if it was public
 			confidentialClient := &fosite.DefaultClient{
 				ID:            defaultClient.ID,
@@ -419,7 +421,7 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 		}
 	}
 
-	log.Printf("✅ CustomStorage.GetClient: returning client %s as-is", id)
+	s.logger.Debugf("✅ CustomStorage.GetClient: returning client %s as-is", id)
 	return client, nil
 }
 

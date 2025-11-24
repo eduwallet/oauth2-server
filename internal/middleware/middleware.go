@@ -1,14 +1,15 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // Logger middleware for request logging
-func Logger(next http.HandlerFunc) http.HandlerFunc {
+func Logger(log *logrus.Logger, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -112,7 +113,7 @@ func RateLimit(requestsPerMinute int) func(http.HandlerFunc) http.HandlerFunc {
 }
 
 // APIKeyAuth middleware for API key authentication
-func APIKeyAuth(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
+func APIKeyAuth(log *logrus.Logger, apiKey string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			// Allow OPTIONS requests through for CORS preflight

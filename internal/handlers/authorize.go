@@ -54,7 +54,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Add panic recovery to catch any internal fosite panics
 	defer func() {
 		if rec := recover(); rec != nil {
-			h.Log.Printf("🚨 PANIC in authorization handler: %v", rec)
+			h.Log.Fatalf("🚨 PANIC in authorization handler: %v", rec)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
 	}()
@@ -69,7 +69,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// It will analyze the request and extract important information like scopes, response type and others.
 	ar, err := h.OAuth2Provider.NewAuthorizeRequest(ctx, r)
 	if err != nil {
-		h.Log.Printf("❌ Error occurred in NewAuthorizeRequest: %v", err)
+		h.Log.Errorf("❌ Error occurred in NewAuthorizeRequest: %v", err)
 		if h.Metrics != nil {
 			h.Metrics.RecordAuthRequest("unknown", "unknown", "error")
 		}
@@ -102,7 +102,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !userExists {
-		h.Log.Printf("❌ Invalid username: %s", username)
+		h.Log.Errorf("❌ Invalid username: %s", username)
 		h.showAuthorizationTemplate(w, r, ar, "Invalid username or password", false)
 		return
 	}
@@ -188,8 +188,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	func() {
 		defer func() {
 			if rec := recover(); rec != nil {
-				h.Log.Printf("🚨 PANIC in NewAuthorizeResponse: %v", rec)
-				h.Log.Printf("🚨 Stack trace: %+v", rec)
+				h.Log.Fatalf("🚨 PANIC in NewAuthorizeResponse: %v", rec)
 				authErr = fosite.ErrServerError.WithHint("Internal panic during authorization response generation")
 			}
 		}()
@@ -212,7 +211,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// * invalid redirect
 	// * ...
 	if authErr != nil {
-		h.Log.Printf("❌ Error occurred in NewAuthorizeResponse: %v", authErr)
+		h.Log.Errorf("❌ Error occurred in NewAuthorizeResponse: %v", authErr)
 		h.Log.Printf("🔍 Error type: %T", authErr)
 		h.Log.Printf("🔍 Error details: %+v", authErr)
 
@@ -311,14 +310,14 @@ func (h *AuthorizeHandler) showAuthorizationTemplate(w http.ResponseWriter, r *h
 	templatePath := filepath.Join("templates", "unified_auth.html")
 	tmpl, err := template.ParseFiles(templatePath)
 	if err != nil {
-		h.Log.Printf("❌ Error loading template: %v", err)
+		h.Log.Errorf("❌ Error loading template: %v", err)
 		http.Error(w, "Template error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.Execute(w, data); err != nil {
-		h.Log.Printf("❌ Error executing template: %v", err)
+		h.Log.Errorf("❌ Error executing template: %v", err)
 		http.Error(w, "Template execution error", http.StatusInternalServerError)
 		return
 	}
@@ -331,7 +330,7 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	h.Log.Printf("🔄 [PROXY-AUTH] Starting proxy authorization request: %s", r.URL.String())
 
 	if h.Configuration.UpstreamProvider.Metadata == nil {
-		h.Log.Printf("❌ [PROXY-AUTH] Upstream provider metadata not configured")
+		h.Log.Errorf("❌ [PROXY-AUTH] Upstream provider metadata not configured")
 		http.Error(w, "upstream provider not configured", http.StatusBadGateway)
 		return
 	}
@@ -344,7 +343,7 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	// Validate client exists in our storage
 	h.Log.Printf("🔍 [PROXY-AUTH] Validating client exists: %s", clientID)
 	if _, err := h.Storage.GetClient(r.Context(), clientID); err != nil {
-		h.Log.Printf("❌ [PROXY-AUTH] Client validation failed: %v", err)
+		h.Log.Errorf("❌ [PROXY-AUTH] Client validation failed: %v", err)
 		http.Error(w, "unknown or unregistered client_id", http.StatusBadRequest)
 		return
 	}
@@ -377,7 +376,7 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	// Build upstream authorization URL
 	authzEndpoint, _ := h.Configuration.UpstreamProvider.Metadata["authorization_endpoint"].(string)
 	if authzEndpoint == "" {
-		h.Log.Printf("❌ [PROXY-AUTH] Authorization endpoint not available in metadata")
+		h.Log.Errorf("❌ [PROXY-AUTH] Authorization endpoint not available in metadata")
 		http.Error(w, "upstream authorization_endpoint not available", http.StatusBadGateway)
 		return
 	}

@@ -15,7 +15,7 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: "1.23" # Updated to support newer dependencies
+  GO_VERSION: "1.25" # Updated to support newer dependencies
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ["1.23"] # Use Go 1.23 to avoid dependency issues
+        go: ["1.25"] # Use Go 1.25 to avoid dependency issues
 
     steps:
       - name: Checkout repository

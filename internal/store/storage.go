@@ -1030,15 +1030,17 @@ type MemoryStoreWrapper struct {
 	clientSecrets      map[string]string
 	attestationConfigs map[string]*config.ClientAttestationConfig
 	trustAnchors       map[string][]byte
+	logger             *logrus.Logger
 }
 
 // NewMemoryStoreWrapper creates a new MemoryStoreWrapper with initialized maps
-func NewMemoryStoreWrapper(memoryStore *storage.MemoryStore) *MemoryStoreWrapper {
+func NewMemoryStoreWrapper(memoryStore *storage.MemoryStore, logger *logrus.Logger) *MemoryStoreWrapper {
 	return &MemoryStoreWrapper{
 		MemoryStore:        memoryStore,
 		clientSecrets:      make(map[string]string),
 		attestationConfigs: make(map[string]*config.ClientAttestationConfig),
 		trustAnchors:       make(map[string][]byte),
+		logger:             logger,
 	}
 }
 
@@ -1160,7 +1162,7 @@ func (m *MemoryStoreWrapper) GetRefreshTokenCount() (int, error) {
 // Secure client data storage methods (for memory store, we store in memory but warn about persistence)
 func (m *MemoryStoreWrapper) StoreClientSecret(ctx context.Context, clientID string, encryptedSecret string) error {
 	m.clientSecrets[clientID] = encryptedSecret
-	log.Printf("⚠️  [MEMORY STORE] Client secret stored in memory for client %s - this will be lost on restart", clientID)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Client secret stored in memory for client %s - this will be lost on restart", clientID)
 	return nil
 }
 
@@ -1169,13 +1171,13 @@ func (m *MemoryStoreWrapper) GetClientSecret(ctx context.Context, clientID strin
 	if !exists {
 		return "", fmt.Errorf("client secret not found")
 	}
-	log.Printf("⚠️  [MEMORY STORE] Retrieved client secret from memory for client %s - this data is not persistent", clientID)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Retrieved client secret from memory for client %s - this data is not persistent", clientID)
 	return secret, nil
 }
 
 func (m *MemoryStoreWrapper) StoreAttestationConfig(ctx context.Context, clientID string, config *config.ClientAttestationConfig) error {
 	m.attestationConfigs[clientID] = config
-	log.Printf("⚠️  [MEMORY STORE] Attestation config stored in memory for client %s - this will be lost on restart", clientID)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Attestation config stored in memory for client %s - this will be lost on restart", clientID)
 	return nil
 }
 
@@ -1184,14 +1186,14 @@ func (m *MemoryStoreWrapper) GetAttestationConfig(ctx context.Context, clientID 
 	if !exists {
 		return nil, fmt.Errorf("attestation config not found")
 	}
-	log.Printf("⚠️  [MEMORY STORE] Retrieved attestation config from memory for client %s - this data is not persistent", clientID)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Retrieved attestation config from memory for client %s - this data is not persistent", clientID)
 	return config, nil
 }
 
 // Trust anchor storage methods
 func (m *MemoryStoreWrapper) StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error {
 	m.trustAnchors[name] = certificateData
-	log.Printf("⚠️  [MEMORY STORE] Trust anchor stored in memory for %s - this will be lost on restart", name)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Trust anchor stored in memory for %s - this will be lost on restart", name)
 	return nil
 }
 
@@ -1200,7 +1202,7 @@ func (m *MemoryStoreWrapper) GetTrustAnchor(ctx context.Context, name string) ([
 	if !exists {
 		return nil, fmt.Errorf("trust anchor not found")
 	}
-	log.Printf("⚠️  [MEMORY STORE] Retrieved trust anchor from memory for %s - this data is not persistent", name)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Retrieved trust anchor from memory for %s - this data is not persistent", name)
 	return data, nil
 }
 
@@ -1209,7 +1211,7 @@ func (m *MemoryStoreWrapper) ListTrustAnchors(ctx context.Context) ([]string, er
 	for name := range m.trustAnchors {
 		names = append(names, name)
 	}
-	log.Printf("⚠️  [MEMORY STORE] Listed trust anchors from memory - this data is not persistent")
+	m.logger.Warnf("⚠️  [MEMORY STORE] Listed trust anchors from memory - this data is not persistent")
 	return names, nil
 }
 
@@ -1218,7 +1220,7 @@ func (m *MemoryStoreWrapper) DeleteTrustAnchor(ctx context.Context, name string)
 		return fmt.Errorf("trust anchor not found")
 	}
 	delete(m.trustAnchors, name)
-	log.Printf("⚠️  [MEMORY STORE] Trust anchor deleted from memory for %s - this data is not persistent", name)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Trust anchor deleted from memory for %s - this data is not persistent", name)
 	return nil
 }
 
@@ -1528,7 +1530,7 @@ func (s *SQLiteStore) CreateAuthorizeCodeSession(ctx context.Context, code strin
 		return err
 	}
 
-	log.Printf("🔍 SQLiteStore.CreateAuthorizeCodeSession: storing JSON: %s", string(data))
+	s.logger.Debugf("🔍 SQLiteStore.CreateAuthorizeCodeSession: storing JSON: %s", string(data))
 
 	_, err = s.db.Exec(
 		"INSERT OR REPLACE INTO authorization_codes (signature, data) VALUES (?, ?)",
@@ -1557,14 +1559,14 @@ func (s *SQLiteStore) GetAuthorizeCodeSession(ctx context.Context, code string, 
 		return nil, err
 	}
 
-	log.Printf("🔍 SQLiteStore.GetAuthorizeCodeSession: unmarshaling JSON: %s", data)
+	s.logger.Debugf("🔍 SQLiteStore.GetAuthorizeCodeSession: unmarshaling JSON: %s", data)
 	request, err := s.UnmarshalRequestWithClientID([]byte(data))
 	if err != nil {
-		log.Printf("❌ SQLiteStore.GetAuthorizeCodeSession: unmarshal error: %v", err)
+		s.logger.Errorf("❌ SQLiteStore.GetAuthorizeCodeSession: unmarshal error: %v", err)
 		return nil, err
 	}
 
-	log.Printf("✅ SQLiteStore.GetAuthorizeCodeSession: successfully unmarshaled request with client: %T, ID: %s", request.GetClient(), request.GetClient().GetID())
+	s.logger.Debugf("✅ SQLiteStore.GetAuthorizeCodeSession: successfully unmarshaled request with client: %T, ID: %s", request.GetClient(), request.GetClient().GetID())
 	return request, nil
 }
 
@@ -1633,7 +1635,7 @@ func (s *SQLiteStore) SetClientAssertionJWT(ctx context.Context, jti string, exp
 
 // Device authorization methods
 func (s *SQLiteStore) GetDeviceCodeSession(ctx context.Context, deviceCode string, session fosite.Session) (fosite.DeviceRequester, error) {
-	log.Printf("🔍 SQLiteStore.GetDeviceCodeSession: looking for device code: %s", deviceCode)
+	s.logger.Debugf("🔍 SQLiteStore.GetDeviceCodeSession: looking for device code: %s", deviceCode)
 
 	// Try the full device code first
 	var data string
@@ -1643,26 +1645,26 @@ func (s *SQLiteStore) GetDeviceCodeSession(ctx context.Context, deviceCode strin
 		parts := strings.Split(deviceCode, ".")
 		if len(parts) > 1 {
 			signature := parts[len(parts)-1]
-			log.Printf("🔍 SQLiteStore.GetDeviceCodeSession: trying signature part: %s", signature)
+			s.logger.Debugf("🔍 SQLiteStore.GetDeviceCodeSession: trying signature part: %s", signature)
 			err = s.db.QueryRow("SELECT data FROM device_codes WHERE signature = ?", signature).Scan(&data)
 		}
 	}
 
 	if err == sql.ErrNoRows {
-		log.Printf("❌ SQLiteStore.GetDeviceCodeSession: device code not found: %s", deviceCode)
+		s.logger.Errorf("❌ SQLiteStore.GetDeviceCodeSession: device code not found: %s", deviceCode)
 		return nil, fosite.ErrInvalidRequest
 	}
 	if err != nil {
-		log.Printf("❌ SQLiteStore.GetDeviceCodeSession: database error: %v", err)
+		s.logger.Errorf("❌ SQLiteStore.GetDeviceCodeSession: database error: %v", err)
 		return nil, err
 	}
 
-	log.Printf("✅ SQLiteStore.GetDeviceCodeSession: found device code data")
+	s.logger.Debugf("✅ SQLiteStore.GetDeviceCodeSession: found device code data")
 	return s.UnmarshalDeviceRequestWithClientID([]byte(data))
 }
 
 func (s *SQLiteStore) CreateDeviceCodeSession(ctx context.Context, deviceCode string, request fosite.Requester) error {
-	log.Printf("🔍 SQLiteStore.CreateDeviceCodeSession: storing device code: %s", deviceCode)
+	s.logger.Debugf("🔍 SQLiteStore.CreateDeviceCodeSession: storing device code: %s", deviceCode)
 
 	// Convert to DeviceRequester if needed
 	var deviceReq fosite.DeviceRequester
@@ -1682,15 +1684,15 @@ func (s *SQLiteStore) CreateDeviceCodeSession(ctx context.Context, deviceCode st
 		deviceCode, string(data),
 	)
 	if err != nil {
-		log.Printf("❌ SQLiteStore.CreateDeviceCodeSession: failed to store: %v", err)
+		s.logger.Errorf("❌ SQLiteStore.CreateDeviceCodeSession: failed to store: %v", err)
 	} else {
-		log.Printf("✅ SQLiteStore.CreateDeviceCodeSession: successfully stored device code: %s", deviceCode)
+		s.logger.Debugf("✅ SQLiteStore.CreateDeviceCodeSession: successfully stored device code: %s", deviceCode)
 	}
 	return err
 }
 
 func (s *SQLiteStore) UpdateDeviceCodeSession(ctx context.Context, deviceCode string, request fosite.Requester) error {
-	log.Printf("🔍 SQLiteStore.UpdateDeviceCodeSession: updating device code: %s", deviceCode)
+	s.logger.Debugf("🔍 SQLiteStore.UpdateDeviceCodeSession: updating device code: %s", deviceCode)
 
 	// Convert to DeviceRequester if needed
 	var deviceReq fosite.DeviceRequester
@@ -1710,9 +1712,9 @@ func (s *SQLiteStore) UpdateDeviceCodeSession(ctx context.Context, deviceCode st
 		string(data), deviceCode,
 	)
 	if err != nil {
-		log.Printf("❌ SQLiteStore.UpdateDeviceCodeSession: failed to update: %v", err)
+		s.logger.Errorf("❌ SQLiteStore.UpdateDeviceCodeSession: failed to update: %v", err)
 	} else {
-		log.Printf("✅ SQLiteStore.UpdateDeviceCodeSession: successfully updated device code: %s", deviceCode)
+		s.logger.Debugf("✅ SQLiteStore.UpdateDeviceCodeSession: successfully updated device code: %s", deviceCode)
 	}
 	return err
 }
@@ -1768,7 +1770,7 @@ func (s *SQLiteStore) GetDeviceAuthByUserCode(ctx context.Context, userCode stri
 }
 
 func (s *SQLiteStore) CreateDeviceAuthSession(ctx context.Context, deviceCodeSignature, userCodeSignature string, request fosite.DeviceRequester) error {
-	log.Printf("🔍 SQLiteStore.CreateDeviceAuthSession: storing device code: %s, user code: %s", deviceCodeSignature, userCodeSignature)
+	s.logger.Debugf("🔍 SQLiteStore.CreateDeviceAuthSession: storing device code: %s, user code: %s", deviceCodeSignature, userCodeSignature)
 
 	data, err := MarshalDeviceRequestWithClientID(request)
 	if err != nil {
@@ -1780,9 +1782,9 @@ func (s *SQLiteStore) CreateDeviceAuthSession(ctx context.Context, deviceCodeSig
 		deviceCodeSignature, userCodeSignature, string(data),
 	)
 	if err != nil {
-		log.Printf("❌ SQLiteStore.CreateDeviceAuthSession: failed to store: %v", err)
+		s.logger.Errorf("❌ SQLiteStore.CreateDeviceAuthSession: failed to store: %v", err)
 	} else {
-		log.Printf("✅ SQLiteStore.CreateDeviceAuthSession: successfully stored device code: %s", deviceCodeSignature)
+		s.logger.Debugf("✅ SQLiteStore.CreateDeviceAuthSession: successfully stored device code: %s", deviceCodeSignature)
 	}
 	return err
 }
