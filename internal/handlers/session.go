@@ -17,6 +17,11 @@ type UpstreamSessionData struct {
 	ProxyState            string
 	ProxyNonce            string
 	ProxyCodeChallenge    string
+	// Device flow specific fields
+	UpstreamDeviceCode string
+	UpstreamUserCode   string
+	ProxyDeviceCode    string
+	ProxyUserCode      string
 }
 
 func userSession(issuer, user string, audience []string) *openid.DefaultSession {

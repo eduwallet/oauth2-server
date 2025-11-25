@@ -11,6 +11,7 @@ USERNAME="${TEST_USERNAME:-john.doe}"
 PASSWORD="${TEST_PASSWORD:-password123}"
 SCOPE="${TEST_SCOPE:-openid profile email}"
 REDIRECT_URI="http://localhost:8080/callback"
+API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -52,7 +53,7 @@ print_status "Registration payload: $CLIENT_REGISTRATION_PAYLOAD"
 
 REGISTRATION_RESPONSE=$(curl -s -X POST "${SERVER_URL}/register" \
     -H "Content-Type: application/json" \
-    -H "X-API-Key: super-secure-random-api-key-change-in-production-32-chars-minimum" \
+    -H "X-API-Key: $API_KEY" \
     -d "$CLIENT_REGISTRATION_PAYLOAD")
 
 if [ $? -ne 0 ]; then

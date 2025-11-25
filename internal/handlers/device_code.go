@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
+	"net/url"
 	"oauth2-server/internal/store"
 	"oauth2-server/pkg/config"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/openid"
@@ -18,11 +22,13 @@ import (
 
 // DeviceCodeHandler handles all operations related to the device authorization grant
 type DeviceCodeHandler struct {
-	OAuth2Provider fosite.OAuth2Provider
-	Storage        store.Storage
-	Templates      *template.Template
-	Config         *config.Config
-	Logger         *logrus.Logger
+	OAuth2Provider          fosite.OAuth2Provider
+	Storage                 store.Storage
+	Templates               *template.Template
+	Config                  *config.Config
+	Logger                  *logrus.Logger
+	DeviceCodeToUpstreamMap *map[string]string
+	UpstreamSessionMap      *map[string]UpstreamSessionData
 }
 
 // NewDeviceCodeHandler creates a new DeviceCodeHandler
@@ -32,13 +38,17 @@ func NewDeviceCodeHandler(
 	templates *template.Template,
 	config *config.Config,
 	logger *logrus.Logger,
+	deviceCodeToUpstreamMap *map[string]string,
+	upstreamSessionMap *map[string]UpstreamSessionData,
 ) *DeviceCodeHandler {
 	return &DeviceCodeHandler{
-		OAuth2Provider: provider,
-		Storage:        storage,
-		Templates:      templates,
-		Config:         config,
-		Logger:         logger,
+		OAuth2Provider:          provider,
+		Storage:                 storage,
+		Templates:               templates,
+		Config:                  config,
+		Logger:                  logger,
+		DeviceCodeToUpstreamMap: deviceCodeToUpstreamMap,
+		UpstreamSessionMap:      upstreamSessionMap,
 	}
 }
 
@@ -52,7 +62,16 @@ func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *
 		return
 	}
 
-	h.Logger.Info("🚀 Processing device authorization request using pure fosite flow")
+	h.Logger.Info("🚀 Processing device authorization request")
+
+	// Check if proxy mode is enabled
+	if h.Config.IsProxyMode() {
+		h.Logger.Info("🔄 Proxy mode detected, forwarding device authorization request")
+		h.handleProxyDeviceAuthorization(w, r)
+		return
+	}
+
+	h.Logger.Info("🏠 Local mode, proceeding with regular device authorization")
 
 	// Let fosite handle the device authorization request completely
 	deviceRequest, err := h.OAuth2Provider.NewDeviceRequest(ctx, r)
@@ -113,14 +132,165 @@ func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *
 	h.OAuth2Provider.WriteDeviceResponse(ctx, w, deviceRequest, deviceResponse)
 }
 
-// writeErrorResponse writes a JSON error response
-func (h *DeviceCodeHandler) writeErrorResponse(w http.ResponseWriter, errorCode, errorDescription string) {
+// handleProxyDeviceAuthorization forwards device authorization requests to the upstream provider
+func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
+	h.Logger.Printf("🔄 [PROXY-DEVICE] Starting proxy device authorization request: %s", r.URL.String())
+
+	if h.Config.UpstreamProvider.Metadata == nil {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream provider metadata not configured")
+		h.writeErrorResponse(w, "server_error", "upstream provider not configured")
+		return
+	}
+
+	// Parse the form to get client_id and scope
+	if err := r.ParseForm(); err != nil {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Failed to parse form: %v", err)
+		h.writeErrorResponse(w, "invalid_request", "failed to parse form")
+		return
+	}
+
+	clientID := r.Form.Get("client_id")
+	if clientID == "" {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Missing client_id")
+		h.writeErrorResponse(w, "invalid_request", "missing client_id")
+		return
+	}
+
+	h.Logger.Printf("👤 [PROXY-DEVICE] Client ID: %s", clientID)
+
+	// Validate client exists
+	if _, err := h.Storage.GetClient(r.Context(), clientID); err != nil {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Unknown client: %s", clientID)
+		h.writeErrorResponse(w, "invalid_client", "unknown client")
+		return
+	}
+
+	// Get upstream device_authorization_endpoint
+	deviceAuthEndpoint, ok := h.Config.UpstreamProvider.Metadata["device_authorization_endpoint"].(string)
+	if !ok || deviceAuthEndpoint == "" {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream device_authorization_endpoint not available")
+		h.writeErrorResponse(w, "server_error", "upstream device_authorization_endpoint not available")
+		return
+	}
+
+	h.Logger.Printf("🔗 [PROXY-DEVICE] Upstream device auth endpoint: %s", deviceAuthEndpoint)
+
+	// Prepare upstream request
+	upstreamForm := make(url.Values)
+	upstreamForm.Set("client_id", h.Config.UpstreamProvider.ClientID)
+	if scope := r.Form.Get("scope"); scope != "" {
+		upstreamForm.Set("scope", scope)
+	}
+
+	h.Logger.Printf("📤 [PROXY-DEVICE] Forwarding to upstream with client_id: %s", h.Config.UpstreamProvider.ClientID)
+
+	req, err := http.NewRequest("POST", deviceAuthEndpoint, strings.NewReader(upstreamForm.Encode()))
+	if err != nil {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Failed to create upstream request: %v", err)
+		h.writeErrorResponse(w, "server_error", "failed to create upstream request")
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if h.Config.UpstreamProvider.ClientSecret != "" {
+		req.SetBasicAuth(h.Config.UpstreamProvider.ClientID, h.Config.UpstreamProvider.ClientSecret)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream request failed: %v", err)
+		h.writeErrorResponse(w, "server_error", "upstream request failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	h.Logger.Printf("📥 [PROXY-DEVICE] Upstream response status: %d", resp.StatusCode)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Failed to read upstream response: %v", err)
+		h.writeErrorResponse(w, "server_error", "failed to read upstream response")
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream returned error status: %d, body: %s", resp.StatusCode, string(respBody))
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+		return
+	}
+
+	// Parse upstream response
+	var upstreamResp map[string]interface{}
+	if err := json.Unmarshal(respBody, &upstreamResp); err != nil {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Failed to parse upstream response: %v", err)
+		h.writeErrorResponse(w, "server_error", "failed to parse upstream response")
+		return
+	}
+
+	upstreamDeviceCode, ok := upstreamResp["device_code"].(string)
+	if !ok || upstreamDeviceCode == "" {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream response missing device_code")
+		h.writeErrorResponse(w, "server_error", "upstream response missing device_code")
+		return
+	}
+
+	upstreamUserCode, ok := upstreamResp["user_code"].(string)
+	if !ok || upstreamUserCode == "" {
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream response missing user_code")
+		h.writeErrorResponse(w, "server_error", "upstream response missing user_code")
+		return
+	}
+
+	h.Logger.Printf("🔄 [PROXY-DEVICE] Received upstream codes - device: %s..., user: %s", upstreamDeviceCode[:10], upstreamUserCode)
+
+	// Create proxy device request/response using fosite
+	proxyDeviceRequest, err := h.OAuth2Provider.NewDeviceRequest(r.Context(), r)
+	if err != nil {
+		h.Logger.WithError(err).Error("❌ [PROXY-DEVICE] Failed to create proxy device request")
+		h.writeErrorResponse(w, "server_error", "failed to create proxy device request")
+		return
+	}
+
+	session := &openid.DefaultSession{}
+	proxyDeviceResponse, err := h.OAuth2Provider.NewDeviceResponse(r.Context(), proxyDeviceRequest, session)
+	if err != nil {
+		h.Logger.WithError(err).Error("❌ [PROXY-DEVICE] Failed to create proxy device response")
+		h.writeErrorResponse(w, "server_error", "failed to create proxy device response")
+		return
+	}
+
+	proxyDeviceCode := proxyDeviceResponse.GetDeviceCode()
+
+	h.Logger.Printf("✅ [PROXY-DEVICE] Created proxy device code: %s...", proxyDeviceCode[:10])
+
+	// Store mapping from proxy device code to upstream device code
+	(*h.DeviceCodeToUpstreamMap)[proxyDeviceCode] = upstreamDeviceCode
+
+	// Create session data for device flow - use upstream user code as session ID
+	sessionID := upstreamUserCode
+	(*h.UpstreamSessionMap)[sessionID] = UpstreamSessionData{
+		UpstreamDeviceCode: upstreamDeviceCode,
+		UpstreamUserCode:   upstreamUserCode,
+		ProxyDeviceCode:    proxyDeviceCode,
+		ProxyUserCode:      upstreamUserCode, // Use upstream user code directly
+	}
+
+	h.Logger.Printf("✅ [PROXY-DEVICE] Stored mappings for session: %s", sessionID)
+
+	// Modify response to use proxy device code but upstream user code
+	upstreamResp["device_code"] = proxyDeviceCode
+	upstreamResp["user_code"] = upstreamUserCode // Return upstream user code directly
+	upstreamResp["verification_uri"] = h.Config.GetEffectiveBaseURL(r) + "/device"
+	upstreamResp["verification_uri_complete"] = h.Config.GetEffectiveBaseURL(r) + "/device?user_code=" + upstreamUserCode
+
+	// Return modified response
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
-	json.NewEncoder(w).Encode(map[string]string{
-		"error":             errorCode,
-		"error_description": errorDescription,
-	})
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(upstreamResp)
+
+	h.Logger.Printf("✅ [PROXY-DEVICE] Proxy device authorization completed")
 }
 
 // ShowVerificationPage displays the page where users enter the user code
@@ -128,7 +298,32 @@ func (h *DeviceCodeHandler) ShowVerificationPage(w http.ResponseWriter, r *http.
 	userCode := r.URL.Query().Get("user_code")
 	errorMsg := r.URL.Query().Get("error")
 
-	// Show unified authorization template for device flow
+	// Check if proxy mode is enabled and this user code is from upstream
+	if h.Config.IsProxyMode() && userCode != "" && h.UpstreamSessionMap != nil {
+		if sessionData, exists := (*h.UpstreamSessionMap)[userCode]; exists {
+			h.Logger.Printf("🔄 [PROXY-DEVICE] User code %s is from upstream, redirecting to upstream verification", userCode)
+
+			// For device flow, redirect to upstream verification page with upstream user code
+			// The upstream verification URI is typically the issuer URL + "/device"
+			upstreamIssuer := ""
+			if h.Config.UpstreamProvider.Metadata != nil {
+				if issuer, ok := h.Config.UpstreamProvider.Metadata["issuer"].(string); ok {
+					upstreamIssuer = issuer
+				}
+			}
+
+			if upstreamIssuer != "" {
+				// Construct upstream verification URL with the upstream user code
+				upstreamURL := fmt.Sprintf("%s/device?user_code=%s", upstreamIssuer, sessionData.UpstreamUserCode)
+				h.Logger.Printf("🔄 [PROXY-DEVICE] Redirecting to upstream verification: %s", upstreamURL)
+				http.Redirect(w, r, upstreamURL, http.StatusFound)
+				return
+			}
+			h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream issuer not available for verification redirect")
+		}
+	}
+
+	// Show unified authorization template for device flow (local mode)
 	h.showDeviceAuthorizationTemplate(w, r, userCode, errorMsg, false)
 }
 
@@ -445,6 +640,16 @@ func (h *DeviceCodeHandler) findDeviceAuthorization(userCode string) (fosite.Dev
 
 	h.Logger.Infof("✅ Found device authorization for user code '%s' with device code '%s'", userCode, deviceCode)
 	return deviceReq, deviceCode, nil
+}
+
+// writeErrorResponse writes a JSON error response for device authorization
+func (h *DeviceCodeHandler) writeErrorResponse(w http.ResponseWriter, errorType, description string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"error":             errorType,
+		"error_description": description,
+	})
 }
 
 // DeviceAuthTemplateData represents the data structure for the unified authorization template (device flow)

@@ -6,6 +6,7 @@ TEST_DATABASE_TYPE ?= memory
 TEST_USERNAME ?= john.doe
 TEST_PASSWORD ?= password123
 TEST_SCOPE ?= openid profile email offline_access
+API_KEY ?= super-secure-random-api-key-change-in-production-32-chars-minimum
 LOG_LEVEL ?= info
 LOG_FORMAT ?= text
 
@@ -288,7 +289,7 @@ test-script: build
 	fi
 	@$(MAKE) check-port
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 5
 	@echo "🔍 Testing server health..."
@@ -309,7 +310,7 @@ test-script: build
 	done
 	@echo "🔧 Setting up test certificates..."
 	@if [ -f "init-certs.sh" ]; then \
-		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" OAUTH_URL="$(OAUTH2_SERVER_URL)" bash init-certs.sh; \
+		API_KEY="$(API_KEY)" OAUTH_URL="$(OAUTH2_SERVER_URL)" bash init-certs.sh; \
 	else \
 		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
 	fi
@@ -348,7 +349,7 @@ test-script-verbose:
 	fi
 	@$(MAKE) check-port
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
 	@echo "⏳ Waiting for server to start..."
 	@sleep 5
 	@echo "🔍 Testing server health..."
@@ -369,7 +370,7 @@ test-script-verbose:
 	done
 	@echo "🔧 Setting up test certificates..."
 	@if [ -f "init-certs.sh" ]; then \
-		API_KEY="super-secure-random-api-key-change-in-production-32-chars-minimum" OAUTH_URL="$(OAUTH2_SERVER_URL)" bash init-certs.sh ; \
+		API_KEY="$(API_KEY)" OAUTH_URL="$(OAUTH2_SERVER_URL)" bash init-certs.sh ; \
 	else \
 		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
 	fi

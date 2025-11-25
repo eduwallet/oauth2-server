@@ -9,6 +9,7 @@ set -e
 SERVER_URL="http://localhost:8080"
 TEST_CLIENT_ID="test-attestation-client"
 TEST_SCOPE="openid profile"
+API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 echo "🧪 Attestation Authentication Test"
 echo "=================================="
@@ -66,7 +67,7 @@ echo "🧪 Step 1: Registering attestation-enabled client"
 
 REGISTRATION_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: super-secure-random-api-key-change-in-production-32-chars-minimum" \
+  -H "X-API-Key: $API_KEY" \
   -d "{
     \"client_name\": \"Test Attestation Client\",
     \"client_id\": \"$TEST_CLIENT_ID\",

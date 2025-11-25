@@ -1022,25 +1022,41 @@ type Storage interface {
 	GetTrustAnchor(ctx context.Context, name string) ([]byte, error)
 	ListTrustAnchors(ctx context.Context) ([]string, error)
 	DeleteTrustAnchor(ctx context.Context, name string) error
+
+	// Upstream token mapping methods for proxy mode
+	StoreUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string, upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64) error
+	GetUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) (upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64, err error)
+	DeleteUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) error
 }
 
 // MemoryStoreWrapper wraps fosite's MemoryStore to implement our Storage interface
 type MemoryStoreWrapper struct {
 	*storage.MemoryStore
-	clientSecrets      map[string]string
-	attestationConfigs map[string]*config.ClientAttestationConfig
-	trustAnchors       map[string][]byte
-	logger             *logrus.Logger
+	clientSecrets         map[string]string
+	attestationConfigs    map[string]*config.ClientAttestationConfig
+	trustAnchors          map[string][]byte
+	upstreamTokenMappings map[string]*UpstreamTokenMapping
+	logger                *logrus.Logger
+}
+
+// UpstreamTokenMapping stores upstream token information for proxy tokens
+type UpstreamTokenMapping struct {
+	UpstreamAccessToken  string
+	UpstreamRefreshToken string
+	UpstreamTokenType    string
+	UpstreamExpiresIn    int64
+	CreatedAt            time.Time
 }
 
 // NewMemoryStoreWrapper creates a new MemoryStoreWrapper with initialized maps
 func NewMemoryStoreWrapper(memoryStore *storage.MemoryStore, logger *logrus.Logger) *MemoryStoreWrapper {
 	return &MemoryStoreWrapper{
-		MemoryStore:        memoryStore,
-		clientSecrets:      make(map[string]string),
-		attestationConfigs: make(map[string]*config.ClientAttestationConfig),
-		trustAnchors:       make(map[string][]byte),
-		logger:             logger,
+		MemoryStore:           memoryStore,
+		clientSecrets:         make(map[string]string),
+		attestationConfigs:    make(map[string]*config.ClientAttestationConfig),
+		trustAnchors:          make(map[string][]byte),
+		upstreamTokenMappings: make(map[string]*UpstreamTokenMapping),
+		logger:                logger,
 	}
 }
 
@@ -1224,6 +1240,37 @@ func (m *MemoryStoreWrapper) DeleteTrustAnchor(ctx context.Context, name string)
 	return nil
 }
 
+// Upstream token mapping methods for proxy mode
+func (m *MemoryStoreWrapper) StoreUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string, upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64) error {
+	m.upstreamTokenMappings[proxyTokenSignature] = &UpstreamTokenMapping{
+		UpstreamAccessToken:  upstreamAccessToken,
+		UpstreamRefreshToken: upstreamRefreshToken,
+		UpstreamTokenType:    upstreamTokenType,
+		UpstreamExpiresIn:    upstreamExpiresIn,
+		CreatedAt:            time.Now(),
+	}
+	m.logger.Warnf("⚠️  [MEMORY STORE] Upstream token mapping stored in memory for proxy token %s - this will be lost on restart", proxyTokenSignature)
+	return nil
+}
+
+func (m *MemoryStoreWrapper) GetUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) (upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64, err error) {
+	mapping, exists := m.upstreamTokenMappings[proxyTokenSignature]
+	if !exists {
+		return "", "", "", 0, fmt.Errorf("upstream token mapping not found")
+	}
+	m.logger.Warnf("⚠️  [MEMORY STORE] Retrieved upstream token mapping from memory for proxy token %s - this data is not persistent", proxyTokenSignature)
+	return mapping.UpstreamAccessToken, mapping.UpstreamRefreshToken, mapping.UpstreamTokenType, mapping.UpstreamExpiresIn, nil
+}
+
+func (m *MemoryStoreWrapper) DeleteUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) error {
+	if _, exists := m.upstreamTokenMappings[proxyTokenSignature]; !exists {
+		return fmt.Errorf("upstream token mapping not found")
+	}
+	delete(m.upstreamTokenMappings, proxyTokenSignature)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Upstream token mapping deleted from memory for proxy token %s - this data is not persistent", proxyTokenSignature)
+	return nil
+}
+
 // SQLiteStore implements Fosite storage interfaces using SQLite
 type SQLiteStore struct {
 	db     *sql.DB
@@ -1316,6 +1363,17 @@ func (s *SQLiteStore) initTables() error {
 		`CREATE TABLE IF NOT EXISTS trust_anchors (
 			name TEXT PRIMARY KEY,
 			certificate_data TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// Upstream token mappings table for proxy mode
+		`CREATE TABLE IF NOT EXISTS upstream_token_mappings (
+			proxy_token_signature TEXT PRIMARY KEY,
+			upstream_access_token TEXT NOT NULL,
+			upstream_refresh_token TEXT,
+			upstream_token_type TEXT NOT NULL DEFAULT 'bearer',
+			upstream_expires_in INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -1916,6 +1974,56 @@ func (s *SQLiteStore) DeleteTrustAnchor(ctx context.Context, name string) error 
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("trust anchor not found")
+	}
+	return nil
+}
+
+// Upstream token mapping methods for proxy mode
+func (s *SQLiteStore) StoreUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string, upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO upstream_token_mappings 
+		 (proxy_token_signature, upstream_access_token, upstream_refresh_token, upstream_token_type, upstream_expires_in, updated_at) 
+		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) (upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64, err error) {
+	var accessToken, refreshToken, tokenType string
+	var expiresIn sql.NullInt64
+
+	err = s.db.QueryRow(
+		"SELECT upstream_access_token, upstream_refresh_token, upstream_token_type, upstream_expires_in FROM upstream_token_mappings WHERE proxy_token_signature = ?",
+		proxyTokenSignature,
+	).Scan(&accessToken, &refreshToken, &tokenType, &expiresIn)
+
+	if err == sql.ErrNoRows {
+		return "", "", "", 0, fmt.Errorf("upstream token mapping not found")
+	}
+	if err != nil {
+		return "", "", "", 0, err
+	}
+
+	expiresInValue := int64(0)
+	if expiresIn.Valid {
+		expiresInValue = expiresIn.Int64
+	}
+
+	return accessToken, refreshToken, tokenType, expiresInValue, nil
+}
+
+func (s *SQLiteStore) DeleteUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) error {
+	result, err := s.db.Exec("DELETE FROM upstream_token_mappings WHERE proxy_token_signature = ?", proxyTokenSignature)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("upstream token mapping not found")
 	}
 	return nil
 }

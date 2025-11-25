@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"oauth2-server/internal/attestation"
@@ -133,6 +134,106 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	token := r.FormValue("token")
 	tokenTypeHint := r.FormValue("token_type_hint")
 	h.Log.Debugf("🔍 Introspection details: token_present=%t, token_type_hint=%s", token != "", tokenTypeHint)
+
+	// Check if this is a proxy token and handle upstream introspection
+	if token != "" {
+		h.Log.Debugf("🔍 Checking if token is a proxy token")
+		upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(r.Context(), token)
+		if err != nil {
+			h.Log.Debugf("🔍 Token is not a proxy token (lookup failed: %v)", err)
+		} else {
+			h.Log.Infof("🔄 [PROXY-INTROSPECT] Token is a proxy token, performing upstream introspection")
+
+			// Get upstream provider configuration
+			if h.Config.UpstreamProvider.Metadata == nil {
+				h.Log.Errorf("❌ [PROXY-INTROSPECT] Upstream provider metadata not configured")
+				http.Error(w, "upstream provider not configured", http.StatusBadGateway)
+				return
+			}
+
+			introspectEndpoint, _ := h.Config.UpstreamProvider.Metadata["introspection_endpoint"].(string)
+			if introspectEndpoint == "" {
+				h.Log.Errorf("❌ [PROXY-INTROSPECT] Upstream introspection_endpoint not available in metadata")
+				http.Error(w, "upstream introspection_endpoint not available", http.StatusBadGateway)
+				return
+			}
+
+			h.Log.Debugf("🔗 [PROXY-INTROSPECT] Upstream introspection endpoint: %s", introspectEndpoint)
+
+			// Create upstream introspection request
+			upstreamForm := make(url.Values)
+			upstreamForm.Set("token", upstreamAccessToken)
+			if tokenTypeHint != "" {
+				upstreamForm.Set("token_type_hint", tokenTypeHint)
+			}
+
+			upstreamReq, err := http.NewRequest("POST", introspectEndpoint, strings.NewReader(upstreamForm.Encode()))
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-INTROSPECT] Failed to create upstream introspection request: %v", err)
+				http.Error(w, "failed to create upstream introspection request", http.StatusInternalServerError)
+				return
+			}
+
+			upstreamReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if h.Config.UpstreamProvider.ClientID != "" && h.Config.UpstreamProvider.ClientSecret != "" {
+				upstreamReq.SetBasicAuth(h.Config.UpstreamProvider.ClientID, h.Config.UpstreamProvider.ClientSecret)
+				h.Log.Debugf("🔐 [PROXY-INTROSPECT] Added basic auth for upstream client: %s", h.Config.UpstreamProvider.ClientID)
+			}
+
+			h.Log.Infof("🚀 [PROXY-INTROSPECT] Sending introspection request to upstream endpoint")
+			client := &http.Client{Timeout: 30 * time.Second}
+			resp, err := client.Do(upstreamReq)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-INTROSPECT] Upstream introspection request failed: %v", err)
+				http.Error(w, "upstream introspection request failed", http.StatusBadGateway)
+				return
+			}
+			defer resp.Body.Close()
+
+			h.Log.Infof("📥 [PROXY-INTROSPECT] Upstream introspection response status: %d", resp.StatusCode)
+
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-INTROSPECT] Failed to read upstream introspection response: %v", err)
+				http.Error(w, "failed to read upstream response", http.StatusInternalServerError)
+				return
+			}
+
+			h.Log.Debugf("📄 [PROXY-INTROSPECT] Upstream introspection response body: %s", string(respBody))
+
+			// Parse upstream response
+			var upstreamResponse map[string]interface{}
+			if err := json.Unmarshal(respBody, &upstreamResponse); err != nil {
+				h.Log.Errorf("❌ [PROXY-INTROSPECT] Failed to parse upstream introspection response as JSON: %v", err)
+				http.Error(w, "failed to parse upstream response", http.StatusInternalServerError)
+				return
+			}
+
+			// Check if upstream token is active
+			if active, ok := upstreamResponse["active"].(bool); ok && active {
+				h.Log.Debugf("✅ [PROXY-INTROSPECT] Upstream token is active")
+
+				// Add proxy server information to the response
+				upstreamResponse["issued_by_proxy"] = true
+				upstreamResponse["proxy_server"] = "oauth2-server"
+
+				// Add proxy token information
+				upstreamResponse["proxy_token"] = token
+
+				h.Log.Debugf("✅ [PROXY-INTROSPECT] Enhanced upstream response with proxy information")
+			} else {
+				h.Log.Debugf("⚠️ [PROXY-INTROSPECT] Upstream token is not active")
+			}
+
+			// Return upstream introspection response directly
+			w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+			w.WriteHeader(resp.StatusCode)
+			json.NewEncoder(w).Encode(upstreamResponse)
+
+			h.Log.Infof("✅ [PROXY-INTROSPECT] Proxy introspection response completed successfully")
+			return
+		}
+	}
 
 	// Handle JWT client assertion authentication AFTER attestation check
 	var jwtAuthenticatedClientID string

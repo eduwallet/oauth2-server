@@ -407,11 +407,25 @@ func (s *CustomStorage) GetClient(ctx context.Context, id string) (fosite.Client
 		} else if isProxyToken && defaultClient.Public {
 			s.logger.Debugf("🔄 CustomStorage.GetClient: keeping client %s confidential for proxy token (was public)", id)
 			// For proxy token requests, keep the client as confidential even if it was public
+			// Also add client_credentials grant type if not present, since proxy tokens are created using client_credentials flow
+			grantTypes := make([]string, len(defaultClient.GrantTypes))
+			copy(grantTypes, defaultClient.GrantTypes)
+			hasClientCredentials := false
+			for _, gt := range grantTypes {
+				if gt == "client_credentials" {
+					hasClientCredentials = true
+					break
+				}
+			}
+			if !hasClientCredentials {
+				grantTypes = append(grantTypes, "client_credentials")
+				s.logger.Debugf("🔄 CustomStorage.GetClient: added client_credentials grant type for proxy token creation")
+			}
 			confidentialClient := &fosite.DefaultClient{
 				ID:            defaultClient.ID,
 				Secret:        defaultClient.Secret,
 				RedirectURIs:  defaultClient.RedirectURIs,
-				GrantTypes:    defaultClient.GrantTypes,
+				GrantTypes:    grantTypes,
 				ResponseTypes: defaultClient.ResponseTypes,
 				Scopes:        defaultClient.Scopes,
 				Audience:      defaultClient.Audience,
@@ -524,4 +538,35 @@ func (s *CustomStorage) DeleteTrustAnchor(ctx context.Context, name string) erro
 		return store.DeleteTrustAnchor(ctx, name)
 	}
 	return fmt.Errorf("underlying store does not support trust anchor storage")
+}
+
+// Upstream token mapping methods for proxy mode
+func (s *CustomStorage) StoreUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string, upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+	}
+	return fmt.Errorf("underlying store does not support upstream token mapping storage")
+}
+
+func (s *CustomStorage) GetUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) (upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64, err error) {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	return "", "", "", 0, fmt.Errorf("underlying store does not support upstream token mapping storage")
+}
+
+func (s *CustomStorage) DeleteUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	return fmt.Errorf("underlying store does not support upstream token mapping storage")
 }

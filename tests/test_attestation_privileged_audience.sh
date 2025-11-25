@@ -8,6 +8,7 @@
 TEST_USERNAME="${TEST_USERNAME:-john.doe}"
 TEST_PASSWORD="${TEST_PASSWORD:-password123}"
 TEST_SCOPE="${TEST_SCOPE:-openid profile email}"
+API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 echo "🧪 Attestation Privileged Audience Test"
 echo "======================================="
@@ -51,7 +52,7 @@ register_attestation_client() {
 
     local registration_response=$(curl -s -X POST "$BASE_URL/register" \
         -H "Content-Type: application/json" \
-        -H "X-API-Key: super-secure-random-api-key-change-in-production-32-chars-minimum" \
+        -H "X-API-Key: $API_KEY" \
         -d "$registration_data")
 
     echo "Registration response: $registration_response" >&2

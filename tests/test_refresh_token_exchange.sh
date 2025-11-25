@@ -4,6 +4,7 @@
 TEST_USERNAME="${TEST_USERNAME:-john.doe}"
 TEST_PASSWORD="${TEST_PASSWORD:-password123}"
 TEST_SCOPE="${TEST_SCOPE:-openid profile email offline_access}"
+API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 echo "🔄🔄 Refresh Token Exchange Test"
 echo "==============================="
@@ -64,7 +65,7 @@ register_client() {
 
     REGISTRATION_RESPONSE=$(curl -s -X POST "$BASE_URL/register" \
         -H "Content-Type: application/json" \
-        -H "X-API-Key: super-secure-random-api-key-change-in-production-32-chars-minimum" \
+        -H "X-API-Key: $API_KEY" \
         -d "$CLIENT_REGISTRATION_PAYLOAD")
 
     if [ $? -ne 0 ]; then

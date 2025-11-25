@@ -7,6 +7,7 @@
 TEST_USERNAME="${TEST_USERNAME:-john.doe}"
 TEST_PASSWORD="${TEST_PASSWORD:-password123}"
 TEST_SCOPE="${TEST_SCOPE:-openid profile email}"
+API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 echo "🧪 Dynamic Client Registration Test"
 echo "==================================="
@@ -44,7 +45,7 @@ register_confidential_client() {
 
     local registration_response=$(curl -s -X POST "$BASE_URL/register" \
         -H "Content-Type: application/json" \
-        -H "X-API-Key: super-secure-random-api-key-change-in-production-32-chars-minimum" \
+        -H "X-API-Key: $API_KEY" \
         -d "$registration_data")
 
     echo "Registration response: $registration_response" >&2
@@ -94,7 +95,7 @@ register_public_client() {
 
     local registration_response=$(curl -s -X POST "$BASE_URL/register" \
         -H "Content-Type: application/json" \
-        -H "X-API-Key: super-secure-random-api-key-change-in-production-32-chars-minimum" \
+        -H "X-API-Key: $API_KEY" \
         -d "$registration_data")
 
     echo "Registration response: $registration_response" >&2

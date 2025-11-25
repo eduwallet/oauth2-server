@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"oauth2-server/internal/metrics"
+	"oauth2-server/internal/store"
 	"oauth2-server/pkg/config"
 	"strings"
 	"time"
@@ -19,15 +20,17 @@ type UserInfoHandler struct {
 	Configuration  *config.Config
 	Metrics        *metrics.MetricsCollector
 	Log            *logrus.Logger
+	Storage        store.Storage
 }
 
 // NewUserInfoHandler creates a new userinfo handler
-func NewUserInfoHandler(config *config.Config, oauth2Provider fosite.OAuth2Provider, metrics *metrics.MetricsCollector, log *logrus.Logger) *UserInfoHandler {
+func NewUserInfoHandler(config *config.Config, oauth2Provider fosite.OAuth2Provider, metrics *metrics.MetricsCollector, log *logrus.Logger, storage store.Storage) *UserInfoHandler {
 	return &UserInfoHandler{
 		Configuration:  config,
 		OAuth2Provider: oauth2Provider,
 		Metrics:        metrics,
 		Log:            log,
+		Storage:        storage,
 	}
 }
 
@@ -196,39 +199,59 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 	proxyToken := parts[1]
 	h.Log.Printf("🔑 [PROXY] Received proxy token: %s...", proxyToken[:20]+"...")
 
-	// Use fosite's introspection to validate the proxy token and get session data
-	ctx := r.Context()
-	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
-	if err != nil {
-		h.Log.Errorf("❌ [PROXY] Proxy token introspection failed: %v", err)
-		http.Error(w, "invalid proxy token", http.StatusUnauthorized)
-		return
-	}
-
-	session := requester.GetSession()
-	if session == nil {
-		h.Log.Errorf("❌ [PROXY] No session found in proxy token")
-		http.Error(w, "invalid proxy token session", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract upstream token and metadata from session claims
+	// Check if this is a proxy token by looking up upstream token mapping
 	var upstreamToken string
 	var issuerState string
-	if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Claims != nil && defaultSession.Claims.Extra != nil {
-		if token, ok := defaultSession.Claims.Extra["upstream_token"].(string); ok {
-			upstreamToken = token
-			h.Log.Printf("✅ [PROXY] Found upstream token in session claims: %s...", upstreamToken[:20])
-		}
-		if state, ok := defaultSession.Claims.Extra["issuer_state"].(string); ok {
-			issuerState = state
-			h.Log.Printf("✅ [PROXY] Found issuer state in session claims: %s", issuerState)
+
+	// First, try to get upstream token mapping from persistent storage
+	upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(r.Context(), proxyToken)
+	if err == nil && upstreamAccessToken != "" {
+		h.Log.Printf("✅ [PROXY] Found upstream token in persistent storage: %s...", upstreamAccessToken[:20])
+		upstreamToken = upstreamAccessToken
+	} else {
+		h.Log.Printf("⚠️ [PROXY] No upstream token mapping found in storage (%v), trying session claims", err)
+
+		// Fallback: Use fosite's introspection to validate the proxy token and get session data
+		ctx := r.Context()
+		_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
+		if err != nil {
+			h.Log.Printf("⚠️ [PROXY] Token introspection failed (%v), assuming direct upstream token (device flow)", err)
+			// For device flow, the token itself is the upstream token
+			upstreamToken = proxyToken
+		} else {
+			h.Log.Printf("✅ [PROXY] Token introspection successful")
+
+			session := requester.GetSession()
+			if session == nil {
+				h.Log.Errorf("❌ [PROXY] No session found in proxy token")
+				http.Error(w, "invalid proxy token session", http.StatusUnauthorized)
+				return
+			}
+
+			// Extract upstream token and metadata from session claims
+			if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Claims != nil && defaultSession.Claims.Extra != nil {
+				if token, ok := defaultSession.Claims.Extra["upstream_token"].(string); ok {
+					upstreamToken = token
+					h.Log.Printf("✅ [PROXY] Found upstream token in session claims: %s...", upstreamToken[:20])
+				}
+				if state, ok := defaultSession.Claims.Extra["issuer_state"].(string); ok {
+					issuerState = state
+					h.Log.Printf("✅ [PROXY] Found issuer state in session claims: %s", issuerState)
+				}
+			}
+
+			// For device flow proxy tokens, the access token itself is the upstream token
+			// (device flow returns upstream tokens directly without creating proxy tokens)
+			if upstreamToken == "" {
+				h.Log.Printf("ℹ️ [PROXY] No upstream token in session claims, using proxy token directly (likely device flow)")
+				upstreamToken = proxyToken
+			}
 		}
 	}
 
 	if upstreamToken == "" {
-		h.Log.Errorf("❌ [PROXY] No upstream token found in proxy session")
-		http.Error(w, "invalid proxy token", http.StatusUnauthorized)
+		h.Log.Errorf("❌ [PROXY] No upstream token available")
+		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
 

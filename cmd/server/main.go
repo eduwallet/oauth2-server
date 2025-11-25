@@ -94,7 +94,8 @@ var (
 )
 
 // Maps for persisting original authorization state through the OAuth2 flow in proxy mode
-var authCodeToStateMap = make(map[string]string) // authorization_code -> original_state
+var authCodeToStateMap = make(map[string]string)      // authorization_code -> original_state
+var deviceCodeToUpstreamMap = make(map[string]string) // proxy_device_code -> upstream_device_code
 var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData)
 
 // Map to store plain text secrets for privileged clients
@@ -554,6 +555,7 @@ func initializeOAuth2Provider() error {
 		compose.OAuth2PKCEFactory,
 		compose.OAuth2ResourceOwnerPasswordCredentialsFactory,
 		compose.RFC8628DeviceFactory,
+		compose.RFC8628DeviceAuthorizationTokenFactory,
 		compose.RFC8693TokenExchangeFactory,
 	)
 	log.Printf("✅ OAuth2 provider created")
@@ -573,11 +575,11 @@ func initializeHandlers() {
 
 	// Initialize OAuth2 flow handlers
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap, &deviceCodeToUpstreamMap)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager, privilegedClientSecrets)
 	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
-	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector, log)
+	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector, log, dataStore)
 
 	// Initialize discovery and utility handlers
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
@@ -588,7 +590,7 @@ func initializeHandlers() {
 	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler)
 
 	// Initialize device flow handler
-	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, dataStore, templates, configuration, log)
+	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, dataStore, templates, configuration, log, &deviceCodeToUpstreamMap, &UpstreamSessionMap)
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }

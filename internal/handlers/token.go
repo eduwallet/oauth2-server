@@ -28,14 +28,15 @@ const proxyTokenContextKey = "proxy_token"
 
 // TokenHandler manages OAuth2 token requests using pure fosite implementation
 type TokenHandler struct {
-	OAuth2Provider     fosite.OAuth2Provider
-	Configuration      *config.Config
-	Log                *logrus.Logger
-	Metrics            *metrics.MetricsCollector
-	AttestationManager *attestation.VerifierManager
-	Storage            store.Storage
-	SecretManager      *store.SecretManager
-	AuthCodeToStateMap *map[string]string
+	OAuth2Provider          fosite.OAuth2Provider
+	Configuration           *config.Config
+	Log                     *logrus.Logger
+	Metrics                 *metrics.MetricsCollector
+	AttestationManager      *attestation.VerifierManager
+	Storage                 store.Storage
+	SecretManager           *store.SecretManager
+	AuthCodeToStateMap      *map[string]string
+	DeviceCodeToUpstreamMap *map[string]string
 }
 
 // NewTokenHandler creates a new TokenHandler
@@ -48,16 +49,18 @@ func NewTokenHandler(
 	storage store.Storage,
 	secretManager *store.SecretManager,
 	authCodeToStateMap *map[string]string,
+	deviceCodeToUpstreamMap *map[string]string,
 ) *TokenHandler {
 	return &TokenHandler{
-		OAuth2Provider:     provider,
-		Configuration:      config,
-		Log:                logger,
-		Metrics:            metricsCollector,
-		AttestationManager: attestationManager,
-		Storage:            storage,
-		SecretManager:      secretManager,
-		AuthCodeToStateMap: authCodeToStateMap,
+		OAuth2Provider:          provider,
+		Configuration:           config,
+		Log:                     logger,
+		Metrics:                 metricsCollector,
+		AttestationManager:      attestationManager,
+		Storage:                 storage,
+		SecretManager:           secretManager,
+		AuthCodeToStateMap:      authCodeToStateMap,
+		DeviceCodeToUpstreamMap: deviceCodeToUpstreamMap,
 	}
 }
 
@@ -88,17 +91,8 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 
 	grantType := r.FormValue("grant_type")
 
-	// WORKAROUND: Fosite incorrectly validates redirect_uri for device_code grant type
-	// Add redirect_uri to the request for device_code grant type to work around the bug
-	if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
-		if r.FormValue("redirect_uri") == "" {
-			r.Form.Set("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
-			h.Log.Debugf("🔄 WORKAROUND: Added redirect_uri for device_code grant type")
-		}
-	}
-
 	// Check if proxy mode is enabled and if we should proxy this request
-	if h.Configuration.IsProxyMode() && grantType == "authorization_code" {
+	if h.Configuration.IsProxyMode() && (grantType == "authorization_code" || grantType == "urn:ietf:params:oauth:grant-type:device_code") {
 		h.handleProxyToken(w, r)
 		return
 	}
@@ -528,6 +522,236 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 	r.Form.Del("client_assertion")
 	r.Form.Del("client_assertion_type")
 
+	// For device_code grant type, map proxy device code to upstream device code
+	grantType := r.Form.Get("grant_type")
+	if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
+		h.Log.Infof("🔄 [PROXY-DEVICE] Handling device_code grant type token request")
+
+		proxyDeviceCode := r.Form.Get("device_code")
+		h.Log.Debugf("🔍 [PROXY-DEVICE] Received proxy device code: %s", proxyDeviceCode)
+
+		if proxyDeviceCode != "" && h.DeviceCodeToUpstreamMap != nil {
+			if upstreamDeviceCode, exists := (*h.DeviceCodeToUpstreamMap)[proxyDeviceCode]; exists {
+				r.Form.Set("device_code", upstreamDeviceCode)
+				h.Log.Infof("🔄 [PROXY-DEVICE] Successfully mapped proxy device code '%s' to upstream device code '%s'", proxyDeviceCode, upstreamDeviceCode)
+			} else {
+				h.Log.Errorf("❌ [PROXY-DEVICE] No upstream mapping found for proxy device code: %s", proxyDeviceCode)
+				h.Log.Debugf("🔍 [PROXY-DEVICE] Available mappings: %+v", *h.DeviceCodeToUpstreamMap)
+				http.Error(w, "invalid device code", http.StatusBadRequest)
+				return
+			}
+		}
+
+		// For device_code grant type, get upstream response and create proxy token
+		h.Log.Infof("🔄 [PROXY-DEVICE] Device code grant type - getting upstream response and creating proxy token")
+
+		formData := r.Form.Encode()
+		h.Log.Debugf("📤 [PROXY-DEVICE] Form data to upstream: %s", formData)
+
+		req, err := http.NewRequest("POST", tokenEndpoint, strings.NewReader(formData))
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-DEVICE] Failed to create upstream token request: %v", err)
+			http.Error(w, "failed to create upstream token request", http.StatusInternalServerError)
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if h.Configuration.UpstreamProvider.ClientID != "" && h.Configuration.UpstreamProvider.ClientSecret != "" {
+			req.SetBasicAuth(h.Configuration.UpstreamProvider.ClientID, h.Configuration.UpstreamProvider.ClientSecret)
+			h.Log.Debugf("🔐 [PROXY-DEVICE] Added basic auth for upstream client: %s", h.Configuration.UpstreamProvider.ClientID)
+		}
+
+		h.Log.Infof("🚀 [PROXY-DEVICE] Sending device code token request to upstream token endpoint")
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-DEVICE] Upstream device code token request failed: %v", err)
+			http.Error(w, "upstream token request failed", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		h.Log.Infof("📥 [PROXY-DEVICE] Upstream device code response status: %d", resp.StatusCode)
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-DEVICE] Failed to read upstream device code response: %v", err)
+			http.Error(w, "failed to read upstream response", http.StatusInternalServerError)
+			return
+		}
+
+		h.Log.Debugf("📄 [PROXY-DEVICE] Upstream device code response body: %s", string(respBody))
+
+		// Parse and process token details if successful
+		if resp.StatusCode == http.StatusOK {
+			var tokenResp map[string]interface{}
+			if err := json.Unmarshal(respBody, &tokenResp); err == nil {
+				if upstreamAccessToken, ok := tokenResp["access_token"].(string); ok && upstreamAccessToken != "" {
+					h.Log.Infof("✅ [PROXY-DEVICE] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
+
+					// Extract upstream token details
+					upstreamRefreshToken := ""
+					if refreshToken, ok := tokenResp["refresh_token"].(string); ok {
+						upstreamRefreshToken = refreshToken
+					}
+					upstreamTokenType := "bearer"
+					if tokenType, ok := tokenResp["token_type"].(string); ok {
+						upstreamTokenType = strings.ToLower(tokenType)
+					}
+					upstreamExpiresIn := int64(3600) // default 1 hour
+					if expiresIn, ok := tokenResp["expires_in"].(float64); ok {
+						upstreamExpiresIn = int64(expiresIn)
+					}
+
+					h.Log.Debugf("🔍 [PROXY-DEVICE] Token type: %v, Expires in: %v", upstreamTokenType, upstreamExpiresIn)
+
+					// Create proxy token using Fosite
+					h.Log.Debugf("🔄 [PROXY-DEVICE] Creating proxy token for device code flow")
+
+					// Create a proxy session
+					proxySession := &openid.DefaultSession{}
+					proxySession.Subject = clientID // Use downstream client ID as subject
+					proxySession.Username = clientID
+
+					// Initialize claims if nil
+					if proxySession.Claims == nil {
+						proxySession.Claims = &jwt.IDTokenClaims{}
+					}
+					if proxySession.Claims.Extra == nil {
+						proxySession.Claims.Extra = make(map[string]interface{})
+					}
+
+					// Store attestation information in proxy session claims if attestation was performed
+					h.storeAttestationInSession(r.Context(), proxySession)
+
+					// Store issuer_state in proxy session claims if available
+					h.storeIssuerStateInSession(r, proxySession)
+
+					// Get the downstream client for proxy token creation
+					downstreamClient, err := h.Storage.GetClient(r.Context(), clientID)
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-DEVICE] Failed to get downstream client: %v", err)
+						http.Error(w, "failed to get client", http.StatusInternalServerError)
+						return
+					}
+
+					h.Log.Debugf("🔍 [PROXY-DEVICE] Downstream client found: %t, Public: %t, GrantTypes: %v", downstreamClient != nil, downstreamClient.IsPublic(), downstreamClient.GetGrantTypes())
+
+					// Create proxy token request
+					proxyForm := make(url.Values)
+					proxyForm.Set("grant_type", "client_credentials")
+					proxyForm.Set("client_id", clientID)
+					proxyForm.Set("scope", "openid")
+
+					proxyReq, err := http.NewRequest("POST", "/token", strings.NewReader(proxyForm.Encode()))
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-DEVICE] Failed to create proxy request: %v", err)
+						http.Error(w, "failed to create proxy request", http.StatusInternalServerError)
+						return
+					}
+					proxyReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+					proxyReq = proxyReq.WithContext(r.Context())
+
+					// Set proxy context and client
+					proxyCtx := context.WithValue(proxyReq.Context(), clientContextKey, downstreamClient)
+					proxyCtx = context.WithValue(proxyCtx, proxyTokenContextKey, true)
+					proxyReq = proxyReq.WithContext(proxyCtx)
+
+					h.Log.Debugf("🔄 [PROXY-DEVICE] Creating proxy access request with client_credentials grant")
+
+					// Create proxy access request using Fosite
+					proxyAccessRequest, err := h.OAuth2Provider.NewAccessRequest(proxyReq.Context(), proxyReq, proxySession)
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-DEVICE] Failed to create proxy access request: %v", err)
+						h.Log.Errorf("❌ [PROXY-DEVICE] Error type: %T", err)
+						h.Log.Errorf("❌ [PROXY-DEVICE] Error details: %+v", err)
+						if fositeErr, ok := err.(*fosite.RFC6749Error); ok {
+							h.Log.Errorf("❌ [PROXY-DEVICE] Fosite error name: %s", fositeErr.ErrorField)
+							h.Log.Errorf("❌ [PROXY-DEVICE] Fosite error description: %s", fositeErr.DescriptionField)
+							h.Log.Errorf("❌ [PROXY-DEVICE] Fosite error hint: %s", fositeErr.HintField)
+						}
+						http.Error(w, "failed to create proxy access request", http.StatusInternalServerError)
+						return
+					}
+
+					// Issue proxy access response using Fosite
+					proxyAccessResponse, err := h.OAuth2Provider.NewAccessResponse(proxyReq.Context(), proxyAccessRequest)
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-DEVICE] Failed to create proxy access response: %v", err)
+						http.Error(w, "failed to create proxy token", http.StatusInternalServerError)
+						return
+					}
+
+					// Extract the Fosite-generated proxy token
+					proxyToken := proxyAccessResponse.GetAccessToken()
+					if proxyToken == "" {
+						h.Log.Errorf("❌ [PROXY-DEVICE] Failed to extract proxy access token from Fosite response")
+						http.Error(w, "failed to extract proxy token", http.StatusInternalServerError)
+						return
+					}
+
+					h.Log.Debugf("🔄 [PROXY-DEVICE] Fosite generated proxy token: %s... -> upstream: %s...", proxyToken[:20], upstreamAccessToken[:20])
+
+					// Store upstream token mapping persistently
+					err = h.Storage.StoreUpstreamTokenMapping(r.Context(), proxyToken, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-DEVICE] Failed to store upstream token mapping: %v", err)
+						http.Error(w, "failed to store token mapping", http.StatusInternalServerError)
+						return
+					}
+
+					h.Log.Debugf("✅ [PROXY-DEVICE] Stored upstream token mapping for proxy token")
+
+					// Replace upstream token with proxy token in response
+					tokenResp["access_token"] = proxyToken
+					tokenResp["issued_by_proxy"] = true
+					tokenResp["proxy_server"] = "oauth2-server"
+
+					// Re-encode the modified token response
+					modifiedRespBody, err := json.Marshal(tokenResp)
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-DEVICE] Failed to encode modified token response: %v", err)
+						http.Error(w, "failed to encode proxy token response", http.StatusInternalServerError)
+						return
+					}
+
+					h.Log.Debugf("✅ [PROXY-DEVICE] Successfully issued Fosite-controlled proxy access token")
+
+					// Record metrics for successful proxy token issuance
+					if h.Metrics != nil {
+						h.Metrics.RecordTokenRequest("proxy_token", clientID, "success")
+						h.Metrics.RecordTokenIssued("access_token", "proxy_token")
+						if refreshToken := proxyAccessResponse.GetExtra("refresh_token"); refreshToken != nil {
+							h.Metrics.RecordTokenIssued("refresh_token", "proxy_token")
+						}
+					}
+
+					// Return modified response to client
+					w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+					w.WriteHeader(resp.StatusCode)
+					w.Write(modifiedRespBody)
+
+					h.Log.Infof("✅ [PROXY-DEVICE] Device code proxy token response completed successfully")
+					return
+				} else {
+					h.Log.Warnf("⚠️ [PROXY-DEVICE] Upstream response OK but no access_token found")
+				}
+			} else {
+				h.Log.Errorf("❌ [PROXY-DEVICE] Failed to parse upstream token response as JSON: %v", err)
+			}
+		} else {
+			h.Log.Errorf("❌ [PROXY-DEVICE] Upstream returned error status %d with body: %s", resp.StatusCode, string(respBody))
+		}
+
+		// For error responses, return upstream response directly
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+
+		h.Log.Infof("✅ [PROXY-DEVICE] Device code token response forwarded successfully")
+		return
+	}
+
 	// Replace client_id/redirect_uri for upstream
 	originalClientID := r.Form.Get("client_id")
 	r.Form.Set("client_id", h.Configuration.UpstreamProvider.ClientID)
@@ -588,7 +812,21 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 		if upstreamAccessToken, ok := tokenResponse["access_token"].(string); ok && upstreamAccessToken != "" {
 			h.Log.Debugf("🔄 [PROXY] Received upstream access token, issuing proxy token")
 
-			// Create a proxy session with the upstream token stored in claims
+			// Extract upstream token details
+			upstreamRefreshToken := ""
+			if refreshToken, ok := tokenResponse["refresh_token"].(string); ok {
+				upstreamRefreshToken = refreshToken
+			}
+			upstreamTokenType := "bearer"
+			if tokenType, ok := tokenResponse["token_type"].(string); ok {
+				upstreamTokenType = strings.ToLower(tokenType)
+			}
+			upstreamExpiresIn := int64(3600) // default 1 hour
+			if expiresIn, ok := tokenResponse["expires_in"].(float64); ok {
+				upstreamExpiresIn = int64(expiresIn)
+			}
+
+			// Create a proxy session
 			proxySession := &openid.DefaultSession{}
 			proxySession.Subject = clientID // Use downstream client ID as subject
 			proxySession.Username = clientID
@@ -599,13 +837,6 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 			}
 			if proxySession.Claims.Extra == nil {
 				proxySession.Claims.Extra = make(map[string]interface{})
-			}
-
-			// Store upstream token and metadata in claims (this gets persisted with the token)
-			proxySession.Claims.Extra["upstream_token"] = upstreamAccessToken
-			proxySession.Claims.Extra["upstream_token_type"] = tokenResponse["token_type"]
-			if expiresIn, ok := tokenResponse["expires_in"].(float64); ok {
-				proxySession.Claims.Extra["upstream_expires_in"] = expiresIn
 			}
 
 			// Store attestation information in proxy session claims if attestation was performed
@@ -679,6 +910,16 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 			}
 
 			h.Log.Debugf("🔄 [PROXY] Fosite generated proxy token: %s... -> upstream: %s...", proxyToken[:20], upstreamAccessToken[:20])
+
+			// Store upstream token mapping persistently
+			err = h.Storage.StoreUpstreamTokenMapping(r.Context(), proxyToken, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY] Failed to store upstream token mapping: %v", err)
+				http.Error(w, "failed to store token mapping", http.StatusInternalServerError)
+				return
+			}
+
+			h.Log.Debugf("✅ [PROXY] Stored upstream token mapping for proxy token")
 
 			// Replace upstream token with proxy token in response
 			tokenResponse["access_token"] = proxyToken

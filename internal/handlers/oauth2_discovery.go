@@ -161,6 +161,11 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		if upstreamSigningAlgs, ok := upstream["token_endpoint_auth_signing_alg_values_supported"]; ok {
 			oauth2Metadata["token_endpoint_auth_signing_alg_values_supported"] = upstreamSigningAlgs
 		}
+
+		// device_authorization_endpoint - override with upstream in proxy mode
+		if upstreamDeviceAuth, ok := upstream["device_authorization_endpoint"]; ok {
+			oauth2Metadata["device_authorization_endpoint"] = upstreamDeviceAuth
+		}
 	}
 
 	// Return the merged OAuth2 discovery metadata
