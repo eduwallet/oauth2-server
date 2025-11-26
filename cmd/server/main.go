@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/ory/fosite/storage"
 	"github.com/ory/fosite/token/jwt"
 	"github.com/sirupsen/logrus"
@@ -115,9 +114,6 @@ func main() {
 	}
 
 	log.Printf("🚀 Starting OAuth2 Server v%s (commit: %s)", Version, GitCommit)
-
-	_ = godotenv.Load()
-	log.Printf("✅ Environment variables loaded (if .env file exists)")
 
 	log.Printf("DEBUG: UPSTREAM_PROVIDER_URL: %s", os.Getenv("UPSTREAM_PROVIDER_URL"))
 
@@ -420,11 +416,28 @@ func initializeClients() error {
 			log.Printf("✅ Stored plain text secret for privileged client: %s", client.ID)
 		}
 
+		// Ensure client_credentials grant type is included when in proxy mode
+		grantTypes := client.GrantTypes
+		if configuration.IsProxyMode() {
+			// Check if client_credentials is already in the grant types
+			hasClientCredentials := false
+			for _, gt := range grantTypes {
+				if gt == "client_credentials" {
+					hasClientCredentials = true
+					break
+				}
+			}
+			if !hasClientCredentials {
+				grantTypes = append(grantTypes, "client_credentials")
+				log.Printf("✅ Added client_credentials grant type to pre-configured client %s for proxy mode", client.ID)
+			}
+		}
+
 		newClient := &fosite.DefaultClient{
 			ID:            client.ID,
 			Secret:        hashedSecret,
 			RedirectURIs:  client.RedirectURIs,
-			GrantTypes:    client.GrantTypes,
+			GrantTypes:    grantTypes,
 			ResponseTypes: client.ResponseTypes,
 			Scopes:        client.Scopes,
 			Audience:      client.Audience,
@@ -590,7 +603,7 @@ func initializeHandlers() {
 	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler)
 
 	// Initialize device flow handler
-	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, dataStore, templates, configuration, log, &deviceCodeToUpstreamMap, &UpstreamSessionMap)
+	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, dataStore, secretManager, templates, configuration, log, &deviceCodeToUpstreamMap, &UpstreamSessionMap)
 
 	log.Printf("✅ OAuth2 handlers initialized")
 }

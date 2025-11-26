@@ -24,6 +24,7 @@ import (
 type DeviceCodeHandler struct {
 	OAuth2Provider          fosite.OAuth2Provider
 	Storage                 store.Storage
+	SecretManager           *store.SecretManager
 	Templates               *template.Template
 	Config                  *config.Config
 	Logger                  *logrus.Logger
@@ -35,6 +36,7 @@ type DeviceCodeHandler struct {
 func NewDeviceCodeHandler(
 	provider fosite.OAuth2Provider,
 	storage store.Storage,
+	secretManager *store.SecretManager,
 	templates *template.Template,
 	config *config.Config,
 	logger *logrus.Logger,
@@ -44,6 +46,7 @@ func NewDeviceCodeHandler(
 	return &DeviceCodeHandler{
 		OAuth2Provider:          provider,
 		Storage:                 storage,
+		SecretManager:           secretManager,
 		Templates:               templates,
 		Config:                  config,
 		Logger:                  logger,
@@ -55,8 +58,6 @@ func NewDeviceCodeHandler(
 // HandleDeviceAuthorization handles the device authorization request (RFC 8628)
 // Pure fosite approach: let fosite handle everything including storage
 func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -72,6 +73,12 @@ func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *
 	}
 
 	h.Logger.Info("🏠 Local mode, proceeding with regular device authorization")
+	h.handleLocalDeviceAuthorization(w, r)
+}
+
+// handleLocalDeviceAuthorization handles device authorization locally using fosite
+func (h *DeviceCodeHandler) handleLocalDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
 	// Let fosite handle the device authorization request completely
 	deviceRequest, err := h.OAuth2Provider.NewDeviceRequest(ctx, r)
@@ -131,8 +138,6 @@ func (h *DeviceCodeHandler) HandleDeviceAuthorization(w http.ResponseWriter, r *
 	// Let fosite write the response
 	h.OAuth2Provider.WriteDeviceResponse(ctx, w, deviceRequest, deviceResponse)
 }
-
-// handleProxyDeviceAuthorization forwards device authorization requests to the upstream provider
 func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Printf("🔄 [PROXY-DEVICE] Starting proxy device authorization request: %s", r.URL.String())
 
@@ -150,6 +155,7 @@ func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter
 	}
 
 	clientID := r.Form.Get("client_id")
+
 	if clientID == "" {
 		h.Logger.Errorf("❌ [PROXY-DEVICE] Missing client_id")
 		h.writeErrorResponse(w, "invalid_request", "missing client_id")
@@ -245,25 +251,15 @@ func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter
 
 	h.Logger.Printf("🔄 [PROXY-DEVICE] Received upstream codes - device: %s..., user: %s", upstreamDeviceCode[:10], upstreamUserCode)
 
-	// Create proxy device request/response using fosite
-	proxyDeviceRequest, err := h.OAuth2Provider.NewDeviceRequest(r.Context(), r)
+	// For proxy mode, we don't need to create a Fosite device request since we're just forwarding
+	// Generate proxy device code directly
+	proxyDeviceCode, err := generateRandomString(32)
 	if err != nil {
-		h.Logger.WithError(err).Error("❌ [PROXY-DEVICE] Failed to create proxy device request")
-		h.writeErrorResponse(w, "server_error", "failed to create proxy device request")
+		h.Logger.Errorf("❌ [PROXY-DEVICE] Failed to generate proxy device code: %v", err)
+		h.writeErrorResponse(w, "server_error", "failed to generate device code")
 		return
 	}
-
-	session := &openid.DefaultSession{}
-	proxyDeviceResponse, err := h.OAuth2Provider.NewDeviceResponse(r.Context(), proxyDeviceRequest, session)
-	if err != nil {
-		h.Logger.WithError(err).Error("❌ [PROXY-DEVICE] Failed to create proxy device response")
-		h.writeErrorResponse(w, "server_error", "failed to create proxy device response")
-		return
-	}
-
-	proxyDeviceCode := proxyDeviceResponse.GetDeviceCode()
-
-	h.Logger.Printf("✅ [PROXY-DEVICE] Created proxy device code: %s...", proxyDeviceCode[:10])
+	h.Logger.Printf("✅ [PROXY-DEVICE] Generated proxy device code: %s...", proxyDeviceCode[:10])
 
 	// Store mapping from proxy device code to upstream device code
 	(*h.DeviceCodeToUpstreamMap)[proxyDeviceCode] = upstreamDeviceCode

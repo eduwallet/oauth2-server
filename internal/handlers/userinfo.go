@@ -348,8 +348,12 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 
 	h.Log.Printf("📄 [PROXY] Modified userinfo response body: %s", string(modifiedRespBody))
 
-	// Copy response headers and status
+	// Copy response headers and status, but remove Content-Length since we're modifying the body
 	for k, vv := range resp.Header {
+		if strings.ToLower(k) == "content-length" {
+			// Skip Content-Length header since we're modifying the response body
+			continue
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}

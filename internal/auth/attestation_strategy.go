@@ -15,6 +15,9 @@ import (
 	"github.com/ory/fosite"
 )
 
+type fositeClientKey string
+type proxyTokenKey string
+
 // AttestationClientAuthStrategy implements a composite client authentication strategy
 // that handles attestation-based authentication and standard OAuth2 client authentication
 type AttestationClientAuthStrategy struct {
@@ -39,13 +42,58 @@ func (s *AttestationClientAuthStrategy) AuthenticateClient(ctx context.Context, 
 	clientID := form.Get("client_id")
 
 	// Check if this is a proxy token creation request - skip authentication in that case
-	if ctx.Value("proxy_token") != nil {
+	if ctx.Value(proxyTokenKey("proxy_token")) != nil {
 		if clientID != "" {
 			client, err := s.Storage.GetClient(ctx, clientID)
 			if err != nil {
 				return nil, fosite.ErrInvalidClient.WithHint("Unknown client")
 			}
+			// Ensure client_credentials is in grant types for proxy token creation
+			grantTypes := client.GetGrantTypes()
+			hasClientCredentials := false
+			for _, gt := range grantTypes {
+				if gt == "client_credentials" {
+					hasClientCredentials = true
+					break
+				}
+			}
+			if !hasClientCredentials {
+				// Create a wrapper client with client_credentials added
+				grantWrappedClient := &GrantTypeWrapper{
+					Client:          client,
+					extraGrantTypes: []string{"client_credentials"},
+				}
+				// For public clients, also make them appear confidential for proxy tokens
+				if client.IsPublic() {
+					wrappedClient := &PublicClientWrapper{
+						Client: grantWrappedClient,
+					}
+					return wrappedClient, nil
+				}
+				return grantWrappedClient, nil
+			}
+			// For public clients, wrap to make them appear confidential
+			if client.IsPublic() {
+				wrappedClient := &PublicClientWrapper{
+					Client: client,
+				}
+				return wrappedClient, nil
+			}
 			return client, nil
+		}
+	}
+
+	// Check if this is a proxy token creation request - return the client from context if available
+	if client := ctx.Value(fositeClientKey("client")); client != nil {
+		if fositeClient, ok := client.(fosite.Client); ok {
+			// For proxy tokens, wrap public clients to make them appear confidential
+			if ctx.Value(proxyTokenKey("proxy_token")) != nil && fositeClient.IsPublic() {
+				wrappedClient := &PublicClientWrapper{
+					Client: fositeClient,
+				}
+				return wrappedClient, nil
+			}
+			return fositeClient, nil
 		}
 	}
 
@@ -64,6 +112,28 @@ func (s *AttestationClientAuthStrategy) AuthenticateClient(ctx context.Context, 
 
 	// Fall back to standard OAuth2 client authentication methods
 	return s.authenticateStandard(ctx, r, form)
+}
+
+// GrantTypeWrapper wraps a fosite client to add extra grant types
+type GrantTypeWrapper struct {
+	fosite.Client
+	extraGrantTypes []string
+}
+
+// GetGrantTypes returns the client's grant types plus any extra ones
+func (w *GrantTypeWrapper) GetGrantTypes() fosite.Arguments {
+	original := w.Client.GetGrantTypes()
+	return append(original, w.extraGrantTypes...)
+}
+
+// PublicClientWrapper wraps a fosite client to override IsPublic for proxy token creation
+type PublicClientWrapper struct {
+	fosite.Client
+}
+
+// IsPublic returns false for proxy token creation to allow client_credentials grant
+func (w *PublicClientWrapper) IsPublic() bool {
+	return false
 }
 
 // AttestationClientWrapper wraps a fosite client to override IsPublic for attestation-authenticated clients

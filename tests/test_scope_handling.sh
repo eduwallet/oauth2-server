@@ -68,7 +68,11 @@ perform_auth_flow() {
     echo "🌐 Making initial authorization request..." >&2
     local auth_response=$(curl -s -i -X GET "$auth_url" \
         -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
-        -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
+        -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+    
+    echo "DEBUG: auth_response length: ${#auth_response}" >&2
+    echo "DEBUG: auth_response start:" >&2
+    echo "$auth_response" | head -5 >&2
 
     # Check if we got a login form
     if echo "$auth_response" | grep -q "Login\|Username\|Password"; then
@@ -168,7 +172,7 @@ perform_auth_flow() {
     else
         echo "❌ No login form received from authorization endpoint" >&2
         echo "Response preview:" >&2
-        echo "$auth_response" | head -10 >&2
+        echo "$auth_response" | head -20 >&2
         return 1
     fi
 }

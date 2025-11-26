@@ -64,6 +64,19 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	h.Log.Printf("🔍 Authorization request: %s %s", r.Method, r.URL.String())
+
+	// Parse form data before creating authorize request
+	r.ParseForm()
+
+	// For GET requests, also populate form with query parameters since Fosite expects them in r.Form
+	if r.Method == "GET" {
+		for key, values := range r.URL.Query() {
+			if _, exists := r.Form[key]; !exists {
+				r.Form[key] = values
+			}
+		}
+	}
+
 	h.Log.Printf("🔍 Form values: %v", r.Form)
 
 	// Let's create an AuthorizeRequest object!
@@ -78,13 +91,6 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.Log.Printf("✅ Authorization request created successfully")
-	h.Log.Printf("🔍 Client ID: %s", ar.GetClient().GetID())
-	h.Log.Printf("🔍 Redirect URI: %s", ar.GetRedirectURI().String())
-	h.Log.Printf("🔍 Response types: %v", ar.GetResponseTypes())
-	h.Log.Printf("🔍 Requested scopes: %v", ar.GetRequestedScopes())
-
-	r.ParseForm()
 	username := r.PostForm.Get("username")
 
 	if username == "" {

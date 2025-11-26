@@ -22,9 +22,10 @@ import (
 
 // Context key type for Fosite client
 type fositeClientKey string
+type proxyTokenKey string
 
 const clientContextKey fositeClientKey = "client"
-const proxyTokenContextKey = "proxy_token"
+const proxyTokenContextKey proxyTokenKey = "proxy_token"
 
 // TokenHandler manages OAuth2 token requests using pure fosite implementation
 type TokenHandler struct {
@@ -96,9 +97,16 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		h.handleProxyToken(w, r)
 		return
 	}
+	// If client_id is not in form but we have basic auth, extract it from basic auth
+	if r.FormValue("client_id") == "" {
+		if username, _, ok := r.BasicAuth(); ok {
+			r.Form.Set("client_id", username)
+		}
+	}
+
+	clientID := r.FormValue("client_id")
 
 	// Debug logging
-	clientID := r.FormValue("client_id")
 	h.Log.Debugf("🔍 Token request - Grant Type: %s, Client ID: %s", grantType, clientID)
 
 	// Client authentication is now handled by our custom AuthenticateClient strategy
@@ -229,9 +237,6 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 							}
 							session.Claims.Extra["granted_scopes"] = grantedScopes
 							h.Log.Debugf("✅ Stored granted scopes in session: %v", grantedScopes)
-
-							// Store for later use
-							r = r.WithContext(context.WithValue(r.Context(), "granted_scopes", grantedScopes))
 						}
 					}
 				}
@@ -487,9 +492,16 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 	}
 
 	clientID := r.Form.Get("client_id")
+	clientSecret := ""
 	if clientID == "" {
 		// Try HTTP basic auth or registered clients
-		clientID, _, _ = r.BasicAuth()
+		clientID, clientSecret, _ = r.BasicAuth()
+	} else {
+		// If client_id is in form data, also check for basic auth to get client_secret
+		_, clientSecretFromAuth, _ := r.BasicAuth()
+		if clientSecretFromAuth != "" {
+			clientSecret = clientSecretFromAuth
+		}
 	}
 	if clientID == "" {
 		h.Log.Errorf("❌ [PROXY] Missing client_id in request")
@@ -544,6 +556,10 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 
 		// For device_code grant type, get upstream response and create proxy token
 		h.Log.Infof("🔄 [PROXY-DEVICE] Device code grant type - getting upstream response and creating proxy token")
+
+		// Replace client_id for upstream
+		r.Form.Set("client_id", h.Configuration.UpstreamProvider.ClientID)
+		h.Log.Debugf("🔄 [PROXY-DEVICE] Replaced client_id from '%s' to '%s'", clientID, h.Configuration.UpstreamProvider.ClientID)
 
 		formData := r.Form.Encode()
 		h.Log.Debugf("📤 [PROXY-DEVICE] Form data to upstream: %s", formData)
@@ -652,6 +668,11 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 					proxyReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 					proxyReq = proxyReq.WithContext(r.Context())
 
+					// Add basic auth for confidential clients
+					if clientSecret != "" {
+						proxyReq.SetBasicAuth(clientID, clientSecret)
+					}
+
 					// Set proxy context and client
 					proxyCtx := context.WithValue(proxyReq.Context(), clientContextKey, downstreamClient)
 					proxyCtx = context.WithValue(proxyCtx, proxyTokenContextKey, true)
@@ -752,12 +773,10 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Replace client_id/redirect_uri for upstream
-	originalClientID := r.Form.Get("client_id")
 	r.Form.Set("client_id", h.Configuration.UpstreamProvider.ClientID)
 	r.Form.Set("redirect_uri", h.Configuration.UpstreamProvider.CallbackURL)
 
-	h.Log.Debugf("🔄 [PROXY] Replaced client_id from '%s' to '%s'", originalClientID, h.Configuration.UpstreamProvider.ClientID)
+	h.Log.Debugf("🔄 [PROXY] Replaced client_id from '%s' to '%s'", clientID, h.Configuration.UpstreamProvider.ClientID)
 	h.Log.Debugf("🔄 [PROXY] Set redirect_uri to: %s", h.Configuration.UpstreamProvider.CallbackURL)
 
 	formData := r.Form.Encode()
@@ -808,44 +827,9 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 		h.Log.Errorf("❌ [PROXY] Failed to parse upstream token response as JSON: %v", err)
 		// Continue with raw response
 	} else {
-		// Extract upstream access token and issue proxy token
+		// Extract upstream access token and issue proxy token (only for clients that support client_credentials)
 		if upstreamAccessToken, ok := tokenResponse["access_token"].(string); ok && upstreamAccessToken != "" {
-			h.Log.Debugf("🔄 [PROXY] Received upstream access token, issuing proxy token")
-
-			// Extract upstream token details
-			upstreamRefreshToken := ""
-			if refreshToken, ok := tokenResponse["refresh_token"].(string); ok {
-				upstreamRefreshToken = refreshToken
-			}
-			upstreamTokenType := "bearer"
-			if tokenType, ok := tokenResponse["token_type"].(string); ok {
-				upstreamTokenType = strings.ToLower(tokenType)
-			}
-			upstreamExpiresIn := int64(3600) // default 1 hour
-			if expiresIn, ok := tokenResponse["expires_in"].(float64); ok {
-				upstreamExpiresIn = int64(expiresIn)
-			}
-
-			// Create a proxy session
-			proxySession := &openid.DefaultSession{}
-			proxySession.Subject = clientID // Use downstream client ID as subject
-			proxySession.Username = clientID
-
-			// Initialize claims if nil
-			if proxySession.Claims == nil {
-				proxySession.Claims = &jwt.IDTokenClaims{}
-			}
-			if proxySession.Claims.Extra == nil {
-				proxySession.Claims.Extra = make(map[string]interface{})
-			}
-
-			// Store attestation information in proxy session claims if attestation was performed
-			h.storeAttestationInSession(r.Context(), proxySession)
-
-			// Store issuer_state in proxy session claims if available
-			h.storeIssuerStateInSession(r, proxySession)
-
-			// Get the downstream client for proxy token creation
+			// Check if downstream client supports proxy token creation (client_credentials grant and not public)
 			downstreamClient, err := h.Storage.GetClient(r.Context(), clientID)
 			if err != nil {
 				h.Log.Errorf("❌ [PROXY] Failed to get downstream client: %v", err)
@@ -853,116 +837,157 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 
-			h.Log.Debugf("🔍 [PROXY] Downstream client found: %t, Public: %t, GrantTypes: %v", downstreamClient != nil, downstreamClient.IsPublic(), downstreamClient.GetGrantTypes())
+			// Check if downstream client supports proxy token creation (not public)
+			canCreateProxyToken := !downstreamClient.IsPublic()
 
-			// Create proxy token request - attestation verification happens in Fosite strategy
-			h.Log.Debugf("🔄 [PROXY] Using simplified proxy token creation (attestation handled by strategy)")
-			proxyForm := make(url.Values)
-			proxyForm.Set("grant_type", "client_credentials")
-			proxyForm.Set("client_id", clientID)
-			proxyForm.Set("scope", "openid")
+			if canCreateProxyToken {
+				h.Log.Debugf("🔄 [PROXY] Received upstream access token, issuing proxy token for confidential client")
 
-			proxyReq, err := http.NewRequest("POST", "/token", strings.NewReader(proxyForm.Encode()))
-			if err != nil {
-				h.Log.Errorf("❌ [PROXY] Failed to create proxy request: %v", err)
-				http.Error(w, "failed to create proxy request", http.StatusInternalServerError)
-				return
-			}
-			proxyReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			proxyReq = proxyReq.WithContext(r.Context())
-
-			// Set proxy context and client for simplified authentication
-			proxyCtx := context.WithValue(proxyReq.Context(), clientContextKey, downstreamClient)
-			proxyCtx = context.WithValue(proxyCtx, proxyTokenContextKey, true)
-			proxyReq = proxyReq.WithContext(proxyCtx)
-
-			h.Log.Debugf("🔄 [PROXY] Creating proxy access request with client_credentials grant")
-
-			// Create proxy access request using Fosite (attestation strategy handles authentication)
-			proxyAccessRequest, err := h.OAuth2Provider.NewAccessRequest(proxyReq.Context(), proxyReq, proxySession)
-			if err != nil {
-				h.Log.Errorf("❌ [PROXY] Failed to create proxy access request: %v", err)
-				h.Log.Errorf("❌ [PROXY] Error type: %T", err)
-				h.Log.Errorf("❌ [PROXY] Error details: %+v", err)
-				if fositeErr, ok := err.(*fosite.RFC6749Error); ok {
-					h.Log.Errorf("❌ [PROXY] Fosite error name: %s", fositeErr.ErrorField)
-					h.Log.Errorf("❌ [PROXY] Fosite error description: %s", fositeErr.DescriptionField)
-					h.Log.Errorf("❌ [PROXY] Fosite error hint: %s", fositeErr.HintField)
+				// Extract upstream token details
+				upstreamRefreshToken := ""
+				if refreshToken, ok := tokenResponse["refresh_token"].(string); ok {
+					upstreamRefreshToken = refreshToken
 				}
-				http.Error(w, "failed to create proxy access request", http.StatusInternalServerError)
-				return
-			}
-
-			// Issue proxy access response using Fosite
-			proxyAccessResponse, err := h.OAuth2Provider.NewAccessResponse(proxyReq.Context(), proxyAccessRequest)
-			if err != nil {
-				h.Log.Errorf("❌ [PROXY] Failed to create proxy access response: %v", err)
-				http.Error(w, "failed to create proxy token", http.StatusInternalServerError)
-				return
-			}
-
-			// Extract the Fosite-generated proxy token
-			proxyToken := proxyAccessResponse.GetAccessToken()
-			if proxyToken == "" {
-				h.Log.Errorf("❌ [PROXY] Failed to extract proxy access token from Fosite response")
-				http.Error(w, "failed to extract proxy token", http.StatusInternalServerError)
-				return
-			}
-
-			h.Log.Debugf("🔄 [PROXY] Fosite generated proxy token: %s... -> upstream: %s...", proxyToken[:20], upstreamAccessToken[:20])
-
-			// Store upstream token mapping persistently
-			err = h.Storage.StoreUpstreamTokenMapping(r.Context(), proxyToken, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
-			if err != nil {
-				h.Log.Errorf("❌ [PROXY] Failed to store upstream token mapping: %v", err)
-				http.Error(w, "failed to store token mapping", http.StatusInternalServerError)
-				return
-			}
-
-			h.Log.Debugf("✅ [PROXY] Stored upstream token mapping for proxy token")
-
-			// Replace upstream token with proxy token in response
-			tokenResponse["access_token"] = proxyToken
-			tokenResponse["issued_by_proxy"] = true
-			tokenResponse["proxy_server"] = "oauth2-server"
-
-			// Re-encode the modified token response
-			modifiedRespBody, err := json.Marshal(tokenResponse)
-			if err != nil {
-				h.Log.Errorf("❌ [PROXY] Failed to encode modified token response: %v", err)
-				http.Error(w, "failed to encode proxy token response", http.StatusInternalServerError)
-				return
-			}
-
-			h.Log.Debugf("✅ [PROXY] Successfully issued Fosite-controlled proxy access token")
-
-			// Record metrics for successful proxy token issuance
-			if h.Metrics != nil {
-				h.Metrics.RecordTokenRequest("proxy_token", clientID, "success")
-				h.Metrics.RecordTokenIssued("access_token", "proxy_token")
-				if refreshToken := proxyAccessResponse.GetExtra("refresh_token"); refreshToken != nil {
-					h.Metrics.RecordTokenIssued("refresh_token", "proxy_token")
+				upstreamTokenType := "bearer"
+				if tokenType, ok := tokenResponse["token_type"].(string); ok {
+					upstreamTokenType = strings.ToLower(tokenType)
 				}
-			}
-
-			// Copy response headers and status
-			for k, vv := range resp.Header {
-				for _, v := range vv {
-					w.Header().Add(k, v)
+				upstreamExpiresIn := int64(3600) // default 1 hour
+				if expiresIn, ok := tokenResponse["expires_in"].(float64); ok {
+					upstreamExpiresIn = int64(expiresIn)
 				}
-			}
-			w.WriteHeader(resp.StatusCode)
 
-			// Write modified response body back to client
-			if _, err := w.Write(modifiedRespBody); err != nil {
-				h.Log.Errorf("❌ [PROXY] Failed to write proxy token response body to client: %v", err)
+				// Create a proxy session
+				proxySession := &openid.DefaultSession{}
+				proxySession.Subject = clientID // Use downstream client ID as subject
+				proxySession.Username = clientID
+
+				// Initialize claims if nil
+				if proxySession.Claims == nil {
+					proxySession.Claims = &jwt.IDTokenClaims{}
+				}
+				if proxySession.Claims.Extra == nil {
+					proxySession.Claims.Extra = make(map[string]interface{})
+				}
+
+				// Store attestation information in proxy session claims if attestation was performed
+				h.storeAttestationInSession(r.Context(), proxySession)
+
+				// Store issuer_state in proxy session claims if available
+				h.storeIssuerStateInSession(r, proxySession)
+
+				// Create proxy token request - attestation verification happens in Fosite strategy
+				h.Log.Debugf("🔄 [PROXY] Using simplified proxy token creation (attestation handled by strategy)")
+				proxyForm := make(url.Values)
+				proxyForm.Set("grant_type", "client_credentials")
+				proxyForm.Set("client_id", clientID)
+				proxyForm.Set("scope", "openid")
+
+				proxyReq, err := http.NewRequest("POST", "/token", strings.NewReader(proxyForm.Encode()))
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY] Failed to create proxy request: %v", err)
+					http.Error(w, "failed to create proxy request", http.StatusInternalServerError)
+					return
+				}
+				proxyReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				proxyReq = proxyReq.WithContext(r.Context())
+
+				// Set proxy context and client for simplified authentication
+				proxyCtx := context.WithValue(proxyReq.Context(), clientContextKey, downstreamClient)
+				proxyCtx = context.WithValue(proxyCtx, proxyTokenContextKey, true)
+				proxyReq = proxyReq.WithContext(proxyCtx)
+
+				h.Log.Debugf("🔄 [PROXY] Creating proxy access request with client_credentials grant")
+
+				// Create proxy access request using Fosite (attestation strategy handles authentication)
+				proxyAccessRequest, err := h.OAuth2Provider.NewAccessRequest(proxyReq.Context(), proxyReq, proxySession)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY] Failed to create proxy access request: %v", err)
+					h.Log.Errorf("❌ [PROXY] Error type: %T", err)
+					h.Log.Errorf("❌ [PROXY] Error details: %+v", err)
+					if fositeErr, ok := err.(*fosite.RFC6749Error); ok {
+						h.Log.Errorf("❌ [PROXY] Fosite error name: %s", fositeErr.ErrorField)
+						h.Log.Errorf("❌ [PROXY] Fosite error description: %s", fositeErr.DescriptionField)
+						h.Log.Errorf("❌ [PROXY] Fosite error hint: %s", fositeErr.HintField)
+					}
+					http.Error(w, "failed to create proxy access request", http.StatusInternalServerError)
+					return
+				}
+
+				// Issue proxy access response using Fosite
+				proxyAccessResponse, err := h.OAuth2Provider.NewAccessResponse(proxyReq.Context(), proxyAccessRequest)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY] Failed to create proxy access response: %v", err)
+					http.Error(w, "failed to create proxy token", http.StatusInternalServerError)
+					return
+				}
+
+				// Extract the Fosite-generated proxy token
+				proxyToken := proxyAccessResponse.GetAccessToken()
+				if proxyToken == "" {
+					h.Log.Errorf("❌ [PROXY] Failed to extract proxy access token from Fosite response")
+					http.Error(w, "failed to extract proxy token", http.StatusInternalServerError)
+					return
+				}
+
+				h.Log.Debugf("🔄 [PROXY] Fosite generated proxy token: %s... -> upstream: %s...", proxyToken[:20], upstreamAccessToken[:20])
+
+				// Store upstream token mapping persistently
+				err = h.Storage.StoreUpstreamTokenMapping(r.Context(), proxyToken, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY] Failed to store upstream token mapping: %v", err)
+					http.Error(w, "failed to store token mapping", http.StatusInternalServerError)
+					return
+				}
+
+				h.Log.Debugf("✅ [PROXY] Stored upstream token mapping for proxy token")
+
+				// Replace upstream token with proxy token in response
+				tokenResponse["access_token"] = proxyToken
+				tokenResponse["issued_by_proxy"] = true
+				tokenResponse["proxy_server"] = "oauth2-server"
+
+				// Re-encode the modified token response
+				modifiedRespBody, err := json.Marshal(tokenResponse)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY] Failed to encode modified token response: %v", err)
+					http.Error(w, "failed to encode proxy token response", http.StatusInternalServerError)
+					return
+				}
+
+				h.Log.Debugf("✅ [PROXY] Successfully issued Fosite-controlled proxy access token")
+
+				// Record metrics for successful proxy token issuance
+				if h.Metrics != nil {
+					h.Metrics.RecordTokenRequest("proxy_token", clientID, "success")
+					h.Metrics.RecordTokenIssued("access_token", "proxy_token")
+					if refreshToken := proxyAccessResponse.GetExtra("refresh_token"); refreshToken != nil {
+						h.Metrics.RecordTokenIssued("refresh_token", "proxy_token")
+					}
+				}
+
+				// Copy response headers and status
+				for k, vv := range resp.Header {
+					for _, v := range vv {
+						w.Header().Add(k, v)
+					}
+				}
+				w.WriteHeader(resp.StatusCode)
+
+				// Write modified response body back to client
+				if _, err := w.Write(modifiedRespBody); err != nil {
+					h.Log.Errorf("❌ [PROXY] Failed to write proxy token response body to client: %v", err)
+				}
+				return
+			} else {
+				h.Log.Debugf("ℹ️ [PROXY] Skipping proxy token creation for public client, returning upstream token directly")
 			}
-			return
+			// Note: Proxy token creation is skipped for public clients
 		}
 	}
 
-	// For non-attestation clients or when proxy token creation fails, return upstream response directly
-	h.Log.Debugf("ℹ️ [PROXY] Returning upstream response directly (non-attestation client or proxy creation failed)")
+	// For cases where no upstream access token is present, return upstream response directly
+	h.Log.Debugf("ℹ️ [PROXY] Returning upstream response directly (no access token to proxy)")
 	// Copy response headers and status
 	for k, vv := range resp.Header {
 		for _, v := range vv {

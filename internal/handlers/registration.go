@@ -52,6 +52,7 @@ func NewRegistrationHandler(storage *store.CustomStorage, secretManager *store.S
 // ClientMetadata represents the client registration request
 type ClientMetadata struct {
 	ClientID                string                          `json:"client_id,omitempty"`
+	ClientSecret            string                          `json:"client_secret,omitempty"`
 	RedirectURIs            []string                        `json:"redirect_uris"`
 	TokenEndpointAuthMethod string                          `json:"token_endpoint_auth_method,omitempty"`
 	GrantTypes              []string                        `json:"grant_types,omitempty"`
@@ -181,14 +182,19 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	var err error
 
 	if !isUpdate && !isPublic {
-		h.log.Printf("🔍 [REGISTRATION] Generating client secret for new confidential client")
-		clientSecret, err = generateRandomString(64)
-		if err != nil {
-			h.log.Errorf("❌ [REGISTRATION] Failed to generate client secret: %v", err)
-			http.Error(w, "Failed to generate client secret", http.StatusInternalServerError)
-			return
+		if metadata.ClientSecret != "" {
+			h.log.Printf("🔍 [REGISTRATION] Using provided client secret")
+			clientSecret = metadata.ClientSecret
+		} else {
+			h.log.Printf("🔍 [REGISTRATION] Generating client secret for new confidential client")
+			clientSecret, err = generateRandomString(64)
+			if err != nil {
+				h.log.Errorf("❌ [REGISTRATION] Failed to generate client secret: %v", err)
+				http.Error(w, "Failed to generate client secret", http.StatusInternalServerError)
+				return
+			}
+			h.log.Printf("✅ [REGISTRATION] Generated client secret (length: %d)", len(clientSecret))
 		}
-		h.log.Printf("✅ [REGISTRATION] Generated client secret (length: %d)", len(clientSecret))
 
 		// Hash the client secret
 		h.log.Printf("🔍 [REGISTRATION] Hashing client secret")
@@ -251,6 +257,13 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	if finalAttestationConfig != nil && !contains(grantTypes, "client_credentials") {
 		grantTypes = append(grantTypes, "client_credentials")
 		h.log.Printf("🔍 [REGISTRATION] Added 'client_credentials' grant type due to attestation config")
+	}
+
+	// Add 'client_credentials' grant type if running in proxy mode (needed for proxy token creation)
+	h.log.Printf("🔍 [REGISTRATION] Checking proxy mode: config=%v, IsProxyMode=%v", h.config != nil, h.config != nil && h.config.IsProxyMode())
+	if h.config != nil && !contains(grantTypes, "client_credentials") {
+		grantTypes = append(grantTypes, "client_credentials")
+		h.log.Printf("🔍 [REGISTRATION] Added 'client_credentials' grant type due to proxy mode")
 	}
 
 	responseTypes := metadata.ResponseTypes
@@ -334,17 +347,15 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 
 	// For public clients OR clients with attestation config, add the privileged client to audience for token introspection
 	h.log.Printf("🔍 [REGISTRATION] Checking privileged client addition: isPublic=%v, hasAttestation=%v, config=%v, privileged_id='%s'", isPublic, finalAttestationConfig != nil, h.config != nil, h.config.Security.PrivilegedClientID)
-	if (isPublic || finalAttestationConfig != nil) && h.config != nil && h.config.Security.PrivilegedClientID != "" {
-		h.log.Printf("🔍 [REGISTRATION] Condition met for privileged client addition")
+	if h.config != nil && h.config.Security.PrivilegedClientID != "" {
 		if !contains(audience, h.config.Security.PrivilegedClientID) {
 			audience = append(audience, h.config.Security.PrivilegedClientID)
 			h.log.Printf("🔍 [REGISTRATION] Added privileged client %s to audience for client: %v", h.config.Security.PrivilegedClientID, audience)
 		} else {
 			h.log.Printf("🔍 [REGISTRATION] Privileged client %s already in audience", h.config.Security.PrivilegedClientID)
 		}
-	} else {
-		h.log.Printf("🔍 [REGISTRATION] Condition not met for privileged client addition")
-	} // Debug: Log scope information
+	}
+
 	h.log.Printf("🔍 [REGISTRATION] Final client scopes: %v", scopes)
 	h.log.Printf("🔍 [REGISTRATION] Final client audience: %v", audience)
 

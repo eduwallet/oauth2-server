@@ -79,6 +79,7 @@ class MockOAuthProvider(BaseHTTPRequestHandler):
                 "authorization_endpoint": "http://localhost:9999/auth",
                 "device_authorization_endpoint": "http://localhost:9999/device/authorize",
                 "token_endpoint": "http://localhost:9999/token",
+                "introspection_endpoint": "http://localhost:9999/introspect",
                 "userinfo_endpoint": "http://localhost:9999/userinfo",
                 "jwks_uri": "http://localhost:9999/jwks",
                 "scopes_supported": ["openid", "profile", "email", "api:read"],
@@ -260,6 +261,43 @@ class MockOAuthProvider(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(token_response).encode())
             return
 
+        elif self.path == "/introspect":
+            print("DEBUG: Handling introspection request")
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            params = urllib.parse.parse_qs(post_data)
+
+            token = params.get('token', [''])[0]
+
+            if token.startswith('mock_access_token_'):
+                # Mock active token response
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                introspect_response = {
+                    "active": True,
+                    "client_id": "mock-client-id",
+                    "sub": "john.doe",
+                    "scope": "openid profile api:read",
+                    "token_type": "bearer",
+                    "exp": int(time.time()) + 3600,
+                    "iat": int(time.time()),
+                    "iss": "http://localhost:9999"
+                }
+                self.wfile.write(json.dumps(introspect_response).encode())
+                print(f"DEBUG: Introspected active token: {token[:20]}...")
+            else:
+                # Mock inactive token response
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                introspect_response = {
+                    "active": False
+                }
+                self.wfile.write(json.dumps(introspect_response).encode())
+                print(f"DEBUG: Introspected inactive token: {token[:20]}...")
+            return
+
         self.send_response(404)
         self.end_headers()
         self.wfile.write(b"Not found")
@@ -339,12 +377,7 @@ if lsof -i :8080 > /dev/null 2>&1; then
 fi
 
 # Start the OAuth2 server in proxy mode with the mock provider
-export UPSTREAM_PROVIDER_URL="$MOCK_PROVIDER_URL"
-export UPSTREAM_CLIENT_ID="mock-client-id"
-export UPSTREAM_CLIENT_SECRET="mock-client-secret"
-export UPSTREAM_CALLBACK_URL="$SERVER_URL/callback"
-echo "DEBUG: Starting server with UPSTREAM_PROVIDER_URL=$UPSTREAM_PROVIDER_URL"
-./bin/oauth2-server > server.log 2>&1 &
+UPSTREAM_PROVIDER_URL="$MOCK_PROVIDER_URL" UPSTREAM_CLIENT_ID="mock-client-id" UPSTREAM_CLIENT_SECRET="mock-client-secret" UPSTREAM_CALLBACK_URL="$SERVER_URL/callback" ./bin/oauth2-server > server.log 2>&1 &
 SERVER_PID=$!
 echo $SERVER_PID > server.pid
 
@@ -372,10 +405,11 @@ REGISTER_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
     "client_name": "Device Test Client",
     "grant_types": ["urn:ietf:params:oauth:grant-type:device_code"],
     "response_types": ["code"],
-    "token_endpoint_auth_method": "none",
+    "token_endpoint_auth_method": "client_secret_basic",
     "scope": "openid profile api:read",
     "redirect_uris": ["http://localhost:8080/test-callback"],
-    "public": true
+    "client_secret": "device-client-secret",
+    "public": false
   }')
 
 echo "Client Registration Response: $REGISTER_RESPONSE"
@@ -457,6 +491,7 @@ while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
 
     TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
       -H "Content-Type: application/x-www-form-urlencoded" \
+      -u "$TEST_CLIENT_ID:device-client-secret" \
       -d "grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=$DEVICE_CODE&client_id=$TEST_CLIENT_ID")
 
     echo "Token Response: $TOKEN_RESPONSE"
@@ -562,12 +597,28 @@ INTROSPECTION_RESPONSE=$(curl -s -X POST "$SERVER_URL/introspect" \
 
 echo "Introspection Response: $INTROSPECTION_RESPONSE"
 
-# Check if token is active - for proxy device tokens, this may fail since they're from upstream
+# Check if token introspection worked through proxy
 if echo "$INTROSPECTION_RESPONSE" | grep -q '"active":true'; then
-    print_status "success" "Token introspection successful - proxy token is valid"
+    print_status "success" "Token introspection successful through proxy!"
+    
+    # Verify upstream introspection data
+    if echo "$INTROSPECTION_RESPONSE" | grep -q '"issued_by_proxy":true'; then
+        print_status "success" "Upstream introspection response properly enhanced with proxy information"
+    else
+        print_status "error" "Upstream introspection response missing proxy enhancement"
+        exit 1
+    fi
+    
+    if echo "$INTROSPECTION_RESPONSE" | grep -q '"proxy_server":"oauth2-server"'; then
+        print_status "success" "Proxy server identification included in response"
+    else
+        print_status "error" "Proxy server identification missing from response"
+        exit 1
+    fi
 else
-    print_status "info" "Token introspection returned inactive (expected for upstream proxy tokens)"
-    print_status "info" "Note: Proxy device tokens from upstream providers may not be locally introspectable"
+    print_status "error" "Token introspection failed through proxy"
+    echo "Response: $INTROSPECTION_RESPONSE"
+    exit 1
 fi
 
 echo ""
@@ -580,8 +631,8 @@ echo "Step 3 (Proxy device authorization): ✅ PASS"
 echo "Step 4 (Upstream user verification): ✅ PASS"
 echo "Step 5 (Proxy token polling): ✅ PASS"
 echo "Step 6 (Proxy userinfo): ✅ PASS"
-echo "Step 7 (Token introspection): ⚠️  EXPECTED LIMITATION"
-echo "      Note: Proxy device tokens from upstream providers are not locally introspectable"
+echo "Step 7 (Token introspection): ✅ PASS"
+echo "      Note: Proxy device tokens are introspectable via upstream provider"
 echo ""
 print_status "success" "All core proxy mode device flow tests PASSED!"
 echo ""
@@ -593,5 +644,4 @@ echo "   ✅ User verification handled at upstream provider"
 echo "   ✅ Token polling forwarded through proxy with code mapping"
 echo "   ✅ Tokens issued by upstream provider accessible through proxy"
 echo "   ✅ Userinfo requests forwarded through proxy with upstream token mapping"
-echo "   ℹ️  Token introspection limitation: Upstream proxy tokens not locally introspectable"
-echo "      (This is expected behavior for proxy mode - privileged clients would introspect upstream)"
+echo "   ✅ Token introspection forwarded through proxy with upstream provider data"

@@ -289,7 +289,12 @@ test-script: build
 	fi
 	@$(MAKE) check-port
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
+		echo "🔄 Detected proxy test script, allowing custom UPSTREAM_PROVIDER_URL"; \
+		DATABASE_TYPE=$(TEST_DATABASE_TYPE) ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
+	else \
+		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
+	fi
 	@echo "⏳ Waiting for server to start..."
 	@sleep 5
 	@echo "🔍 Testing server health..."
@@ -349,7 +354,12 @@ test-script-verbose:
 	fi
 	@$(MAKE) check-port
 	@echo "🚀 Starting OAuth2 server in background..."
-	@DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid
+	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
+		echo "🔄 Detected proxy test script, allowing custom UPSTREAM_PROVIDER_URL"; \
+		DATABASE_TYPE=$(TEST_DATABASE_TYPE) ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
+	else \
+		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
+	fi
 	@echo "⏳ Waiting for server to start..."
 	@sleep 5
 	@echo "🔍 Testing server health..."

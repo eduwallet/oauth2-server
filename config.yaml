@@ -1,7 +1,7 @@
 # OAuth2 Server Configuration
 
 server:
-  base_url: ""
+  base_url: "http://localhost:8080"
   port: 8080
   host: "localhost"
   read_timeout: 30
@@ -100,7 +100,7 @@ clients:
   name: "Web Application Client"
   description: "Web application client supporting authorization code flow with PKCE"
   redirect_uris:
-  - "/callback"
+  - "http://localhost:8080/callback"
   - "/claims"
   - "https://oauth2-server.docker.orb.local/callback"
   grant_types:

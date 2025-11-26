@@ -126,8 +126,8 @@ class OAuth2Client {
      */
     getDefaultEndpoints() {
         return {
-            authorization_endpoint: `${this.config.serverUrl}/auth`,
-            token_endpoint: `${this.config.serverUrl}/oauth/token`,
+            authorization_endpoint: `${this.config.serverUrl}/authorize`,
+            token_endpoint: `${this.config.serverUrl}/token`,
             userinfo_endpoint: `${this.config.serverUrl}/userinfo`,
             introspection_endpoint: `${this.config.serverUrl}/introspect`,
             revocation_endpoint: `${this.config.serverUrl}/revoke`,
