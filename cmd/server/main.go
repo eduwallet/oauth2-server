@@ -525,11 +525,11 @@ func initializeOAuth2Provider() error {
 	}
 	log.Printf("✅ Fosite config created")
 
-	// Set up custom client authentication strategy for attestation support
-	if attestationManager != nil {
-		authStrategy := auth.NewAttestationClientAuthStrategy(attestationManager, customStorage, configuration)
+	// Set up custom client authentication strategy for attestation and proxy mode support
+	if attestationManager != nil || configuration.IsProxyMode() {
+		authStrategy := auth.NewClientAuthStrategy(attestationManager, customStorage, configuration)
 		config.ClientAuthenticationStrategy = authStrategy
-		log.Printf("✅ Custom attestation client authentication strategy configured")
+		log.Printf("✅ Custom client authentication strategy configured")
 	}
 
 	// Setup the RFC8693 handler...

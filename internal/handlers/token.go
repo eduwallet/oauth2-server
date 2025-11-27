@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,10 +23,9 @@ import (
 
 // Context key type for Fosite client
 type fositeClientKey string
-type proxyTokenKey string
 
 const clientContextKey fositeClientKey = "client"
-const proxyTokenContextKey proxyTokenKey = "proxy_token"
+const proxyTokenContextKey = "proxy_token"
 
 // TokenHandler manages OAuth2 token requests using pure fosite implementation
 type TokenHandler struct {
@@ -837,8 +837,8 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 
-			// Check if downstream client supports proxy token creation (not public)
-			canCreateProxyToken := !downstreamClient.IsPublic()
+			// Check if downstream client supports proxy token creation (always create in proxy mode)
+			canCreateProxyToken := true
 
 			if canCreateProxyToken {
 				h.Log.Debugf("🔄 [PROXY] Received upstream access token, issuing proxy token for confidential client")
@@ -857,10 +857,53 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 					upstreamExpiresIn = int64(expiresIn)
 				}
 
+				// Try to parse upstream token as JWT to get user subject for authorization_code
+				if grantType == "authorization_code" && strings.Count(upstreamAccessToken, ".") == 2 {
+					// Looks like JWT
+					parts := strings.Split(upstreamAccessToken, ".")
+					if len(parts) == 3 {
+						payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+						if err == nil {
+							var claims map[string]interface{}
+							if err := json.Unmarshal(payload, &claims); err == nil {
+								if sub, ok := claims["sub"].(string); ok && sub != "" {
+									h.Log.Debugf("🔍 [PROXY] Parsed upstream JWT subject: %s", sub)
+								}
+							}
+						}
+					}
+				}
+
+				// Try to parse upstream token as JWT to get user subject for authorization_code
+				var upstreamSubject string
+				if grantType == "authorization_code" && strings.Count(upstreamAccessToken, ".") == 2 {
+					// Looks like JWT
+					parts := strings.Split(upstreamAccessToken, ".")
+					if len(parts) == 3 {
+						payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+						if err == nil {
+							var claims map[string]interface{}
+							if err := json.Unmarshal(payload, &claims); err == nil {
+								if sub, ok := claims["sub"].(string); ok && sub != "" {
+									upstreamSubject = sub
+									h.Log.Debugf("🔍 [PROXY] Parsed upstream JWT subject: %s", sub)
+								}
+							}
+						}
+					}
+				}
+
 				// Create a proxy session
 				proxySession := &openid.DefaultSession{}
-				proxySession.Subject = clientID // Use downstream client ID as subject
+				proxySession.Subject = clientID // Default to client ID
 				proxySession.Username = clientID
+
+				// For authorization_code, set subject from upstream token if available
+				if grantType == "authorization_code" && upstreamSubject != "" {
+					proxySession.Subject = upstreamSubject
+					proxySession.Username = upstreamSubject
+					h.Log.Debugf("🔍 [PROXY] Set proxy session subject to upstream user: %s", upstreamSubject)
+				}
 
 				// Initialize claims if nil
 				if proxySession.Claims == nil {
@@ -892,10 +935,12 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 				proxyReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 				proxyReq = proxyReq.WithContext(r.Context())
 
-				// Set proxy context and client for simplified authentication
+				// Set proxy context and client
 				proxyCtx := context.WithValue(proxyReq.Context(), clientContextKey, downstreamClient)
 				proxyCtx = context.WithValue(proxyCtx, proxyTokenContextKey, true)
 				proxyReq = proxyReq.WithContext(proxyCtx)
+
+				h.Log.Infof("🔄 [PROXY] Context has proxy_token: %v", proxyReq.Context().Value(proxyTokenContextKey))
 
 				h.Log.Debugf("🔄 [PROXY] Creating proxy access request with client_credentials grant")
 
@@ -966,12 +1011,16 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 					}
 				}
 
-				// Copy response headers and status
+				// Copy response headers and status (excluding Content-Length since we're modifying the body)
 				for k, vv := range resp.Header {
+					if strings.ToLower(k) == "content-length" {
+						continue // Skip Content-Length as we're modifying the body
+					}
 					for _, v := range vv {
 						w.Header().Add(k, v)
 					}
 				}
+				w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 				w.WriteHeader(resp.StatusCode)
 
 				// Write modified response body back to client
@@ -988,8 +1037,11 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 
 	// For cases where no upstream access token is present, return upstream response directly
 	h.Log.Debugf("ℹ️ [PROXY] Returning upstream response directly (no access token to proxy)")
-	// Copy response headers and status
+	// Copy response headers and status (excluding Content-Length to avoid mismatch)
 	for k, vv := range resp.Header {
+		if strings.ToLower(k) == "content-length" {
+			continue // Skip Content-Length to let HTTP library calculate it
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}

@@ -230,8 +230,6 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	h.log.Printf("✅ [REGISTRATION] Client secret handling completed")
 
 	// Handle attestation config for updates
-
-	// Handle attestation config for updates
 	var finalAttestationConfig *config.ClientAttestationConfig
 	if metadata.AttestationConfig != nil {
 		h.log.Printf("🔍 [REGISTRATION] Attestation config provided in request")
@@ -251,19 +249,6 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	if len(grantTypes) == 0 {
 		grantTypes = []string{"authorization_code"}
 		h.log.Printf("🔍 [REGISTRATION] Applied default grant types: %v", grantTypes)
-	}
-
-	// Add 'client_credentials' grant type if attestation config is present
-	if finalAttestationConfig != nil && !contains(grantTypes, "client_credentials") {
-		grantTypes = append(grantTypes, "client_credentials")
-		h.log.Printf("🔍 [REGISTRATION] Added 'client_credentials' grant type due to attestation config")
-	}
-
-	// Add 'client_credentials' grant type if running in proxy mode (needed for proxy token creation)
-	h.log.Printf("🔍 [REGISTRATION] Checking proxy mode: config=%v, IsProxyMode=%v", h.config != nil, h.config != nil && h.config.IsProxyMode())
-	if h.config != nil && !contains(grantTypes, "client_credentials") {
-		grantTypes = append(grantTypes, "client_credentials")
-		h.log.Printf("🔍 [REGISTRATION] Added 'client_credentials' grant type due to proxy mode")
 	}
 
 	responseTypes := metadata.ResponseTypes

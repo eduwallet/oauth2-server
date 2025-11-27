@@ -16,19 +16,20 @@ import (
 )
 
 type fositeClientKey string
-type proxyTokenKey string
 
-// AttestationClientAuthStrategy implements a composite client authentication strategy
+const proxyTokenContextKey = "proxy_token"
+
+// ClientAuthStrategy implements a composite client authentication strategy
 // that handles attestation-based authentication and standard OAuth2 client authentication
-type AttestationClientAuthStrategy struct {
+type ClientAuthStrategy struct {
 	AttestationManager *attestation.VerifierManager
 	Storage            store.Storage
 	Config             *config.Config
 }
 
-// NewAttestationClientAuthStrategy creates a new composite client authentication strategy
-func NewAttestationClientAuthStrategy(attestationManager *attestation.VerifierManager, storage store.Storage, config *config.Config) fosite.ClientAuthenticationStrategy {
-	strategy := &AttestationClientAuthStrategy{
+// NewClientAuthStrategy creates a new composite client authentication strategy
+func NewClientAuthStrategy(attestationManager *attestation.VerifierManager, storage store.Storage, config *config.Config) fosite.ClientAuthenticationStrategy {
+	strategy := &ClientAuthStrategy{
 		AttestationManager: attestationManager,
 		Storage:            storage,
 		Config:             config,
@@ -38,11 +39,30 @@ func NewAttestationClientAuthStrategy(attestationManager *attestation.VerifierMa
 
 // AuthenticateClient implements the fosite.ClientAuthenticationStrategy interface
 // It handles attestation authentication and standard OAuth2 client authentication methods
-func (s *AttestationClientAuthStrategy) AuthenticateClient(ctx context.Context, r *http.Request, form url.Values) (fosite.Client, error) {
+func (s *ClientAuthStrategy) AuthenticateClient(ctx context.Context, r *http.Request, form url.Values) (fosite.Client, error) {
+	// Handle proxy token creation
+	if ctx.Value(proxyTokenContextKey) != nil {
+		clientID := form.Get("client_id")
+		if clientID != "" {
+			client, err := s.Storage.GetClient(ctx, clientID)
+			if err != nil {
+				return nil, fosite.ErrInvalidClient.WithHint("Unknown client")
+			}
+			// For public clients, wrap to make them appear confidential
+			if client.IsPublic() {
+				wrappedClient := &PublicClientWrapper{
+					Client: client,
+				}
+				return wrappedClient, nil
+			}
+			return client, nil
+		}
+	}
+
 	clientID := form.Get("client_id")
 
 	// Check if this is a proxy token creation request - skip authentication in that case
-	if ctx.Value(proxyTokenKey("proxy_token")) != nil {
+	if ctx.Value(proxyTokenContextKey) != nil {
 		if clientID != "" {
 			client, err := s.Storage.GetClient(ctx, clientID)
 			if err != nil {
@@ -87,7 +107,7 @@ func (s *AttestationClientAuthStrategy) AuthenticateClient(ctx context.Context, 
 	if client := ctx.Value(fositeClientKey("client")); client != nil {
 		if fositeClient, ok := client.(fosite.Client); ok {
 			// For proxy tokens, wrap public clients to make them appear confidential
-			if ctx.Value(proxyTokenKey("proxy_token")) != nil && fositeClient.IsPublic() {
+			if ctx.Value(proxyTokenContextKey) != nil && fositeClient.IsPublic() {
 				wrappedClient := &PublicClientWrapper{
 					Client: fositeClient,
 				}
@@ -136,6 +156,16 @@ func (w *PublicClientWrapper) IsPublic() bool {
 	return false
 }
 
+// GetHashedSecret returns a fake secret for proxy token creation
+func (w *PublicClientWrapper) GetHashedSecret() []byte {
+	return []byte("$2a$10$fakehashforproxyclient")
+}
+
+// GetTokenEndpointAuthMethod returns client_secret_basic for proxy token creation
+func (w *PublicClientWrapper) GetTokenEndpointAuthMethod() string {
+	return "client_secret_basic"
+}
+
 // AttestationClientWrapper wraps a fosite client to override IsPublic for attestation-authenticated clients
 type AttestationClientWrapper struct {
 	fosite.Client
@@ -151,7 +181,7 @@ func (w *AttestationClientWrapper) IsPublic() bool {
 }
 
 // authenticateWithAttestation handles attestation-based client authentication
-func (s *AttestationClientAuthStrategy) authenticateWithAttestation(ctx context.Context, form url.Values, authMethod string) (fosite.Client, error) {
+func (s *ClientAuthStrategy) authenticateWithAttestation(ctx context.Context, form url.Values, authMethod string) (fosite.Client, error) {
 	clientID := form.Get("client_id")
 
 	// Get the appropriate verifier
@@ -214,7 +244,7 @@ func (s *AttestationClientAuthStrategy) authenticateWithAttestation(ctx context.
 }
 
 // authenticateStandard handles standard OAuth2 client authentication methods
-func (s *AttestationClientAuthStrategy) authenticateStandard(ctx context.Context, r *http.Request, form url.Values) (fosite.Client, error) {
+func (s *ClientAuthStrategy) authenticateStandard(ctx context.Context, r *http.Request, form url.Values) (fosite.Client, error) {
 	clientID := form.Get("client_id")
 
 	// Method 1: HTTP Basic Authentication
@@ -303,7 +333,7 @@ func (s *AttestationClientAuthStrategy) authenticateStandard(ctx context.Context
 }
 
 // determineAuthMethod determines the attestation authentication method from the form
-func (s *AttestationClientAuthStrategy) determineAuthMethod(form url.Values) string {
+func (s *ClientAuthStrategy) determineAuthMethod(form url.Values) string {
 	clientID := form.Get("client_id")
 
 	// Check for JWT attestation

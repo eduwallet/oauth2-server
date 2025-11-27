@@ -30,7 +30,7 @@ proxy:
   - "192.168.0.0/16"
 
 logging:
-  level: "info"
+  level: "debug"
   format: "text"
   enable_audit: true
 

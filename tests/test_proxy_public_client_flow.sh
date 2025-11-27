@@ -30,6 +30,8 @@ STEP3_PASS=false
 STEP4_PASS=false
 STEP5_PASS=false
 STEP6_PASS=false
+STEP7_PASS=false
+STEP8_PASS=false
 
 # Function to print status
 print_status() {
@@ -69,6 +71,7 @@ import json
 import urllib.parse
 import uuid
 import time
+import base64
 import base64
 
 class MockOAuthProvider(http.server.BaseHTTPRequestHandler):
@@ -232,6 +235,47 @@ class MockOAuthProvider(http.server.BaseHTTPRequestHandler):
                     self.end_headers()
                     error_response = {"error": "invalid_grant"}
                     self.wfile.write(json.dumps(error_response).encode())
+            elif grant_type == "client_credentials":
+                # Check basic auth
+                auth_header = self.headers.get('Authorization', '')
+                if not auth_header.startswith('Basic '):
+                    self.send_response(401)
+                    self.send_header('WWW-Authenticate', 'Basic realm="token"')
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "invalid_client"}')
+                    return
+
+                # Decode basic auth
+                try:
+                    encoded_creds = auth_header[6:]  # Remove 'Basic '
+                    decoded_creds = base64.b64decode(encoded_creds).decode('utf-8')
+                    client_id, client_secret = decoded_creds.split(':', 1)
+                except:
+                    self.send_response(401)
+                    self.send_header('WWW-Authenticate', 'Basic realm="token"')
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "invalid_client"}')
+                    return
+
+                # Mock validation - accept any client_id/secret for demo
+                if client_id and client_secret:
+                    # Issue token
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    token_response = {
+                        "access_token": f"mock_cc_token_{uuid.uuid4().hex}",
+                        "token_type": "bearer",
+                        "expires_in": 3600,
+                        "scope": "openid profile email"
+                    }
+                    self.wfile.write(json.dumps(token_response).encode())
+                    print(f"DEBUG: Issued client_credentials token for client: {client_id}")
+                else:
+                    self.send_response(401)
+                    self.send_header('WWW-Authenticate', 'Basic realm="token"')
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "invalid_client"}')
             else:
                 # Handle other grant types
                 self.send_response(200)
@@ -357,7 +401,7 @@ if lsof -i :8080 > /dev/null 2>&1; then
 fi
 
 # Start the OAuth2 server in proxy mode with the mock provider
-UPSTREAM_PROVIDER_URL="$MOCK_PROVIDER_URL" UPSTREAM_CLIENT_ID="mock-client-id" UPSTREAM_CLIENT_SECRET="mock-client-secret" UPSTREAM_CALLBACK_URL="$SERVER_URL/callback" API_KEY="$API_KEY" ./bin/oauth2-server > server.log 2>&1 &
+UPSTREAM_PROVIDER_URL="$MOCK_PROVIDER_URL" UPSTREAM_CLIENT_ID="mock-client-id" UPSTREAM_CLIENT_SECRET="mock-client-secret" UPSTREAM_CALLBACK_URL="$SERVER_URL/callback" API_KEY="$API_KEY" LOG_LEVEL=debug ./bin/oauth2-server > server.log 2>&1 &
 SERVER_PID=$!
 echo $SERVER_PID > server.pid
 
@@ -375,23 +419,56 @@ fi
 print_status "success" "OAuth2 server started in proxy mode"
 echo ""
 
-echo "🧪 Step 2: Registering public client for proxy authorization code flow..."
+echo "🧪 Step 2a: Registering confidential client for introspection..."
 
-# Register a public client for authorization code testing
-REGISTER_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
+# Register a confidential client for introspection
+CONFIDENTIAL_REGISTER_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "client_name": "Proxy Public Client Test",
-    "grant_types": ["authorization_code"],
-    "response_types": ["code"],
-    "token_endpoint_auth_method": "none",
+    "client_name": "Confidential Introspection Client",
+    "grant_types": ["client_credentials"],
+    "response_types": ["token"],
+    "token_endpoint_auth_method": "client_secret_basic",
     "scope": "openid profile email",
-    "redirect_uris": ["http://localhost:8080/oauth/callback"],
-    "public": true
+    "public": false
   }')
 
-echo "Client Registration Response: $REGISTER_RESPONSE"
+echo "Confidential Client Registration Response: $CONFIDENTIAL_REGISTER_RESPONSE"
+
+# Extract client ID and secret from registration response
+CONFIDENTIAL_CLIENT_ID=$(echo "$CONFIDENTIAL_REGISTER_RESPONSE" | jq -r '.client_id // empty' 2>/dev/null || echo "")
+CONFIDENTIAL_CLIENT_SECRET=$(echo "$CONFIDENTIAL_REGISTER_RESPONSE" | jq -r '.client_secret // empty' 2>/dev/null || echo "")
+
+if [ -z "$CONFIDENTIAL_CLIENT_ID" ] || [ -z "$CONFIDENTIAL_CLIENT_SECRET" ]; then
+    print_status "error" "Failed to register confidential test client"
+    echo "Response: $CONFIDENTIAL_REGISTER_RESPONSE"
+    exit 1
+fi
+
+print_status "success" "Confidential client registered successfully"
+echo "   Client ID: $CONFIDENTIAL_CLIENT_ID"
+echo "   Client Secret: ${CONFIDENTIAL_CLIENT_SECRET:0:10}..."
+echo ""
+
+echo "🧪 Step 2b: Registering public client for proxy authorization code flow..."
+
+# Register a public client for authorization code testing, including confidential client in audience
+REGISTER_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"client_name\": \"Proxy Public Client Test\",
+    \"grant_types\": [\"authorization_code\"],
+    \"response_types\": [\"code\"],
+    \"token_endpoint_auth_method\": \"none\",
+    \"scope\": \"openid profile email\",
+    \"redirect_uris\": [\"http://localhost:8080/oauth/callback\"],
+    \"audience\": [\"$CONFIDENTIAL_CLIENT_ID\"],
+    \"public\": true
+  }")
+
+echo "Public Client Registration Response: $REGISTER_RESPONSE"
 
 # Extract client ID from registration response
 TEST_CLIENT_ID=$(echo "$REGISTER_RESPONSE" | jq -r '.client_id // empty' 2>/dev/null || echo "")
@@ -405,6 +482,7 @@ fi
 print_status "success" "Public client registered successfully"
 echo "   Client ID: $TEST_CLIENT_ID"
 echo "   Public: true (no client secret)"
+echo "   Audience includes: $CONFIDENTIAL_CLIENT_ID"
 echo ""
 
 echo "🧪 Step 3: Testing proxy public client authorization code flow..."
@@ -543,19 +621,64 @@ fi
 
 echo ""
 
+echo "🧪 Step 7: Testing authorization introspection with confidential client..."
+
+# Call authorization introspection endpoint with the confidential client
+INTROSPECTION_RESPONSE=$(curl -s -X POST "$SERVER_URL/authorization-introspection" \
+    -u "$CONFIDENTIAL_CLIENT_ID:$CONFIDENTIAL_CLIENT_SECRET" \
+    -d "access-token=$ACCESS_TOKEN")
+
+echo "Introspection Response: $INTROSPECTION_RESPONSE"
+
+# Validate introspection response
+INTROSPECTION_ACTIVE=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token-details"].active // empty' 2>/dev/null || echo "")
+INTROSPECTION_CLIENT_ID=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token-details"].client_id // empty' 2>/dev/null || echo "")
+
+if [ "$INTROSPECTION_ACTIVE" = "true" ] && [ "$INTROSPECTION_CLIENT_ID" = "$TEST_CLIENT_ID" ]; then
+    print_status "success" "Authorization introspection returned correct token details"
+    STEP7_PASS=true
+else
+    print_status "error" "Authorization introspection returned incorrect data"
+    echo "Expected active: true"
+    echo "Actual active: $INTROSPECTION_ACTIVE"
+    echo "Expected client_id: $TEST_CLIENT_ID"
+    echo "Actual client_id: $INTROSPECTION_CLIENT_ID"
+    exit 1
+fi
+
+# Check if response contains token-details
+if echo "$INTROSPECTION_RESPONSE" | jq -e '.["token-details"]' > /dev/null; then
+  echo "✅ Response contains token-details"
+else
+  echo "❌ Response missing token-details"
+  exit 1
+fi
+
+# Check if response contains user-info
+if echo "$INTROSPECTION_RESPONSE" | jq -e '.["user-info"]' > /dev/null; then
+  echo "✅ Response contains user-info"
+else
+  echo "❌ Response missing user-info"
+  exit 1
+fi
+
+echo ""
+
 echo ""
 
 echo "📊 Proxy Public Client Flow Test Results Summary"
 echo "================================================"
 echo "Step 1 (OAuth2 server in proxy mode): ✅ PASS"
-echo "Step 2 (Public client registration): ✅ PASS"
+echo "Step 2a (Confidential client registration): ✅ PASS"
+echo "Step 2b (Public client registration): ✅ PASS"
 echo "Step 3 (Proxy authorization redirect): $([ "$STEP3_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 echo "Step 4 (Upstream login and code exchange): $([ "$STEP4_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 echo "Step 5 (Token exchange): $([ "$STEP5_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 echo "Step 6 (UserInfo endpoint): $([ "$STEP6_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
+echo "Step 7 (Authorization introspection): $([ "$STEP7_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 
 # Overall result
-if [ "$STEP3_PASS" = true ] && [ "$STEP4_PASS" = true ] && [ "$STEP5_PASS" = true ] && [ "$STEP6_PASS" = true ]; then
+if [ "$STEP3_PASS" = true ] && [ "$STEP4_PASS" = true ] && [ "$STEP5_PASS" = true ] && [ "$STEP6_PASS" = true ] && [ "$STEP7_PASS" = true ]; then
     echo ""
     print_status "success" "Proxy public client authorization code flow test PASSED!"
     echo "   ✅ Public client authorization requests are correctly forwarded to upstream provider"
@@ -563,6 +686,7 @@ if [ "$STEP3_PASS" = true ] && [ "$STEP4_PASS" = true ] && [ "$STEP5_PASS" = tru
     echo "   ✅ PKCE parameters are properly passed through to upstream"
     echo "   ✅ Authorization code exchange returns valid access token"
     echo "   ✅ UserInfo endpoint returns correct user data from upstream"
+    echo "   ✅ Confidential client can introspect public client's access token"
     exit 0
 else
     echo ""
