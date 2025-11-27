@@ -1014,8 +1014,10 @@ type Storage interface {
 	// Secure client data storage methods
 	StoreClientSecret(ctx context.Context, clientID string, encryptedSecret string) error
 	GetClientSecret(ctx context.Context, clientID string) (string, error)
+	DeleteClientSecret(ctx context.Context, clientID string) error
 	StoreAttestationConfig(ctx context.Context, clientID string, config *config.ClientAttestationConfig) error
 	GetAttestationConfig(ctx context.Context, clientID string) (*config.ClientAttestationConfig, error)
+	DeleteAttestationConfig(ctx context.Context, clientID string) error
 
 	// Trust anchor storage methods
 	StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error
@@ -1204,6 +1206,18 @@ func (m *MemoryStoreWrapper) GetAttestationConfig(ctx context.Context, clientID 
 	}
 	m.logger.Warnf("⚠️  [MEMORY STORE] Retrieved attestation config from memory for client %s - this data is not persistent", clientID)
 	return config, nil
+}
+
+func (m *MemoryStoreWrapper) DeleteClientSecret(ctx context.Context, clientID string) error {
+	delete(m.clientSecrets, clientID)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Client secret deleted from memory for client %s", clientID)
+	return nil
+}
+
+func (m *MemoryStoreWrapper) DeleteAttestationConfig(ctx context.Context, clientID string) error {
+	delete(m.attestationConfigs, clientID)
+	m.logger.Warnf("⚠️  [MEMORY STORE] Attestation config deleted from memory for client %s", clientID)
+	return nil
 }
 
 // Trust anchor storage methods
@@ -1922,6 +1936,22 @@ func (s *SQLiteStore) GetAttestationConfig(ctx context.Context, clientID string)
 	}
 
 	return &config, nil
+}
+
+func (s *SQLiteStore) DeleteClientSecret(ctx context.Context, clientID string) error {
+	_, err := s.db.Exec(
+		"UPDATE clients SET encrypted_secret = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		clientID,
+	)
+	return err
+}
+
+func (s *SQLiteStore) DeleteAttestationConfig(ctx context.Context, clientID string) error {
+	_, err := s.db.Exec(
+		"UPDATE clients SET attestation_config = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		clientID,
+	)
+	return err
 }
 
 // Trust anchor storage methods

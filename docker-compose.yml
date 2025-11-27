@@ -35,7 +35,7 @@ services:
       - UPSTREAM_CLIENT_SECRET=${UPSTREAM_CLIENT_SECRET}
       - UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
 
-      - DATABASE_TYPE=memory
+      - DATABASE_TYPE=sqlite
       - DATABASE_PATH=/app/oauth2.db
       
       - API_KEY=${API_KEY}

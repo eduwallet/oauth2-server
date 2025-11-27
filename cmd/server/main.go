@@ -655,6 +655,7 @@ func setupRoutes() {
 
 	// Registration endpoints
 	http.Handle("/register", protectedMiddleware(log, configuration.Security.APIKey, configuration.Security.EnableRegistrationAPI)(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
+	http.Handle("/register/", protectedMiddleware(log, configuration.Security.APIKey, configuration.Security.EnableRegistrationAPI)(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
 
 	// Trust anchor management endpoints
 	http.Handle("/trust-anchor/", protectedMiddleware(log, configuration.Security.APIKey, configuration.Security.EnableTrustAnchorAPI)(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -699,6 +700,9 @@ func setupRoutes() {
 
 	// Claims display endpoints
 	http.Handle("/claims", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(claimsHandler.ServeHTTP))))
+
+	// Root status page
+	http.Handle("/", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(statusHandler.ServeHTTP))))
 
 	http.Handle("/status", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(statusHandler.ServeHTTP))))
 

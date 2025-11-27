@@ -97,6 +97,18 @@ func (s *CustomStorage) DeleteClient(ctx context.Context, id string) error {
 	return nil
 }
 
+func (s *CustomStorage) ListClients(ctx context.Context) ([]fosite.Client, error) {
+	s.logger.Debugf("🔍 CustomStorage.ListClients: listing all clients")
+
+	clients := make([]fosite.Client, 0, len(s.Clients))
+	for _, client := range s.Clients {
+		clients = append(clients, client)
+	}
+
+	s.logger.Debugf("✅ CustomStorage.ListClients: found %d clients", len(clients))
+	return clients, nil
+}
+
 func (s *CustomStorage) CreateUser(ctx context.Context, id string, user *storage.MemoryUserRelation) error {
 	s.Users[id] = *user
 	return nil
@@ -497,6 +509,26 @@ func (s *CustomStorage) GetAttestationConfig(ctx context.Context, clientID strin
 		return store.GetAttestationConfig(ctx, clientID)
 	}
 	return nil, fmt.Errorf("underlying store does not support attestation config storage")
+}
+
+func (s *CustomStorage) DeleteClientSecret(ctx context.Context, clientID string) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.DeleteClientSecret(ctx, clientID)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.DeleteClientSecret(ctx, clientID)
+	}
+	return fmt.Errorf("underlying store does not support client secret deletion")
+}
+
+func (s *CustomStorage) DeleteAttestationConfig(ctx context.Context, clientID string) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.DeleteAttestationConfig(ctx, clientID)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.DeleteAttestationConfig(ctx, clientID)
+	}
+	return fmt.Errorf("underlying store does not support attestation config deletion")
 }
 
 // Trust anchor storage methods
