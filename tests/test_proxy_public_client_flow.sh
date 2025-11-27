@@ -506,8 +506,12 @@ echo "🔐 PKCE Code Challenge: ${CODE_CHALLENGE:0:20}..."
 STATE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
 echo "🎲 State: ${STATE:0:20}..."
 
+# Generate issuer state
+ISSUER_STATE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+echo "🎲 Issuer State: ${ISSUER_STATE:0:20}..."
+
 # Build authorization URL for proxy
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=http://localhost:8080/oauth/callback&state=$STATE&scope=openid&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=http://localhost:8080/oauth/callback&state=$STATE&scope=openid&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256&issuer_state=$ISSUER_STATE"
 
 echo "🔗 Proxy Authorization URL: $AUTH_URL"
 
@@ -540,6 +544,16 @@ fi
 
 echo "🔗 Upstream Authorization URL: $UPSTREAM_AUTH_URL"
 
+# Extract state from upstream URL
+UPSTREAM_STATE=$(echo "$UPSTREAM_AUTH_URL" | sed 's/.*state=\([^&]*\).*/\1/')
+
+if [ -z "$UPSTREAM_STATE" ]; then
+    print_status "error" "Could not extract state from upstream authorization URL"
+    exit 1
+fi
+
+echo "🎲 Upstream State: $UPSTREAM_STATE"
+
 # Simulate login by POSTing to upstream /authorize
 UPSTREAM_LOGIN_RESPONSE=$(curl -s -i -X POST "$UPSTREAM_AUTH_URL" \
     --data-urlencode "username=$TEST_USERNAME" \
@@ -547,7 +561,7 @@ UPSTREAM_LOGIN_RESPONSE=$(curl -s -i -X POST "$UPSTREAM_AUTH_URL" \
     --data-urlencode "response_type=code" \
     --data-urlencode "client_id=mock-client-id" \
     --data-urlencode "redirect_uri=$SERVER_URL/callback" \
-    --data-urlencode "state=$STATE" \
+    --data-urlencode "state=$UPSTREAM_STATE" \
     --data-urlencode "scope=openid" \
     --data-urlencode "code_challenge=$CODE_CHALLENGE" \
     --data-urlencode "code_challenge_method=S256")
@@ -561,17 +575,37 @@ else
     exit 1
 fi
 
-# Extract authorization code from callback redirect
+# Extract callback URL from upstream redirect
 CALLBACK_URL=$(echo "$UPSTREAM_LOGIN_RESPONSE" | grep -i "Location:" | sed 's/.*Location: //' | tr -d '\r\n')
-AUTH_CODE=$(echo "$CALLBACK_URL" | sed 's/.*code=\([^&]*\).*/\1/')
 
-if [ -z "$AUTH_CODE" ]; then
-    print_status "error" "Could not extract authorization code from callback URL"
+if [ -z "$CALLBACK_URL" ]; then
+    print_status "error" "Could not extract callback URL from upstream response"
     exit 1
 fi
 
-print_status "success" "Authorization code obtained: ${AUTH_CODE:0:20}..."
-STEP4_PASS=true
+print_status "success" "Upstream login successful - redirecting to proxy callback: ${CALLBACK_URL:0:80}..."
+
+# Follow the redirect to the proxy callback to trigger the callback handler
+CALLBACK_RESPONSE=$(curl -s -i "$CALLBACK_URL")
+
+# The callback should redirect back to the client redirect URI with the authorization code
+if echo "$CALLBACK_RESPONSE" | grep -q "302 Found" && echo "$CALLBACK_RESPONSE" | grep -q "Location:"; then
+    CLIENT_REDIRECT_URL=$(echo "$CALLBACK_RESPONSE" | grep -i "Location:" | sed 's/.*Location: //' | tr -d '\r\n')
+    AUTH_CODE=$(echo "$CLIENT_REDIRECT_URL" | sed 's/.*code=\([^&]*\).*/\1/')
+    
+    if [ -z "$AUTH_CODE" ]; then
+        print_status "error" "Could not extract authorization code from client redirect URL"
+        echo "Callback response: $CALLBACK_RESPONSE"
+        exit 1
+    fi
+    
+    print_status "success" "Authorization code obtained: ${AUTH_CODE:0:20}..."
+    STEP4_PASS=true
+else
+    print_status "error" "Expected redirect from callback to client redirect URI"
+    echo "Callback response: $CALLBACK_RESPONSE"
+    exit 1
+fi
 
 echo ""
 
@@ -631,11 +665,12 @@ INTROSPECTION_RESPONSE=$(curl -s -X POST "$SERVER_URL/authorization-introspectio
 echo "Introspection Response: $INTROSPECTION_RESPONSE"
 
 # Validate introspection response
-INTROSPECTION_ACTIVE=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token-details"].active // empty' 2>/dev/null || echo "")
-INTROSPECTION_CLIENT_ID=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token-details"].client_id // empty' 2>/dev/null || echo "")
+INTROSPECTION_ACTIVE=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token_details"].active // empty' 2>/dev/null || echo "")
+INTROSPECTION_CLIENT_ID=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token_details"].client_id // empty' 2>/dev/null || echo "")
+INTROSPECTION_ISSUER_STATE=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token_details"].issuer_state // empty' 2>/dev/null || echo "")
 
-if [ "$INTROSPECTION_ACTIVE" = "true" ] && [ "$INTROSPECTION_CLIENT_ID" = "$TEST_CLIENT_ID" ]; then
-    print_status "success" "Authorization introspection returned correct token details"
+if [ "$INTROSPECTION_ACTIVE" = "true" ] && [ "$INTROSPECTION_CLIENT_ID" = "$TEST_CLIENT_ID" ] && [ "$INTROSPECTION_ISSUER_STATE" = "$ISSUER_STATE" ]; then
+    print_status "success" "Authorization introspection returned correct token details including issuer_state"
     STEP7_PASS=true
 else
     print_status "error" "Authorization introspection returned incorrect data"
@@ -643,22 +678,24 @@ else
     echo "Actual active: $INTROSPECTION_ACTIVE"
     echo "Expected client_id: $TEST_CLIENT_ID"
     echo "Actual client_id: $INTROSPECTION_CLIENT_ID"
+    echo "Expected issuer_state: $ISSUER_STATE"
+    echo "Actual issuer_state: $INTROSPECTION_ISSUER_STATE"
     exit 1
 fi
 
-# Check if response contains token-details
-if echo "$INTROSPECTION_RESPONSE" | jq -e '.["token-details"]' > /dev/null; then
-  echo "✅ Response contains token-details"
+# Check if response contains token_details
+if echo "$INTROSPECTION_RESPONSE" | jq -e '.["token_details"]' > /dev/null; then
+  echo "✅ Response contains token_details"
 else
-  echo "❌ Response missing token-details"
+  echo "❌ Response missing token_details"
   exit 1
 fi
 
-# Check if response contains user-info
-if echo "$INTROSPECTION_RESPONSE" | jq -e '.["user-info"]' > /dev/null; then
-  echo "✅ Response contains user-info"
+# Check if response contains user_info
+if echo "$INTROSPECTION_RESPONSE" | jq -e '.["user_info"]' > /dev/null; then
+  echo "✅ Response contains user_info"
 else
-  echo "❌ Response missing user-info"
+  echo "❌ Response missing user_info"
   exit 1
 fi
 

@@ -315,6 +315,12 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		h.log.Printf("🔍 [REGISTRATION] No scope provided")
 	}
 
+	// Always include "openid" scope
+	if !contains(scopes, "openid") {
+		scopes = append(scopes, "openid")
+		h.log.Printf("🔍 [REGISTRATION] Added 'openid' to scopes: %v", scopes)
+	}
+
 	// Convert audience string to array if provided
 	var audience []string
 	if len(metadata.Audience) != 0 {

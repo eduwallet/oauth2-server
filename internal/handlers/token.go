@@ -29,15 +29,16 @@ const proxyTokenContextKey = "proxy_token"
 
 // TokenHandler manages OAuth2 token requests using pure fosite implementation
 type TokenHandler struct {
-	OAuth2Provider          fosite.OAuth2Provider
-	Configuration           *config.Config
-	Log                     *logrus.Logger
-	Metrics                 *metrics.MetricsCollector
-	AttestationManager      *attestation.VerifierManager
-	Storage                 store.Storage
-	SecretManager           *store.SecretManager
-	AuthCodeToStateMap      *map[string]string
-	DeviceCodeToUpstreamMap *map[string]string
+	OAuth2Provider              fosite.OAuth2Provider
+	Configuration               *config.Config
+	Log                         *logrus.Logger
+	Metrics                     *metrics.MetricsCollector
+	AttestationManager          *attestation.VerifierManager
+	Storage                     store.Storage
+	SecretManager               *store.SecretManager
+	AuthCodeToStateMap          *map[string]string
+	DeviceCodeToUpstreamMap     *map[string]string
+	AccessTokenToIssuerStateMap *map[string]string
 }
 
 // NewTokenHandler creates a new TokenHandler
@@ -51,17 +52,19 @@ func NewTokenHandler(
 	secretManager *store.SecretManager,
 	authCodeToStateMap *map[string]string,
 	deviceCodeToUpstreamMap *map[string]string,
+	accessTokenToIssuerStateMap *map[string]string,
 ) *TokenHandler {
 	return &TokenHandler{
-		OAuth2Provider:          provider,
-		Configuration:           config,
-		Log:                     logger,
-		Metrics:                 metricsCollector,
-		AttestationManager:      attestationManager,
-		Storage:                 storage,
-		SecretManager:           secretManager,
-		AuthCodeToStateMap:      authCodeToStateMap,
-		DeviceCodeToUpstreamMap: deviceCodeToUpstreamMap,
+		OAuth2Provider:              provider,
+		Configuration:               config,
+		Log:                         logger,
+		Metrics:                     metricsCollector,
+		AttestationManager:          attestationManager,
+		Storage:                     storage,
+		SecretManager:               secretManager,
+		AuthCodeToStateMap:          authCodeToStateMap,
+		DeviceCodeToUpstreamMap:     deviceCodeToUpstreamMap,
+		AccessTokenToIssuerStateMap: accessTokenToIssuerStateMap,
 	}
 }
 
@@ -409,9 +412,14 @@ func (h *TokenHandler) storeAttestationInSession(ctx context.Context, session *o
 func (h *TokenHandler) storeIssuerStateInSession(r *http.Request, session *openid.DefaultSession) {
 	// Store issuer_state in session claims if available (for authorization code flow)
 	authCode := r.FormValue("code")
+	h.Log.Printf("🔍 storeIssuerStateInSession called with authCode: %s", authCode)
 	if authCode != "" && h.AuthCodeToStateMap != nil {
+		h.Log.Printf("🔍 AuthCodeToStateMap has %d entries", len(*h.AuthCodeToStateMap))
+		for k, v := range *h.AuthCodeToStateMap {
+			h.Log.Printf("🔍 Map entry: %s -> %s", k[:10]+"...", v[:10]+"...")
+		}
 		if issuerState, exists := (*h.AuthCodeToStateMap)[authCode]; exists {
-			h.Log.Debugf("🔍 Storing issuer_state in session claims: %s", issuerState)
+			h.Log.Printf("🔍 Found issuer_state in map: %s", issuerState)
 
 			// Initialize claims if nil
 			if session.Claims == nil {
@@ -422,10 +430,14 @@ func (h *TokenHandler) storeIssuerStateInSession(r *http.Request, session *openi
 			}
 
 			session.Claims.Extra["issuer_state"] = issuerState
-			h.Log.Debugf("✅ Stored issuer_state in session claims")
+			h.Log.Printf("✅ Stored issuer_state in session claims")
 			// Clean up the authorization code mapping
 			delete(*h.AuthCodeToStateMap, authCode)
+		} else {
+			h.Log.Printf("⚠️ issuer_state not found in AuthCodeToStateMap for authCode: %s", authCode)
 		}
+	} else {
+		h.Log.Printf("⚠️ No authCode or AuthCodeToStateMap is nil")
 	}
 }
 
@@ -986,6 +998,17 @@ func (h *TokenHandler) handleProxyToken(w http.ResponseWriter, r *http.Request) 
 				}
 
 				h.Log.Debugf("✅ [PROXY] Stored upstream token mapping for proxy token")
+
+				// Store issuer_state mapping for introspection
+				if issuerState, exists := proxySession.Claims.Extra["issuer_state"]; exists {
+					h.Log.Printf("🔍 issuer_state in session: %v (type: %T)", issuerState, issuerState)
+					if h.AccessTokenToIssuerStateMap != nil {
+						(*h.AccessTokenToIssuerStateMap)[proxyToken] = issuerState.(string)
+						h.Log.Printf("✅ [PROXY] Stored issuer_state mapping for proxy token: %s -> %s", proxyToken[:20], issuerState.(string))
+					}
+				} else {
+					h.Log.Printf("⚠️ issuer_state not found in proxy session")
+				}
 
 				// Replace upstream token with proxy token in response
 				tokenResponse["access_token"] = proxyToken

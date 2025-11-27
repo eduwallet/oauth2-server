@@ -20,25 +20,27 @@ import (
 
 // IntrospectionHandler manages token introspection requests
 type IntrospectionHandler struct {
-	OAuth2Provider          fosite.OAuth2Provider
-	Config                  *config.Config
-	Log                     *logrus.Logger
-	AttestationManager      *attestation.VerifierManager
-	Storage                 store.Storage
-	SecretManager           *store.SecretManager
-	PrivilegedClientSecrets map[string]string
+	OAuth2Provider              fosite.OAuth2Provider
+	Config                      *config.Config
+	Log                         *logrus.Logger
+	AttestationManager          *attestation.VerifierManager
+	Storage                     store.Storage
+	SecretManager               *store.SecretManager
+	PrivilegedClientSecrets     map[string]string
+	AccessTokenToIssuerStateMap *map[string]string
 }
 
 // NewIntrospectionHandler creates a new introspection handler
-func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, attestationManager *attestation.VerifierManager, storage store.Storage, secretManager *store.SecretManager, privilegedClientSecrets map[string]string) *IntrospectionHandler {
+func NewIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, attestationManager *attestation.VerifierManager, storage store.Storage, secretManager *store.SecretManager, privilegedClientSecrets map[string]string, accessTokenToIssuerStateMap *map[string]string) *IntrospectionHandler {
 	return &IntrospectionHandler{
-		OAuth2Provider:          oauth2Provider,
-		Config:                  config,
-		Log:                     log,
-		AttestationManager:      attestationManager,
-		Storage:                 storage,
-		SecretManager:           secretManager,
-		PrivilegedClientSecrets: privilegedClientSecrets,
+		OAuth2Provider:              oauth2Provider,
+		Config:                      config,
+		Log:                         log,
+		AttestationManager:          attestationManager,
+		Storage:                     storage,
+		SecretManager:               secretManager,
+		PrivilegedClientSecrets:     privilegedClientSecrets,
+		AccessTokenToIssuerStateMap: accessTokenToIssuerStateMap,
 	}
 }
 
@@ -414,6 +416,18 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				}
 			} else {
 				h.Log.Debugf("🔍 IntrospectionResponse type assertion failed")
+			}
+		}
+	}
+
+	// Add issuer_state from map if not present in response
+	if _, hasIssuerState := response["issuer_state"]; !hasIssuerState {
+		if h.AccessTokenToIssuerStateMap != nil {
+			if issuerState, exists := (*h.AccessTokenToIssuerStateMap)[token]; exists {
+				response["issuer_state"] = issuerState
+				h.Log.Debugf("🔍 Added issuer_state from map to introspection response: %s", issuerState)
+			} else {
+				h.Log.Debugf("🔍 No issuer_state found in map for token")
 			}
 		}
 	}

@@ -277,7 +277,7 @@ curl -X POST http://localhost:8080/authorization-introspection \
 **Response:**
 ```json
 {
-  "token-details": {
+  "token_details": {
     "active": true,
     "client_id": "web-app-client",
     "scope": "openid profile email",
@@ -288,7 +288,7 @@ curl -X POST http://localhost:8080/authorization-introspection \
     "iss": "http://localhost:8080",
     "sub": "user-001"
   },
-  "user-info": {
+  "user_info": {
     "sub": "user-001",
     "name": "John Doe",
     "email": "john.doe@example.com",

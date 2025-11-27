@@ -19,29 +19,31 @@ import (
 
 // AuthorizationIntrospectionHandler manages authorization introspection requests
 type AuthorizationIntrospectionHandler struct {
-	OAuth2Provider          fosite.OAuth2Provider
-	Config                  *config.Config
-	Log                     *logrus.Logger
-	Storage                 store.Storage
-	SecretManager           *store.SecretManager
-	PrivilegedClientSecrets map[string]string
+	OAuth2Provider              fosite.OAuth2Provider
+	Config                      *config.Config
+	Log                         *logrus.Logger
+	Storage                     store.Storage
+	SecretManager               *store.SecretManager
+	PrivilegedClientSecrets     map[string]string
+	AccessTokenToIssuerStateMap *map[string]string
 }
 
 // NewAuthorizationIntrospectionHandler creates a new authorization introspection handler
-func NewAuthorizationIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, storage store.Storage, secretManager *store.SecretManager, privilegedClientSecrets map[string]string) *AuthorizationIntrospectionHandler {
+func NewAuthorizationIntrospectionHandler(oauth2Provider fosite.OAuth2Provider, config *config.Config, log *logrus.Logger, storage store.Storage, secretManager *store.SecretManager, privilegedClientSecrets map[string]string, accessTokenToIssuerStateMap *map[string]string) *AuthorizationIntrospectionHandler {
 	return &AuthorizationIntrospectionHandler{
-		OAuth2Provider:          oauth2Provider,
-		Config:                  config,
-		Log:                     log,
-		Storage:                 storage,
-		SecretManager:           secretManager,
-		PrivilegedClientSecrets: privilegedClientSecrets,
+		OAuth2Provider:              oauth2Provider,
+		Config:                      config,
+		Log:                         log,
+		Storage:                     storage,
+		SecretManager:               secretManager,
+		PrivilegedClientSecrets:     privilegedClientSecrets,
+		AccessTokenToIssuerStateMap: accessTokenToIssuerStateMap,
 	}
 }
 
 // ServeHTTP handles authorization introspection requests
 func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("DEBUG: AuthorizationIntrospectionHandler.ServeHTTP called")
+	h.Log.Printf("🔍 AuthorizationIntrospectionHandler.ServeHTTP called")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -97,8 +99,8 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 		h.Log.Errorf("❌ Token is not active")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"token-details": tokenDetails,
-			"user-info":     nil,
+			"token_details": tokenDetails,
+			"user_info":     nil,
 		})
 		return
 	}
@@ -163,8 +165,8 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	// Return response
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"token-details": tokenDetails,
-		"user-info":     userInfo,
+		"token_details": tokenDetails,
+		"user_info":     userInfo,
 	})
 }
 
@@ -174,7 +176,6 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 	if len(tokenValue) < previewLen {
 		previewLen = len(tokenValue)
 	}
-	fmt.Printf("DEBUG: introspectTokenWithPrivilegedAccess called with token: %s\n", tokenValue[:previewLen]+"...")
 	h.Log.Printf("🔍 Starting privileged introspection for token: %s", tokenValue[:previewLen]+"...")
 
 	// Create a local introspection request that Fosite can handle
@@ -242,6 +243,24 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 	if err := json.Unmarshal(responseCapture.body.Bytes(), &response); err != nil {
 		h.Log.Errorf("❌ Failed to parse introspection response: %v", err)
 		return nil, fmt.Errorf("failed to parse introspection response: %w", err)
+	}
+
+	// Add issuer_state from map if not present in response
+	if _, hasIssuerState := response["issuer_state"]; !hasIssuerState {
+		h.Log.Printf("🔍 Looking up issuer_state for token: %s", tokenValue[:20])
+		if h.AccessTokenToIssuerStateMap != nil {
+			h.Log.Printf("🔍 Map has %d entries", len(*h.AccessTokenToIssuerStateMap))
+			if issuerState, exists := (*h.AccessTokenToIssuerStateMap)[tokenValue]; exists {
+				response["issuer_state"] = issuerState
+				h.Log.Printf("✅ Added issuer_state from map to introspection response: %v", issuerState)
+			} else {
+				h.Log.Printf("⚠️ issuer_state not found in map for token")
+			}
+		} else {
+			h.Log.Printf("⚠️ AccessTokenToIssuerStateMap is nil")
+		}
+	} else {
+		h.Log.Printf("ℹ️ issuer_state already present in response")
 	}
 
 	h.Log.Printf("✅ Privileged introspection completed successfully, active: %v", response["active"])

@@ -54,24 +54,24 @@ echo "$INTROSPECTION_RESPONSE" | jq '.'
 echo ""
 echo "📝 Step 3: Validating response structure..."
 
-# Check if response contains token-details
-if echo "$INTROSPECTION_RESPONSE" | jq -e '.["token-details"]' > /dev/null; then
-  echo "✅ Response contains token-details"
+# Check if response contains token_details
+if echo "$INTROSPECTION_RESPONSE" | jq -e '.["token_details"]' > /dev/null; then
+  echo "✅ Response contains token_details"
 else
-  echo "❌ Response missing token-details"
+  echo "❌ Response missing token_details"
   exit 1
 fi
 
-# Check if response contains user-info
-if echo "$INTROSPECTION_RESPONSE" | jq -e '.["user-info"]' > /dev/null; then
-  echo "✅ Response contains user-info"
+# Check if response contains user_info
+if echo "$INTROSPECTION_RESPONSE" | jq -e '.["user_info"]' > /dev/null; then
+  echo "✅ Response contains user_info"
 else
-  echo "❌ Response missing user-info"
+  echo "❌ Response missing user_info"
   exit 1
 fi
 
 # Check if token is active
-TOKEN_ACTIVE=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token-details"].active')
+TOKEN_ACTIVE=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token_details"].active')
 if [ "$TOKEN_ACTIVE" = "true" ]; then
   echo "✅ Token is active"
 else
@@ -80,7 +80,7 @@ else
 fi
 
 # Check if client_id matches
-RESPONSE_CLIENT_ID=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token-details"].client_id')
+RESPONSE_CLIENT_ID=$(echo "$INTROSPECTION_RESPONSE" | jq -r '.["token_details"].client_id')
 if [ "$RESPONSE_CLIENT_ID" = "$TOKEN_CLIENT_ID" ]; then
   echo "✅ Token client_id matches expected client ($TOKEN_CLIENT_ID)"
 else
@@ -104,7 +104,7 @@ echo "Invalid token response:"
 echo "$INVALID_RESPONSE" | jq '.'
 
 # Check if invalid token returns inactive status
-INVALID_ACTIVE=$(echo "$INVALID_RESPONSE" | jq -r '.["token-details"].active')
+INVALID_ACTIVE=$(echo "$INVALID_RESPONSE" | jq -r '.["token_details"].active')
 if [ "$INVALID_ACTIVE" = "false" ]; then
   echo "✅ Invalid token correctly returns inactive status"
 else
