@@ -531,7 +531,38 @@ func (s *CustomStorage) DeleteAttestationConfig(ctx context.Context, clientID st
 	return fmt.Errorf("underlying store does not support attestation config deletion")
 }
 
-// Trust anchor storage methods
+// Upstream token mapping methods for proxy mode
+func (s *CustomStorage) StoreUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string, upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+	}
+	return fmt.Errorf("underlying store does not support upstream token mapping storage")
+}
+
+func (s *CustomStorage) GetUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) (upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64, err error) {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	return "", "", "", 0, fmt.Errorf("underlying store does not support upstream token mapping storage")
+}
+
+func (s *CustomStorage) DeleteUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	return fmt.Errorf("underlying store does not support upstream token mapping storage")
+}
+
+// TrustAnchorStorage interface implementation
 func (s *CustomStorage) StoreTrustAnchor(ctx context.Context, name string, certificateData []byte) error {
 	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
 		return store.StoreTrustAnchor(ctx, name, certificateData)
@@ -570,35 +601,4 @@ func (s *CustomStorage) DeleteTrustAnchor(ctx context.Context, name string) erro
 		return store.DeleteTrustAnchor(ctx, name)
 	}
 	return fmt.Errorf("underlying store does not support trust anchor storage")
-}
-
-// Upstream token mapping methods for proxy mode
-func (s *CustomStorage) StoreUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string, upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64) error {
-	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
-		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
-	}
-	if store, ok := s.Storage.(*SQLiteStore); ok {
-		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
-	}
-	return fmt.Errorf("underlying store does not support upstream token mapping storage")
-}
-
-func (s *CustomStorage) GetUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) (upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64, err error) {
-	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
-		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
-	}
-	if store, ok := s.Storage.(*SQLiteStore); ok {
-		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
-	}
-	return "", "", "", 0, fmt.Errorf("underlying store does not support upstream token mapping storage")
-}
-
-func (s *CustomStorage) DeleteUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) error {
-	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
-		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
-	}
-	if store, ok := s.Storage.(*SQLiteStore); ok {
-		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
-	}
-	return fmt.Errorf("underlying store does not support upstream token mapping storage")
 }

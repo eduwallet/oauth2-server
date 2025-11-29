@@ -3,7 +3,7 @@
 server:
   base_url: "http://localhost:8080"
   port: 8080
-  host: "localhost"
+  host: "127.0.0.1"
   read_timeout: 30
   write_timeout: 30
   shutdown_timeout: 5

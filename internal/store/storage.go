@@ -21,6 +21,22 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// CustomClient extends fosite.DefaultClient with claims support
+type CustomClient struct {
+	*fosite.DefaultClient
+	Claims []string `json:"claims,omitempty"`
+}
+
+// GetClaims returns the registered claims for this client
+func (c *CustomClient) GetClaims() []string {
+	return c.Claims
+}
+
+// SetClaims sets the registered claims for this client
+func (c *CustomClient) SetClaims(claims []string) {
+	c.Claims = claims
+}
+
 // getRequestFields uses reflection to get fields from a fosite.Requester to avoid method calls that may do type assertions
 func getRequestFields(request fosite.Requester) map[string]interface{} {
 	fields := make(map[string]interface{})

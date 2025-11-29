@@ -396,7 +396,48 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	vals.Set("client_id", h.Configuration.UpstreamProvider.ClientID)
 	vals.Set("redirect_uri", h.Configuration.UpstreamProvider.CallbackURL)
 	vals.Set("response_type", q.Get("response_type"))
-	vals.Set("scope", q.Get("scope"))
+
+	// Handle claims parameter - use client's registered claims if none provided
+	claimsParam := q.Get("claims")
+	if claimsParam == "" {
+		// No claims provided, use client's registered claims
+		if client, err := h.Storage.GetClient(r.Context(), clientID); err == nil {
+			if customClient, ok := client.(*store.CustomClient); ok {
+				clientClaims := customClient.GetClaims()
+				if len(clientClaims) > 0 {
+					claimsParam = strings.Join(clientClaims, " ")
+					h.Log.Printf("🔍 [PROXY-AUTH] No claims provided, using client's registered claims: %s", claimsParam)
+				}
+			}
+		}
+	}
+	if claimsParam != "" {
+		vals.Set("claims", claimsParam)
+		h.Log.Printf("🔍 [PROXY-AUTH] Forwarding claims to upstream: %s", claimsParam)
+	}
+
+	// Handle scope parameter - use client's registered scopes if none provided
+	scopeParam := q.Get("scope")
+	if scopeParam == "" {
+		// No scope provided, use client's registered scopes
+		if client, err := h.Storage.GetClient(r.Context(), clientID); err == nil {
+			clientScopes := client.GetScopes()
+			if len(clientScopes) > 0 {
+				scopeParam = strings.Join(clientScopes, " ")
+				h.Log.Printf("🔍 [PROXY-AUTH] No scope provided, using client's registered scopes: %s", scopeParam)
+			} else {
+				// Fallback to openid if client has no scopes
+				scopeParam = "openid"
+				h.Log.Printf("🔍 [PROXY-AUTH] No scope provided and client has no registered scopes, using default: %s", scopeParam)
+			}
+		} else {
+			// Fallback to openid if we can't get client
+			scopeParam = "openid"
+			h.Log.Printf("🔍 [PROXY-AUTH] No scope provided and failed to get client, using default: %s", scopeParam)
+		}
+	}
+
+	vals.Set("scope", scopeParam)
 	vals.Set("state", proxyState)
 	vals.Set("nonce", proxyNonce)
 	if originalCodeChallenge != "" {

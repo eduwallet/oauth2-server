@@ -45,6 +45,45 @@ check-port:
 		echo "✅ Port 8080 is available."; \
 	fi
 
+# Start mock upstream provider for proxy tests
+start-mock-provider:
+	@echo "🔄 Starting mock upstream OAuth2 provider..."
+	@if lsof -i :9999 >/dev/null 2>&1; then \
+		echo "⚠️  Port 9999 is already in use. Killing existing process..."; \
+		lsof -ti :9999 | xargs kill -9 2>/dev/null || true; \
+		sleep 2; \
+	fi
+	@cp mock_provider.py mock_provider_test.py
+	@chmod +x mock_provider_test.py
+	@python3 mock_provider_test.py > mock_provider.log 2>&1 & echo $$! > mock_provider.pid
+	@echo "⏳ Waiting for mock provider to start..."
+	@sleep 3
+	@echo "🔍 Testing mock provider health..."
+	@for i in 1 2 3 4 5; do \
+		if curl -f -s --max-time 5 http://localhost:9999/.well-known/openid-configuration > /dev/null 2>&1; then \
+			echo "✅ Mock provider is healthy"; \
+			break; \
+		else \
+			echo "⏳ Waiting for mock provider to respond (attempt $$i/5)..."; \
+			sleep 2; \
+			if [ $$i -eq 5 ]; then \
+				echo "❌ Mock provider failed to start after 5 attempts"; \
+				cat mock_provider.log; \
+				if [ -f mock_provider.pid ]; then kill $$(cat mock_provider.pid) 2>/dev/null || true; rm -f mock_provider.pid; fi; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
+
+# Stop mock upstream provider
+stop-mock-provider:
+	@if [ -f mock_provider.pid ]; then \
+		echo "🛑 Stopping mock upstream provider..."; \
+		kill $$(cat mock_provider.pid) 2>/dev/null || true; \
+		rm -f mock_provider.pid mock_provider_test.py mock_provider.log; \
+		echo "✅ Mock provider stopped"; \
+	fi
+
 # Build the application
 build:
 	@echo "🔨 Building OAuth2 server..."
@@ -288,10 +327,14 @@ test-script: build
 		$(MAKE) build; \
 	fi
 	@$(MAKE) check-port
+	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
+		echo "🔄 Detected proxy test script, starting mock upstream provider..."; \
+		$(MAKE) start-mock-provider; \
+	fi
 	@echo "🚀 Starting OAuth2 server in background..."
 	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
-		echo "🔄 Detected proxy test script, allowing custom UPSTREAM_PROVIDER_URL"; \
-		DATABASE_TYPE=$(TEST_DATABASE_TYPE) ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
+		echo "🔄 Detected proxy test script, setting UPSTREAM_PROVIDER_URL to mock provider"; \
+		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="http://localhost:9999" UPSTREAM_CLIENT_ID="upstream_client" UPSTREAM_CLIENT_SECRET="upstream_secret" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
 	else \
 		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
 	fi
@@ -332,6 +375,9 @@ test-script: build
 		kill $$(cat server.pid) 2>/dev/null || true; \
 		rm -f server.pid; \
 	fi; \
+	if echo "$(SCRIPT)" | grep -q "proxy"; then \
+		$(MAKE) stop-mock-provider; \
+	fi; \
 	echo "Server logs:"; \
 	cat server-test.log; \
 	rm -f server-test.log; \
@@ -353,10 +399,14 @@ test-script-verbose:
 		$(MAKE) build; \
 	fi
 	@$(MAKE) check-port
+	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
+		echo "🔄 Detected proxy test script, starting mock upstream provider..."; \
+		$(MAKE) start-mock-provider; \
+	fi
 	@echo "🚀 Starting OAuth2 server in background..."
 	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
-		echo "🔄 Detected proxy test script, allowing custom UPSTREAM_PROVIDER_URL"; \
-		DATABASE_TYPE=$(TEST_DATABASE_TYPE) ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
+		echo "🔄 Detected proxy test script, setting UPSTREAM_PROVIDER_URL to mock provider"; \
+		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="http://localhost:9999" UPSTREAM_CLIENT_ID="upstream_client" UPSTREAM_CLIENT_SECRET="upstream_secret" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
 	else \
 		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
 	fi
@@ -385,7 +435,7 @@ test-script-verbose:
 		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
 	fi
 	@echo "✅ Server is healthy, running $(SCRIPT) (verbose)..."
-	@if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash -x tests/$(SCRIPT); then \
+	@if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash tests/$(SCRIPT); then \
 		echo "✅ $(SCRIPT) passed"; \
 		result=0; \
 	else \
@@ -396,6 +446,9 @@ test-script-verbose:
 		echo "🛑 Stopping server..."; \
 		kill $$(cat server.pid) 2>/dev/null || true; \
 		rm -f server.pid; \
+	fi; \
+	if echo "$(SCRIPT)" | grep -q "proxy"; then \
+		$(MAKE) stop-mock-provider; \
 	fi; \
 	echo "Server logs:"; \
 	cat server-test.log; \
@@ -469,7 +522,7 @@ help:
 	@echo "  make check-deadcode                    - Check for unused code"
 
 # Update .PHONY to include new targets
-.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script test-script-verbose check-port help tag version release
+.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script test-script-verbose check-port help tag version release start-mock-provider stop-mock-provider
 
 # Version management targets
 tag:

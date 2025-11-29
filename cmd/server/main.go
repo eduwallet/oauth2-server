@@ -149,6 +149,8 @@ func main() {
 		log.SetLevel(logrus.InfoLevel)
 	}
 
+	log.Infof("🔧 Log Level set to: %s (current level: %v)", logLevel, log.GetLevel())
+
 	// Set log format
 	if logFormat == "json" {
 		log.SetFormatter(&logrus.JSONFormatter{})
@@ -325,6 +327,15 @@ func main() {
 		}
 		log.Printf("✅ Loaded %d trust anchors", len(trustAnchors))
 
+		// Store trust anchors in storage so they can be resolved by the trust anchor handler
+		for name, certPEM := range trustAnchors {
+			if err := customStorage.StoreTrustAnchor(context.Background(), name, []byte(certPEM)); err != nil {
+				log.Printf("⚠️ Failed to store trust anchor %s in storage: %v", name, err)
+			} else {
+				log.Printf("✅ Stored trust anchor %s in storage", name)
+			}
+		}
+
 		// Create a wrapper function for dynamic config checking that matches the expected signature
 		dynamicConfigChecker := func(clientID string) (*config.ClientAttestationConfig, bool) {
 			return handlers.GetClientAttestationConfig(clientID, dataStore)
@@ -434,15 +445,18 @@ func initializeClients() error {
 			}
 		}
 
-		newClient := &fosite.DefaultClient{
-			ID:            client.ID,
-			Secret:        hashedSecret,
-			RedirectURIs:  client.RedirectURIs,
-			GrantTypes:    grantTypes,
-			ResponseTypes: client.ResponseTypes,
-			Scopes:        client.Scopes,
-			Audience:      client.Audience,
-			Public:        client.Public,
+		newClient := &store.CustomClient{
+			DefaultClient: &fosite.DefaultClient{
+				ID:            client.ID,
+				Secret:        hashedSecret,
+				RedirectURIs:  client.RedirectURIs,
+				GrantTypes:    grantTypes,
+				ResponseTypes: client.ResponseTypes,
+				Scopes:        client.Scopes,
+				Audience:      client.Audience,
+				Public:        client.Public,
+			},
+			Claims: client.Claims,
 		}
 
 		customStorage.Clients[client.ID] = newClient
@@ -589,7 +603,7 @@ func initializeHandlers() {
 
 	// Initialize OAuth2 flow handlers
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap, &deviceCodeToUpstreamMap, &accessTokenToIssuerStateMap)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap, &deviceCodeToUpstreamMap, &accessTokenToIssuerStateMap, AccessTokenStrategy, RefreshTokenStrategy)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
@@ -655,7 +669,7 @@ func setupRoutes() {
 
 	// Registration endpoints
 	http.Handle("/register", protectedMiddleware(log, configuration.Security.APIKey, configuration.Security.EnableRegistrationAPI)(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
-	http.Handle("/register/", protectedMiddleware(log, configuration.Security.APIKey, configuration.Security.EnableRegistrationAPI)(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleRegistration))))
+	http.Handle("/clients/", protectedMiddleware(log, configuration.Security.APIKey, configuration.Security.EnableRegistrationAPI)(metricsCollector.Middleware(http.HandlerFunc(registrationHandler.HandleClients))))
 
 	// Trust anchor management endpoints
 	http.Handle("/trust-anchor/", protectedMiddleware(log, configuration.Security.APIKey, configuration.Security.EnableTrustAnchorAPI)(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -711,7 +725,37 @@ func setupRoutes() {
 
 // Combined middleware for all HTTP endpoints
 func corsAndProxyMiddleware(handler http.Handler) http.Handler {
-	return middleware.CORS(func(w http.ResponseWriter, r *http.Request) {
+	log.Printf("🔧 [MIDDLEWARE] Setting up corsAndProxyMiddleware for handler")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("🔄 [CORS+PROXY] Processing request: %s %s", r.Method, r.URL.Path)
+		// Handle CORS headers
+		origin := r.Header.Get("Origin")
+		allowedOrigins := []string{
+			"https://demo-app.oauth2-server.orb.local",
+			"http://localhost:8001",
+			"https://localhost:8001",
+		}
+		allowOrigin := ""
+		for _, allowed := range allowedOrigins {
+			if allowed == origin {
+				allowOrigin = allowed
+				break
+			}
+		}
+		if allowOrigin == "" {
+			allowOrigin = "*"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+		if allowOrigin != "*" {
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Call proxy-aware middleware
 		proxyAwareMiddleware(handler).ServeHTTP(w, r)
 	})
 }

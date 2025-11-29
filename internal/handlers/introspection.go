@@ -140,6 +140,35 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	// Check if this is a proxy token and handle upstream introspection
 	if token != "" {
 		h.Log.Debugf("🔍 Checking if token is a proxy token")
+
+		// First check AccessTokenToIssuerStateMap for proxy tokens (device_code, authorization_code)
+		if h.AccessTokenToIssuerStateMap != nil {
+			if mappingJSON, exists := (*h.AccessTokenToIssuerStateMap)[token]; exists {
+				h.Log.Printf("✅ [INTROSPECT] Detected proxy token in AccessTokenToIssuerStateMap, parsing mapping: %s", mappingJSON)
+				var mapping map[string]string
+				if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
+					h.Log.Errorf("❌ [INTROSPECT] Failed to parse proxy token mapping: %v", err)
+					http.Error(w, "failed to parse proxy token mapping", http.StatusInternalServerError)
+					return
+				}
+				// For proxy tokens, return a synthetic active response
+				response := map[string]interface{}{
+					"active":          true,
+					"client_id":       mapping["client_id"],
+					"issuer_state":    mapping["issuer_state"],
+					"token_type":      "bearer",
+					"proxy_token":     true,
+					"issued_by_proxy": true,
+					"proxy_server":    "oauth2-server",
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(response); err != nil {
+					h.Log.Errorf("❌ [INTROSPECT] Failed to encode response: %v", err)
+				}
+				return
+			}
+		}
+
 		upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(r.Context(), token)
 		if err != nil {
 			h.Log.Debugf("🔍 Token is not a proxy token (lookup failed: %v)", err)

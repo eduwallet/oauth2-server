@@ -7,47 +7,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// CORS middleware
-func CORS(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		// Allow specific origins for demo app
-		allowedOrigins := []string{
-			"https://demo-app.oauth2-server.orb.local",
-			"http://localhost:8001",
-			"https://localhost:8001",
-		}
-
-		// Check if origin is allowed
-		allowOrigin := ""
-		for _, allowed := range allowedOrigins {
-			if allowed == origin {
-				allowOrigin = allowed
-				break
-			}
-		}
-
-		// If no specific match, allow all for development
-		if allowOrigin == "" {
-			allowOrigin = "*"
-		}
-
-		w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
-		if allowOrigin != "*" {
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-		}
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	}
-}
-
 // APIKeyAuth middleware for API key authentication
 func APIKeyAuth(log *logrus.Logger, apiKey string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {

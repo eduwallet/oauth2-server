@@ -81,7 +81,7 @@ func (s *ClientAuthStrategy) AuthenticateClient(ctx context.Context, r *http.Req
 				// Create a wrapper client with client_credentials added
 				grantWrappedClient := &GrantTypeWrapper{
 					Client:          client,
-					extraGrantTypes: []string{"client_credentials"},
+					ExtraGrantTypes: []string{"client_credentials"},
 				}
 				// For public clients, also make them appear confidential for proxy tokens
 				if client.IsPublic() {
@@ -137,13 +137,13 @@ func (s *ClientAuthStrategy) AuthenticateClient(ctx context.Context, r *http.Req
 // GrantTypeWrapper wraps a fosite client to add extra grant types
 type GrantTypeWrapper struct {
 	fosite.Client
-	extraGrantTypes []string
+	ExtraGrantTypes []string
 }
 
 // GetGrantTypes returns the client's grant types plus any extra ones
 func (w *GrantTypeWrapper) GetGrantTypes() fosite.Arguments {
 	original := w.Client.GetGrantTypes()
-	return append(original, w.extraGrantTypes...)
+	return append(original, w.ExtraGrantTypes...)
 }
 
 // PublicClientWrapper wraps a fosite client to override IsPublic for proxy token creation

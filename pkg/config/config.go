@@ -180,6 +180,7 @@ type ClientConfig struct {
 	GrantTypes              []string                 `yaml:"grant_types"`
 	ResponseTypes           []string                 `yaml:"response_types"`
 	Scopes                  []string                 `yaml:"scopes"`
+	Claims                  []string                 `yaml:"claims"`
 	Audience                []string                 `yaml:"audience"`
 	TokenEndpointAuthMethod string                   `yaml:"token_endpoint_auth_method"`
 	Public                  bool                     `yaml:"public"`
@@ -425,11 +426,7 @@ func (c *Config) GetFirstClient() (*ClientConfig, bool) {
 
 // IsProxyMode returns true if the server is configured to proxy to an upstream provider
 func (c *Config) IsProxyMode() bool {
-	// Check if upstream provider is configured via environment variables
-	if os.Getenv("UPSTREAM_PROVIDER_URL") != "" {
-		return true
-	}
-	// Check if upstream provider is configured in YAML (legacy support)
+	// Check if upstream provider is configured in YAML or environment variables
 	return c.UpstreamProvider.ProviderURL != "" && c.UpstreamProvider.ProviderURL != "https://example.com"
 }
 

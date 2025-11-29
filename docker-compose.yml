@@ -27,7 +27,7 @@ services:
       - PUBLIC_BASE_URL=http://localhost:8080
       - PORT=8080
       
-      - LOG_LEVEL=info
+      - LOG_LEVEL=DEBUG
       - LOG_FORMAT=text
 
       - UPSTREAM_PROVIDER_URL=${UPSTREAM_PROVIDER_URL}

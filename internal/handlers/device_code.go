@@ -184,9 +184,28 @@ func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter
 	// Prepare upstream request
 	upstreamForm := make(url.Values)
 	upstreamForm.Set("client_id", h.Config.UpstreamProvider.ClientID)
-	if scope := r.Form.Get("scope"); scope != "" {
-		upstreamForm.Set("scope", scope)
+
+	// Handle scope parameter - use client's registered scopes if none provided
+	scopeParam := r.Form.Get("scope")
+	if scopeParam == "" {
+		// No scope provided, use client's registered scopes
+		if client, err := h.Storage.GetClient(r.Context(), clientID); err == nil {
+			clientScopes := client.GetScopes()
+			if len(clientScopes) > 0 {
+				scopeParam = strings.Join(clientScopes, " ")
+				h.Logger.Printf("🔍 [PROXY-DEVICE] No scope provided, using client's registered scopes: %s", scopeParam)
+			} else {
+				// Fallback to openid if client has no scopes
+				scopeParam = "openid"
+				h.Logger.Printf("🔍 [PROXY-DEVICE] No scope provided and client has no registered scopes, using default: %s", scopeParam)
+			}
+		} else {
+			// Fallback to openid if we can't get client
+			scopeParam = "openid"
+			h.Logger.Printf("🔍 [PROXY-DEVICE] No scope provided and failed to get client, using default: %s", scopeParam)
+		}
 	}
+	upstreamForm.Set("scope", scopeParam)
 
 	h.Logger.Printf("📤 [PROXY-DEVICE] Forwarding to upstream with client_id: %s", h.Config.UpstreamProvider.ClientID)
 

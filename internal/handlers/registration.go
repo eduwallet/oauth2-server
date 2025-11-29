@@ -41,100 +41,15 @@ func NewRegistrationHandler(storage *store.CustomStorage, secretManager *store.S
 	}
 }
 
-// ClientMetadata represents the client registration request
-type ClientMetadata struct {
-	ClientID                string                          `json:"client_id,omitempty"`
-	ClientSecret            string                          `json:"client_secret,omitempty"`
-	RedirectURIs            []string                        `json:"redirect_uris"`
-	TokenEndpointAuthMethod string                          `json:"token_endpoint_auth_method,omitempty"`
-	GrantTypes              []string                        `json:"grant_types,omitempty"`
-	ResponseTypes           []string                        `json:"response_types,omitempty"`
-	ClientName              string                          `json:"client_name,omitempty"`
-	ClientURI               string                          `json:"client_uri,omitempty"`
-	LogoURI                 string                          `json:"logo_uri,omitempty"`
-	Scope                   string                          `json:"scope,omitempty"`
-	Contacts                []string                        `json:"contacts,omitempty"`
-	TermsOfServiceURI       string                          `json:"tos_uri,omitempty"`
-	PolicyURI               string                          `json:"policy_uri,omitempty"`
-	JwksURI                 string                          `json:"jwks_uri,omitempty"`
-	Jwks                    string                          `json:"jwks,omitempty"`
-	SoftwareID              string                          `json:"software_id,omitempty"`
-	SoftwareVersion         string                          `json:"software_version,omitempty"`
-	Audience                []string                        `json:"audience,omitempty"`
-	AttestationConfig       *config.ClientAttestationConfig `json:"attestation_config,omitempty"`
-	Public                  bool                            `json:"public,omitempty"`
-}
-
-// ClientResponse represents the client registration response
-type ClientResponse struct {
-	ClientID                string                          `json:"client_id"`
-	ClientSecret            string                          `json:"client_secret,omitempty"`
-	ClientSecretExpiresAt   int64                           `json:"client_secret_expires_at"`
-	RegistrationAccessToken string                          `json:"registration_access_token,omitempty"`
-	RegistrationClientURI   string                          `json:"registration_client_uri,omitempty"`
-	ClientIdIssuedAt        int64                           `json:"client_id_issued_at"`
-	RedirectURIs            []string                        `json:"redirect_uris"`
-	TokenEndpointAuthMethod string                          `json:"token_endpoint_auth_method,omitempty"`
-	GrantTypes              []string                        `json:"grant_types,omitempty"`
-	ResponseTypes           []string                        `json:"response_types,omitempty"`
-	ClientName              string                          `json:"client_name,omitempty"`
-	ClientURI               string                          `json:"client_uri,omitempty"`
-	LogoURI                 string                          `json:"logo_uri,omitempty"`
-	Scope                   string                          `json:"scope,omitempty"`
-	Contacts                []string                        `json:"contacts,omitempty"`
-	TermsOfServiceURI       string                          `json:"tos_uri,omitempty"`
-	PolicyURI               string                          `json:"policy_uri,omitempty"`
-	JwksURI                 string                          `json:"jwks_uri,omitempty"`
-	Jwks                    string                          `json:"jwks,omitempty"`
-	SoftwareID              string                          `json:"software_id,omitempty"`
-	SoftwareVersion         string                          `json:"software_version,omitempty"`
-	Audience                []string                        `json:"audience,omitempty"`
-	AttestationConfig       *config.ClientAttestationConfig `json:"attestation_config,omitempty"`
-	Public                  bool                            `json:"public,omitempty"`
-}
-
-// HandleRegistration handles client registration requests
+// HandleRegistration handles client registration requests (POST only)
 func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.Request) {
-	h.log.Printf("🔍 [REGISTRATION] Starting client registration request")
-	h.log.Printf("🔍 [REGISTRATION] Config available: %v", h.config != nil)
-	if h.config != nil {
-		h.log.Printf("🔍 [REGISTRATION] PrivilegedClientID: '%s'", h.config.Security.PrivilegedClientID)
-	}
-	h.log.Printf("🔍 [REGISTRATION] Method: %s, URL: %s", r.Method, r.URL.Path)
-	h.log.Printf("🔍 [REGISTRATION] Content-Type: %s", r.Header.Get("Content-Type"))
-	h.log.Printf("🔍 [REGISTRATION] Origin: %s", r.Header.Get("Origin"))
 
-	// Parse the path to extract client ID if present
-	remaining := strings.TrimPrefix(r.URL.Path, "/register")
-	var clientID string
-	if remaining == "" || remaining == "/" {
-		clientID = ""
-	} else if strings.HasPrefix(remaining, "/") {
-		clientID = strings.TrimPrefix(remaining, "/")
-		h.log.Printf("🔍 [REGISTRATION] Client ID from path: %s", clientID)
-	} else {
-		// This shouldn't happen with proper routing, but handle gracefully
-		clientID = remaining
-		h.log.Printf("🔍 [REGISTRATION] Unexpected path format, client ID: %s", clientID)
-	}
-
-	// Handle different methods
-	switch r.Method {
-	case "GET":
-		h.handleGetClients(w, r, clientID)
-	case "POST":
-		h.handlePostClient(w, r)
-	case "DELETE":
-		h.handleDeleteClient(w, r, clientID)
-	default:
+	if r.Method != "POST" {
 		h.log.Errorf("❌ [REGISTRATION] Invalid method: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-}
 
-// handlePostClient handles POST requests for client registration/creation
-func (h *RegistrationHandler) handlePostClient(w http.ResponseWriter, r *http.Request) {
 	h.log.Printf("✅ [REGISTRATION] Method is POST, proceeding to parse request body")
 
 	// Parse request body
@@ -314,6 +229,19 @@ func (h *RegistrationHandler) handlePostClient(w http.ResponseWriter, r *http.Re
 		h.log.Printf("✅ [REGISTRATION] Trust anchors resolved: %v", metadata.AttestationConfig.TrustAnchors)
 
 		finalAttestationConfig = metadata.AttestationConfig
+
+		// Ensure client_credentials grant type is included for attestation clients
+		hasClientCredentials := false
+		for _, gt := range grantTypes {
+			if gt == "client_credentials" {
+				hasClientCredentials = true
+				break
+			}
+		}
+		if !hasClientCredentials {
+			grantTypes = append(grantTypes, "client_credentials")
+			h.log.Printf("✅ [REGISTRATION] Added client_credentials grant type for attestation client")
+		}
 	} else {
 		h.log.Printf("🔍 [REGISTRATION] No attestation validation required for auth method: '%s'", authMethod)
 	}
@@ -365,27 +293,41 @@ func (h *RegistrationHandler) handlePostClient(w http.ResponseWriter, r *http.Re
 	h.log.Printf("🔍 [REGISTRATION] Final client scopes: %v", scopes)
 	h.log.Printf("🔍 [REGISTRATION] Final client audience: %v", audience)
 
+	// Convert claims string to array if provided
+	var claims []string
+	if metadata.Claims != "" {
+		claims = splitScope(metadata.Claims) // Reuse splitScope function for claims
+		h.log.Printf("🔍 [REGISTRATION] Split claims string '%s' into: %v", metadata.Claims, claims)
+	} else {
+		h.log.Printf("🔍 [REGISTRATION] No claims provided")
+	}
+
+	h.log.Printf("🔍 [REGISTRATION] Final client claims: %v", claims)
+
 	// Create or update the client
-	h.log.Printf("🔍 [REGISTRATION] Creating fosite.DefaultClient")
+	h.log.Printf("🔍 [REGISTRATION] Creating store.CustomClient")
 	var clientSecretBytes []byte
 	if isPublic {
 		clientSecretBytes = nil
 	} else {
 		clientSecretBytes = hashedSecret
 	}
-	newClient := &fosite.DefaultClient{
-		ID:            clientID,
-		Secret:        clientSecretBytes,
-		RedirectURIs:  metadata.RedirectURIs,
-		GrantTypes:    grantTypes,
-		ResponseTypes: responseTypes,
-		Scopes:        scopes,
-		Audience:      audience,
-		Public:        isPublic,
+	newClient := &store.CustomClient{
+		DefaultClient: &fosite.DefaultClient{
+			ID:            clientID,
+			Secret:        clientSecretBytes,
+			RedirectURIs:  metadata.RedirectURIs,
+			GrantTypes:    grantTypes,
+			ResponseTypes: responseTypes,
+			Scopes:        scopes,
+			Audience:      audience,
+			Public:        isPublic,
+		},
+		Claims: claims,
 	}
-	h.log.Printf("✅ [REGISTRATION] fosite.DefaultClient created successfully")
-	h.log.Printf("🔍 [REGISTRATION] Client details: ID=%s, Public=%v, GrantTypes=%v, ResponseTypes=%v, Scopes=%v, Audience=%v",
-		newClient.ID, newClient.Public, newClient.GrantTypes, newClient.ResponseTypes, newClient.Scopes, newClient.Audience)
+	h.log.Printf("✅ [REGISTRATION] store.CustomClient created successfully")
+	h.log.Printf("🔍 [REGISTRATION] Client details: ID=%s, Public=%v, GrantTypes=%v, ResponseTypes=%v, Scopes=%v, Claims=%v, Audience=%v",
+		newClient.ID, newClient.Public, newClient.GrantTypes, newClient.ResponseTypes, newClient.Scopes, newClient.Claims, newClient.Audience)
 
 	// Store the client
 	h.log.Printf("🔍 [REGISTRATION] Storing client in storage")
@@ -464,6 +406,7 @@ func (h *RegistrationHandler) handlePostClient(w http.ResponseWriter, r *http.Re
 		ClientURI:               metadata.ClientURI,
 		LogoURI:                 metadata.LogoURI,
 		Scope:                   strings.Join(scopes, " "),
+		Claims:                  strings.Join(claims, " "),
 		Contacts:                metadata.Contacts,
 		TermsOfServiceURI:       metadata.TermsOfServiceURI,
 		PolicyURI:               metadata.PolicyURI,
@@ -504,157 +447,6 @@ func (h *RegistrationHandler) handlePostClient(w http.ResponseWriter, r *http.Re
 	h.log.Printf("✅ [REGISTRATION] Client Secret: %s", clientSecret)
 	h.log.Printf("✅ [REGISTRATION] Response JSON encoded and sent successfully")
 	h.log.Printf("🎉 [REGISTRATION] Client registration completed successfully")
-}
-
-// handleGetClients handles GET requests for listing or retrieving clients
-func (h *RegistrationHandler) handleGetClients(w http.ResponseWriter, r *http.Request, clientID string) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if clientID == "" {
-		// GET /register - list all client IDs
-		h.log.Printf("🔍 [REGISTRATION] Listing all registered clients")
-
-		// Get all clients from storage
-		clients, err := h.storage.ListClients(r.Context())
-		if err != nil {
-			h.log.Errorf("❌ [REGISTRATION] Failed to list clients: %v", err)
-			http.Error(w, "Failed to list clients", http.StatusInternalServerError)
-			return
-		}
-
-		// Extract client IDs
-		clientIDs := make([]string, 0, len(clients))
-		for _, client := range clients {
-			if client != nil && client.GetID() != "" {
-				clientIDs = append(clientIDs, client.GetID())
-			}
-		}
-
-		h.log.Printf("✅ [REGISTRATION] Found %d registered clients", len(clientIDs))
-
-		response := map[string]interface{}{
-			"client_ids": clientIDs,
-			"count":      len(clientIDs),
-		}
-
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			h.log.Errorf("❌ [REGISTRATION] Failed to encode response: %v", err)
-			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		// GET /register/<client-id> - get client details
-		h.log.Printf("🔍 [REGISTRATION] Retrieving details for client: %s", clientID)
-
-		client, err := h.storage.GetClient(r.Context(), clientID)
-		if err != nil {
-			h.log.Errorf("❌ [REGISTRATION] Client not found: %s", clientID)
-			http.Error(w, "Client not found", http.StatusNotFound)
-			return
-		}
-
-		// Get client secret if available
-		var clientSecret string
-		if !client.IsPublic() {
-			if secret, ok := GetClientSecret(clientID, h.storage, h.secretManager); ok {
-				clientSecret = secret
-			}
-		}
-
-		// Get attestation config if available
-		var attestationConfig *config.ClientAttestationConfig
-		if config, ok := GetClientAttestationConfig(clientID, h.storage); ok {
-			attestationConfig = config
-		}
-
-		// Build response similar to registration response
-		now := time.Now().Unix()
-		response := ClientResponse{
-			ClientID:                client.GetID(),
-			ClientSecret:            clientSecret,
-			ClientSecretExpiresAt:   0, // 0 means no expiration
-			ClientIdIssuedAt:        now,
-			RegistrationAccessToken: "", // Not implemented
-			RegistrationClientURI:   "", // Not implemented
-			RedirectURIs:            client.GetRedirectURIs(),
-			TokenEndpointAuthMethod: "client_secret_basic", // Default, since not stored
-			GrantTypes:              client.GetGrantTypes(),
-			ResponseTypes:           client.GetResponseTypes(),
-			ClientName:              "", // Not stored
-			ClientURI:               "", // Not stored
-			LogoURI:                 "", // Not stored
-			Scope:                   strings.Join(client.GetScopes(), " "),
-			Contacts:                []string{}, // Not stored
-			TermsOfServiceURI:       "",         // Not stored
-			PolicyURI:               "",         // Not stored
-			JwksURI:                 "",         // Not stored
-			Jwks:                    "",         // Not stored
-			SoftwareID:              "",         // Not stored
-			SoftwareVersion:         "",         // Not stored
-			Audience:                client.GetAudience(),
-			AttestationConfig:       attestationConfig,
-			Public:                  client.IsPublic(),
-		}
-
-		h.log.Printf("✅ [REGISTRATION] Retrieved details for client: %s", clientID)
-
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			h.log.Errorf("❌ [REGISTRATION] Failed to encode response: %v", err)
-			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-			return
-		}
-	}
-}
-
-// handleDeleteClient handles DELETE requests for removing clients
-func (h *RegistrationHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, clientID string) {
-	if clientID == "" {
-		h.log.Errorf("❌ [REGISTRATION] Client ID required for deletion")
-		http.Error(w, "Client ID required", http.StatusBadRequest)
-		return
-	}
-
-	h.log.Printf("🔍 [REGISTRATION] Deleting client: %s", clientID)
-
-	// Check if client exists
-	_, err := h.storage.GetClient(r.Context(), clientID)
-	if err != nil {
-		h.log.Errorf("❌ [REGISTRATION] Client not found: %s", clientID)
-		http.Error(w, "Client not found", http.StatusNotFound)
-		return
-	}
-
-	// Delete the client
-	if err := h.storage.DeleteClient(r.Context(), clientID); err != nil {
-		h.log.Errorf("❌ [REGISTRATION] Failed to delete client: %v", err)
-		http.Error(w, "Failed to delete client", http.StatusInternalServerError)
-		return
-	}
-
-	// Also delete client secret and attestation config if they exist
-	if err := h.storage.DeleteClientSecret(r.Context(), clientID); err != nil {
-		h.log.Warnf("⚠️ [REGISTRATION] Failed to delete client secret for %s: %v", clientID, err)
-	}
-
-	if err := h.storage.DeleteAttestationConfig(r.Context(), clientID); err != nil {
-		h.log.Warnf("⚠️ [REGISTRATION] Failed to delete attestation config for %s: %v", clientID, err)
-	}
-
-	h.log.Printf("✅ [REGISTRATION] Successfully deleted client: %s", clientID)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	response := map[string]interface{}{
-		"message":   "Client deleted successfully",
-		"client_id": clientID,
-	}
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		h.log.Errorf("❌ [REGISTRATION] Failed to encode response: %v", err)
-		// Headers already written, can't send error
-		return
-	}
 }
 
 // Helper function to generate a random string

@@ -213,13 +213,16 @@ func (mc *MetricsCollector) UpdateRegisteredUsers(count float64) {
 // Middleware creates an HTTP middleware for recording metrics
 func (mc *MetricsCollector) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logrus.Printf("📊 [METRICS] Middleware called for %s %s", r.Method, r.URL.Path)
 		start := time.Now()
 
 		// Create a response writer wrapper to capture status code
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
 		// Call the next handler
+		logrus.Printf("📊 [METRICS] About to call next handler for %s %s", r.Method, r.URL.Path)
 		next.ServeHTTP(rw, r)
+		logrus.Printf("📊 [METRICS] Next handler returned for %s %s with status %d", r.Method, r.URL.Path, rw.statusCode)
 
 		// Record metrics
 		duration := time.Since(start)
