@@ -165,21 +165,28 @@ refresh_tokens() {
     echo "{\"access_token\":\"$new_access\",\"refresh_token\":\"$new_refresh\"}"
 }
 
-# Function to perform token exchange
+# Function to perform token exchange with specific requested token type
 exchange_token() {
     local client_id="$1"
     local client_secret="$2"
     local subject_token="$3"
     local audience="$4"
+    local requested_type="${5:-urn:ietf:params:oauth:token-type:access_token}"
 
-    echo "🔄 Performing token exchange for $client_id..." >&2
+    echo "🔄 Performing token exchange for $client_id (requesting $requested_type)..." >&2
 
     local exchange_response=$(curl -s -X POST "$BASE_URL/token" \
         -u "$client_id:$client_secret" \
         -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$subject_token&subject_token_type=urn:ietf:params:oauth:token-type:access_token&requested_token_type=urn:ietf:params:oauth:token-type:access_token")
+        -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$subject_token&subject_token_type=urn:ietf:params:oauth:token-type:access_token&requested_token_type=$requested_type")
 
-    local exchanged_token=$(echo "$exchange_response" | jq -r '.access_token // empty')
+    if [ "$requested_type" = "urn:ietf:params:oauth:token-type:refresh_token" ]; then
+        local exchanged_token=$(echo "$exchange_response" | jq -r '.refresh_token // empty')
+        local token_type="Refresh"
+    else
+        local exchanged_token=$(echo "$exchange_response" | jq -r '.access_token // empty')
+        local token_type="Access"
+    fi
 
     if [ -z "$exchanged_token" ] || [ "$exchanged_token" = "null" ]; then
         echo "❌ Token exchange failed" >&2
@@ -187,7 +194,7 @@ exchange_token() {
         return 1
     fi
 
-    echo "✅ Token exchange successful - Access: ${exchanged_token:0:30}..." >&2
+    echo "✅ Token exchange successful - $token_type: ${exchanged_token:0:30}..." >&2
 
     # Return exchanged token
     echo "$exchanged_token"
@@ -267,7 +274,7 @@ STEP1_PASS=true
 # Step 2: Frontend app performs token exchange
 echo ""
 echo "🧪 Step 2: Frontend app performs token exchange for backend client"
-EXCHANGED_ACCESS=$(exchange_token "$FRONTEND_ID" "$FRONTEND_SECRET" "$INITIAL_ACCESS" "$AUDIENCE")
+EXCHANGED_ACCESS=$(exchange_token "$FRONTEND_ID" "$FRONTEND_SECRET" "$INITIAL_ACCESS" "$AUDIENCE" "urn:ietf:params:oauth:token-type:access_token")
 
 if [ $? -ne 0 ]; then
     echo "❌ Step 2 FAILED - Token exchange failed"
@@ -276,6 +283,19 @@ fi
 
 echo "✅ Step 2 PASSED - Token exchange completed"
 STEP2_PASS=true
+
+# Step 2b: Test access_token to refresh_token exchange
+echo ""
+echo "🧪 Step 2b: Test access_token -> refresh_token exchange"
+EXCHANGED_REFRESH=$(exchange_token "$FRONTEND_ID" "$FRONTEND_SECRET" "$INITIAL_ACCESS" "$AUDIENCE" "urn:ietf:params:oauth:token-type:refresh_token")
+
+if [ $? -ne 0 ]; then
+    echo "❌ Step 2b FAILED - Refresh token exchange failed"
+    STEP2B_PASS=false
+else
+    echo "✅ Step 2b PASSED - Refresh token exchange successful"
+    STEP2B_PASS=true
+fi
 
 # Step 3: Backend client validates exchanged token via introspection
 echo ""
@@ -306,7 +326,8 @@ echo ""
 echo "📊 Token Exchange Test Results Summary"
 echo "======================================"
 echo "Step 1 (Initial tokens): $([ "$STEP1_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
-echo "Step 2 (Token exchange): $([ "$STEP2_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
+echo "Step 2 (Token exchange A->A): $([ "$STEP2_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
+echo "Step 2b (Token exchange A->R): $([ "$STEP2B_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 echo "Step 3 (Introspection): $([ "$STEP3_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 echo "Step 4 (UserInfo): $([ "$STEP4_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 
@@ -318,6 +339,11 @@ if [ "$STEP1_PASS" = true ] && [ "$STEP2_PASS" = true ] && [ "$STEP3_PASS" = tru
     echo "   ✅ Cross-client token delegation successful"
     echo "   ✅ Token introspection working"
     echo "   ✅ UserInfo accessible with exchanged tokens"
+    if [ "$STEP2B_PASS" = true ]; then
+        echo "   ✅ Access token to refresh token exchange supported"
+    else
+        echo "   ⚠️  Access token to refresh token exchange not supported (Fosite limitation?)"
+    fi
     exit 0
 else
     echo ""

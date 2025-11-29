@@ -145,7 +145,7 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		if h.AccessTokenToIssuerStateMap != nil {
 			if mappingJSON, exists := (*h.AccessTokenToIssuerStateMap)[token]; exists {
 				h.Log.Printf("✅ [INTROSPECT] Detected proxy token in AccessTokenToIssuerStateMap, parsing mapping: %s", mappingJSON)
-				var mapping map[string]string
+				var mapping map[string]interface{}
 				if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
 					h.Log.Errorf("❌ [INTROSPECT] Failed to parse proxy token mapping: %v", err)
 					http.Error(w, "failed to parse proxy token mapping", http.StatusInternalServerError)
@@ -157,7 +157,7 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 					"client_id":       mapping["client_id"],
 					"issuer_state":    mapping["issuer_state"],
 					"token_type":      "bearer",
-					"proxy_token":     true,
+					"proxy_token":     token,
 					"issued_by_proxy": true,
 					"proxy_server":    "oauth2-server",
 				}

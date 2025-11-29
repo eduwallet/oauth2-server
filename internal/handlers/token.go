@@ -1065,18 +1065,20 @@ func (h *TokenHandler) handleProxyTokenExchange(w http.ResponseWriter, r *http.R
 
 	// For token exchange, we may need to map the subject_token if it's a proxy token
 	subjectToken := r.Form.Get("subject_token")
+	subjectTokenType := r.Form.Get("subject_token_type")
 	if subjectToken != "" {
 		// Check if this is a proxy token that needs mapping back to upstream
-		if h.AccessTokenToIssuerStateMap != nil {
-			if mappingJSON, exists := (*h.AccessTokenToIssuerStateMap)[subjectToken]; exists {
-				var mapping map[string]string
-				if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil {
-					// This is a proxy token, we need to get the upstream token
-					// For now, assume the subject_token is already the upstream token
-					// In a full implementation, we might need to store upstream token mappings
-					h.Log.Debugf("🔍 [PROXY-TOKEN-EXCHANGE] Subject token is a proxy token, using as-is for upstream")
-				}
-			}
+		upstreamSubjectToken, err := h.getUpstreamTokenFromProxyToken(subjectToken, subjectTokenType)
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to translate proxy subject token: %v", err)
+			http.Error(w, "failed to translate proxy subject token", http.StatusInternalServerError)
+			return
+		}
+		if upstreamSubjectToken != subjectToken {
+			h.Log.Debugf("🔄 [PROXY-TOKEN-EXCHANGE] Translated proxy subject token to upstream token")
+			upstreamForm.Set("subject_token", upstreamSubjectToken)
+		} else {
+			h.Log.Debugf("🔍 [PROXY-TOKEN-EXCHANGE] Subject token is already an upstream token")
 		}
 	}
 
@@ -1157,23 +1159,36 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 	upstreamExpiresIn, _ := upstreamTokenResp["expires_in"].(float64)
 	upstreamScope, _ := upstreamTokenResp["scope"].(string)
 	upstreamTokenType, _ := upstreamTokenResp["token_type"].(string)
+	upstreamIssuedTokenType, _ := upstreamTokenResp["issued_token_type"].(string)
 
-	if upstreamAccessToken == "" {
-		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] No access token in upstream response")
-		http.Error(w, "no access token in upstream response", http.StatusBadGateway)
+	// Check if we have at least one token to proxy
+	if upstreamAccessToken == "" && upstreamRefreshToken == "" {
+		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] No access token or refresh token in upstream response")
+		http.Error(w, "no token in upstream response", http.StatusBadGateway)
 		return
 	}
 
-	h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
+	// For refresh token responses, we still need to create a proxy access token to hold the mapping
+	if upstreamAccessToken == "" && upstreamRefreshToken != "" {
+		h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Upstream returned only refresh token, will create proxy access token to represent it")
+	}
+
+	if upstreamAccessToken != "" {
+		h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
+	}
+	if upstreamRefreshToken != "" {
+		h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Successfully received upstream refresh token (length: %d)", len(upstreamRefreshToken))
+	}
 
 	// Store upstream token mapping
 	upstreamTokens := map[string]interface{}{
-		"access_token":  upstreamAccessToken,
-		"refresh_token": upstreamRefreshToken,
-		"id_token":      upstreamIDToken,
-		"expires_in":    upstreamExpiresIn,
-		"scope":         upstreamScope,
-		"token_type":    upstreamTokenType,
+		"access_token":      upstreamAccessToken,
+		"refresh_token":     upstreamRefreshToken,
+		"id_token":          upstreamIDToken,
+		"expires_in":        upstreamExpiresIn,
+		"scope":             upstreamScope,
+		"token_type":        upstreamTokenType,
+		"issued_token_type": upstreamIssuedTokenType,
 	}
 
 	// Get client
@@ -1284,20 +1299,47 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 	if err != nil {
 		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to marshal token mapping: %v", err)
 	} else {
-		(*h.AccessTokenToIssuerStateMap)[accessToken] = string(mappingJSON)
-		h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy token mapping: %s -> upstream tokens", accessToken[:20])
+		// Store mapping for access token
+		if accessToken != "" {
+			(*h.AccessTokenToIssuerStateMap)[accessToken] = string(mappingJSON)
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy access token mapping: %s -> upstream tokens", accessToken[:20])
+		}
+		// Store mapping for refresh token
+		if refreshToken != "" {
+			(*h.AccessTokenToIssuerStateMap)[refreshToken] = string(mappingJSON)
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy refresh token mapping: %s -> upstream tokens", refreshToken[:20])
+		}
 	}
 
-	// Return proxy tokens to client
+	// Return proxy tokens to client based on issued_token_type
 	proxyResponse := map[string]interface{}{
-		"access_token": accessToken,
-		"token_type":   "Bearer",
-		"expires_in":   3600, // Use proxy token expiry
-		"scope":        accessResponse.GetExtra("scope"),
+		"token_type":      "Bearer",
+		"expires_in":      3600, // Use proxy token expiry
+		"scope":           accessResponse.GetExtra("scope"),
+		"proxy_processed": true,
+		"proxy_server":    "oauth2-server",
 	}
 
-	if refreshToken != "" {
-		proxyResponse["refresh_token"] = refreshToken
+	// Set the appropriate token based on issued_token_type
+	if upstreamIssuedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
+		// For refresh token requests, return the proxy access token as a refresh token
+		if accessToken != "" {
+			proxyResponse["refresh_token"] = accessToken // Use access token as refresh token
+			proxyResponse["issued_token_type"] = "urn:ietf:params:oauth:token-type:refresh_token"
+		} else {
+			h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Expected proxy access token but none generated")
+			http.Error(w, "failed to generate proxy token", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Return access token (default behavior)
+		if accessToken != "" {
+			proxyResponse["access_token"] = accessToken
+			proxyResponse["issued_token_type"] = "urn:ietf:params:oauth:token-type:access_token"
+		}
+		if refreshToken != "" {
+			proxyResponse["refresh_token"] = refreshToken
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1309,4 +1351,100 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 	}
 
 	h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Successfully created proxy tokens for client %s", clientID)
+}
+
+// getUpstreamTokenFromProxyToken translates a proxy token to its upstream equivalent
+func (h *TokenHandler) getUpstreamTokenFromProxyToken(proxyToken string, subjectTokenType string) (string, error) {
+	h.Log.Printf("🔄 [PROXY-TOKEN-EXCHANGE] Translating proxy token to upstream token (type: %s)", subjectTokenType)
+
+	// First, try to get upstream token mapping from AccessTokenToIssuerStateMap
+	if h.AccessTokenToIssuerStateMap != nil {
+		if mappingJSON, exists := (*h.AccessTokenToIssuerStateMap)[proxyToken]; exists {
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found mapping in AccessTokenToIssuerStateMap")
+			var mapping map[string]interface{}
+			if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
+				h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] Failed to unmarshal mapping JSON: %v", err)
+			} else {
+				if upstreamTokens, ok := mapping["upstream_tokens"].(map[string]interface{}); ok {
+					// Return the appropriate upstream token based on subject_token_type
+					var upstreamToken string
+					var tokenType string
+
+					if subjectTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
+						if refreshToken, ok := upstreamTokens["refresh_token"].(string); ok && refreshToken != "" {
+							upstreamToken = refreshToken
+							tokenType = "refresh_token"
+						}
+					} else {
+						// Default to access_token
+						if accessToken, ok := upstreamTokens["access_token"].(string); ok && accessToken != "" {
+							upstreamToken = accessToken
+							tokenType = "access_token"
+						}
+					}
+
+					if upstreamToken != "" {
+						previewLen := len(upstreamToken)
+						if previewLen > 20 {
+							previewLen = 20
+						}
+						h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found upstream %s in AccessTokenToIssuerStateMap: %s...", tokenType, upstreamToken[:previewLen])
+						return upstreamToken, nil
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: Try persistent storage
+	upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(nil, proxyToken)
+	if err == nil && upstreamAccessToken != "" {
+		h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found upstream token in persistent storage: %s...", upstreamAccessToken[:20])
+		return upstreamAccessToken, nil
+	}
+	h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] No upstream token mapping found in storage (%v), trying session claims", err)
+
+	// Fallback: Use fosite's introspection to validate the proxy token and get session data
+	ctx := context.Background()
+	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
+	if err != nil {
+		h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] Token introspection failed (%v), assuming direct upstream token (device flow)", err)
+		// For device flow, the token itself is the upstream token
+		return proxyToken, nil
+	}
+	h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Token introspection successful")
+
+	// Try to extract upstream token from session claims
+	if requester != nil {
+		if session, ok := requester.GetSession().(*openid.DefaultSession); ok {
+			if session.Claims != nil && session.Claims.Extra != nil {
+				if upstreamTokens, ok := session.Claims.Extra["upstream_tokens"].(map[string]interface{}); ok {
+					// Return the appropriate upstream token based on subject_token_type
+					var upstreamToken string
+					var tokenType string
+
+					if subjectTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
+						if refreshToken, ok := upstreamTokens["refresh_token"].(string); ok && refreshToken != "" {
+							upstreamToken = refreshToken
+							tokenType = "refresh_token"
+						}
+					} else {
+						// Default to access_token
+						if accessToken, ok := upstreamTokens["access_token"].(string); ok && accessToken != "" {
+							upstreamToken = accessToken
+							tokenType = "access_token"
+						}
+					}
+
+					if upstreamToken != "" {
+						h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found upstream %s in session claims: %s...", tokenType, upstreamToken[:20])
+						return upstreamToken, nil
+					}
+				}
+			}
+		}
+	}
+
+	h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] Could not find upstream token mapping, using proxy token as-is")
+	return proxyToken, nil
 }

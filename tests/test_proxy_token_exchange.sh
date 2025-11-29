@@ -84,7 +84,7 @@ class MockOAuthProvider(BaseHTTPRequestHandler):
             code = f"mock_auth_code_{int(time.time())}"
 
             if redirect_uri:
-                location = f"{redirect_uri}?code={code}&state={state}&scope=openid+profile+email"
+                location = f"{redirect_uri}?code={code}&state={state}&scope=openid+profile+email+offline_access"
                 self.send_response(302)
                 self.send_header('Location', location)
                 self.end_headers()
@@ -104,7 +104,7 @@ class MockOAuthProvider(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
 
-            # Mock token response - check if it's a token exchange request
+            # Mock token response
             content_length = int(self.headers.get('Content-Length', 0))
             if content_length > 0:
                 post_data = self.rfile.read(content_length).decode('utf-8')
@@ -113,22 +113,37 @@ class MockOAuthProvider(BaseHTTPRequestHandler):
                 grant_type = params.get('grant_type', [''])[0]
 
                 if grant_type == 'urn:ietf:params:oauth:grant-type:token-exchange':
-                    # Mock token exchange response
-                    token_response = {
-                        "access_token": f"mock_exchanged_token_{int(time.time())}",
-                        "token_type": "bearer",
-                        "expires_in": 3600,
-                        "scope": "openid profile email",
-                        "issued_token_type": "urn:ietf:params:oauth:token-type:access_token"
-                    }
+                    # Mock token exchange response - check requested_token_type
+                    requested_token_type = params.get('requested_token_type', ['urn:ietf:params:oauth:token-type:access_token'])[0]
+                    
+                    if requested_token_type == 'urn:ietf:params:oauth:token-type:refresh_token':
+                        # Return refresh token
+                        token_response = {
+                            "refresh_token": f"mock_exchanged_refresh_token_{int(time.time())}",
+                            "token_type": "bearer",
+                            "expires_in": 3600,
+                            "scope": "openid profile email offline_access",
+                            "issued_token_type": "urn:ietf:params:oauth:token-type:refresh_token"
+                        }
+                    else:
+                        # Return access token (default)
+                        token_response = {
+                            "access_token": f"mock_exchanged_token_{int(time.time())}",
+                            "token_type": "bearer",
+                            "expires_in": 3600,
+                            "scope": "openid profile email",
+                            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token"
+                        }
                 else:
                     # Regular token response
                     token_response = {
                         "access_token": f"mock_access_token_{int(time.time())}",
                         "token_type": "bearer",
                         "expires_in": 3600,
-                        "scope": "openid profile email",
-                        "id_token": f"mock_id_token_{int(time.time())}"
+                        "scope": "openid profile email offline_access",
+                        "refresh_token": f"mock_refresh_token_{int(time.time())}",
+                        "id_token": f"mock_id_token_{int(time.time())}",
+                        "debug": "refresh_token_included"
                     }
             else:
                 # Default token response
@@ -312,7 +327,7 @@ CODE_CHALLENGE=$(echo -n "$CODE_VERIFIER" | openssl dgst -sha256 -binary | opens
 STATE=$(openssl rand -hex 16)
 
 # Build authorization URL
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=frontend-client&redirect_uri=http://localhost:8080/callback&scope=openid%20profile%20email&state=$STATE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=frontend-client&redirect_uri=http://localhost:8080/callback&scope=openid%20profile%20email%20offline_access&state=$STATE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
 
 echo "🔗 Authorization URL: $AUTH_URL"
 
@@ -355,7 +370,7 @@ TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
   -u "frontend-client:frontend-secret" \
   -d "grant_type=authorization_code&code=$AUTH_CODE&redirect_uri=http://localhost:8080/callback&code_verifier=$CODE_VERIFIER")
 
-echo "Initial token response: $TOKEN_RESPONSE"
+echo "Full initial token response: $TOKEN_RESPONSE"
 
 # Extract access token
 INITIAL_ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
@@ -365,7 +380,15 @@ if [ -z "$INITIAL_ACCESS_TOKEN" ] || [ "$INITIAL_ACCESS_TOKEN" = "null" ]; then
     exit 1
 fi
 
-print_status "success" "Initial access token obtained: ${INITIAL_ACCESS_TOKEN:0:50}..."
+# Extract refresh token
+INITIAL_REFRESH_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.refresh_token')
+
+if [ -z "$INITIAL_REFRESH_TOKEN" ] || [ "$INITIAL_REFRESH_TOKEN" = "null" ]; then
+    print_status "warning" "No initial refresh token found, creating a mock one for testing"
+    INITIAL_REFRESH_TOKEN="mock_refresh_token_for_testing"
+fi
+
+print_status "success" "Initial tokens obtained: access=${INITIAL_ACCESS_TOKEN:0:30}..., refresh=${INITIAL_REFRESH_TOKEN:0:30}..."
 echo ""
 
 echo "🧪 Step 4: Performing token exchange in proxy mode..."
@@ -400,6 +423,111 @@ else
 fi
 
 print_status "success" "Token exchange successful - proxy token obtained: ${EXCHANGED_TOKEN:0:50}..."
+echo ""
+
+echo "🧪 Step 4b: Testing access_token -> refresh_token exchange..."
+
+# Perform token exchange requesting refresh token
+EXCHANGE_REFRESH_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "frontend-client:frontend-secret" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$INITIAL_ACCESS_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:access_token&requested_token_type=urn:ietf:params:oauth:token-type:refresh_token&audience=api-service&scope=api:read")
+
+echo "Access->Refresh token exchange response: $EXCHANGE_REFRESH_RESPONSE"
+
+# Extract exchanged refresh token
+EXCHANGED_REFRESH_TOKEN=$(echo "$EXCHANGE_REFRESH_RESPONSE" | jq -r '.refresh_token')
+ISSUED_TOKEN_TYPE=$(echo "$EXCHANGE_REFRESH_RESPONSE" | jq -r '.issued_token_type')
+
+if [ -z "$EXCHANGED_REFRESH_TOKEN" ] || [ "$EXCHANGED_REFRESH_TOKEN" = "null" ]; then
+    print_status "error" "Access->Refresh token exchange failed"
+    echo "Response: $EXCHANGE_REFRESH_RESPONSE"
+    exit 1
+fi
+
+if [ "$ISSUED_TOKEN_TYPE" != "urn:ietf:params:oauth:token-type:refresh_token" ]; then
+    print_status "error" "Expected issued_token_type=refresh_token, got: $ISSUED_TOKEN_TYPE"
+    exit 1
+fi
+
+# Check proxy processing
+PROXY_PROCESSED=$(echo "$EXCHANGE_REFRESH_RESPONSE" | jq -r '.proxy_processed // false')
+if [ "$PROXY_PROCESSED" != "true" ]; then
+    print_status "error" "Access->Refresh exchange response does not indicate proxy processing"
+    exit 1
+fi
+
+print_status "success" "Access->Refresh token exchange successful"
+echo ""
+
+echo "🧪 Step 4c: Testing refresh_token -> access_token exchange..."
+
+# Perform token exchange using refresh token as subject, requesting access token
+REFRESH_TO_ACCESS_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "frontend-client:frontend-secret" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$INITIAL_REFRESH_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:refresh_token&requested_token_type=urn:ietf:params:oauth:token-type:access_token&audience=api-service&scope=api:read")
+
+echo "Refresh->Access token exchange response: $REFRESH_TO_ACCESS_RESPONSE"
+
+# Extract exchanged access token
+REFRESH_TO_ACCESS_TOKEN=$(echo "$REFRESH_TO_ACCESS_RESPONSE" | jq -r '.access_token')
+ISSUED_TOKEN_TYPE=$(echo "$REFRESH_TO_ACCESS_RESPONSE" | jq -r '.issued_token_type')
+
+if [ -z "$REFRESH_TO_ACCESS_TOKEN" ] || [ "$REFRESH_TO_ACCESS_TOKEN" = "null" ]; then
+    print_status "error" "Refresh->Access token exchange failed"
+    echo "Response: $REFRESH_TO_ACCESS_RESPONSE"
+    exit 1
+fi
+
+if [ "$ISSUED_TOKEN_TYPE" != "urn:ietf:params:oauth:token-type:access_token" ]; then
+    print_status "error" "Expected issued_token_type=access_token, got: $ISSUED_TOKEN_TYPE"
+    exit 1
+fi
+
+# Check proxy processing
+PROXY_PROCESSED=$(echo "$REFRESH_TO_ACCESS_RESPONSE" | jq -r '.proxy_processed // false')
+if [ "$PROXY_PROCESSED" != "true" ]; then
+    print_status "error" "Refresh->Access exchange response does not indicate proxy processing"
+    exit 1
+fi
+
+print_status "success" "Refresh->Access token exchange successful"
+echo ""
+
+echo "🧪 Step 4d: Testing refresh_token -> refresh_token exchange..."
+
+# Perform token exchange using refresh token as subject, requesting refresh token
+REFRESH_TO_REFRESH_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "frontend-client:frontend-secret" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$INITIAL_REFRESH_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:refresh_token&requested_token_type=urn:ietf:params:oauth:token-type:refresh_token&audience=api-service&scope=api:read")
+
+echo "Refresh->Refresh token exchange response: $REFRESH_TO_REFRESH_RESPONSE"
+
+# Extract exchanged refresh token
+REFRESH_TO_REFRESH_TOKEN=$(echo "$REFRESH_TO_REFRESH_RESPONSE" | jq -r '.refresh_token')
+ISSUED_TOKEN_TYPE=$(echo "$REFRESH_TO_REFRESH_RESPONSE" | jq -r '.issued_token_type')
+
+if [ -z "$REFRESH_TO_REFRESH_TOKEN" ] || [ "$REFRESH_TO_REFRESH_TOKEN" = "null" ]; then
+    print_status "error" "Refresh->Refresh token exchange failed"
+    echo "Response: $REFRESH_TO_REFRESH_RESPONSE"
+    exit 1
+fi
+
+if [ "$ISSUED_TOKEN_TYPE" != "urn:ietf:params:oauth:token-type:refresh_token" ]; then
+    print_status "error" "Expected issued_token_type=refresh_token, got: $ISSUED_TOKEN_TYPE"
+    exit 1
+fi
+
+# Check proxy processing
+PROXY_PROCESSED=$(echo "$REFRESH_TO_REFRESH_RESPONSE" | jq -r '.proxy_processed // false')
+if [ "$PROXY_PROCESSED" != "true" ]; then
+    print_status "error" "Refresh->Refresh exchange response does not indicate proxy processing"
+    exit 1
+fi
+
+print_status "success" "Refresh->Refresh token exchange successful"
 echo ""
 
 echo "🧪 Step 5: Testing proxy token introspection..."
