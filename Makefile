@@ -327,57 +327,7 @@ test-script: build
 		$(MAKE) build; \
 	fi
 	@$(MAKE) check-port
-	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
-		echo "🔄 Detected proxy test script, starting mock upstream provider..."; \
-		$(MAKE) start-mock-provider; \
-	fi
-	@echo "🚀 Starting OAuth2 server in background..."
-	@if echo "$(SCRIPT)" | grep -q "proxy"; then \
-		echo "🔄 Detected proxy test script, setting UPSTREAM_PROVIDER_URL to mock provider"; \
-		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="http://localhost:9999" UPSTREAM_CLIENT_ID="upstream_client" UPSTREAM_CLIENT_SECRET="upstream_secret" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
-	else \
-		DATABASE_TYPE=$(TEST_DATABASE_TYPE) UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" ./bin/oauth2-server > server-test.log 2>&1 & echo $$! > server.pid; \
-	fi
-	@echo "⏳ Waiting for server to start..."
-	@sleep 5
-	@echo "🔍 Testing server health..."
-	@for i in 1 2 3 4 5; do \
-		if curl -f -s --max-time 5 $(OAUTH2_SERVER_URL)/health > /dev/null 2>&1; then \
-			echo "✅ Server is healthy"; \
-			break; \
-		else \
-			echo "⏳ Waiting for server to respond (attempt $$i/5)..."; \
-			sleep 2; \
-			if [ $$i -eq 5 ]; then \
-				echo "❌ Server failed to start after 5 attempts"; \
-				cat server-test.log; \
-				if [ -f server.pid ]; then kill $$(cat server.pid) 2>/dev/null || true; rm -f server.pid; fi; \
-				exit 1; \
-			fi; \
-		fi; \
-	done
-	@echo "🔧 Setting up test certificates..."
-	@if [ -f "init-certs.sh" ]; then \
-		API_KEY="$(API_KEY)" OAUTH_URL="$(OAUTH2_SERVER_URL)" bash init-certs.sh; \
-	else \
-		echo "⚠️  init-certs.sh not found, skipping certificate setup"; \
-	fi
-	@echo "✅ Server is healthy, running $(SCRIPT)..."
-	@if TEST_USERNAME=$(TEST_USERNAME) TEST_PASSWORD=$(TEST_PASSWORD) TEST_SCOPE="$(TEST_SCOPE)" bash tests/$(SCRIPT); then \
-		echo "✅ $(SCRIPT) passed"; \
-		result=0; \
-	else \
-		echo "❌ $(SCRIPT) failed"; \
-		result=1; \
-	fi; \
-	if [ -f server.pid ]; then \
-		echo "🛑 Stopping server..."; \
-		kill $$(cat server.pid) 2>/dev/null || true; \
-		rm -f server.pid; \
-	fi; \
-	if echo "$(SCRIPT)" | grep -q "proxy"; then \
-		$(MAKE) stop-mock-provider; \
-	fi; \
+	@./scripts/run-test-script.sh "$(SCRIPT)" "$(TEST_DATABASE_TYPE)" "$(OAUTH2_SERVER_URL)" "$(TEST_USERNAME)" "$(TEST_PASSWORD)" "$(TEST_SCOPE)" "$(API_KEY)" \
 	echo "Server logs:"; \
 	cat server-test.log; \
 	rm -f server-test.log; \

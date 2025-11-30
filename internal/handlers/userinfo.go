@@ -230,9 +230,19 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 
 			// Extract upstream token and metadata from session claims
 			if defaultSession, ok := session.(*openid.DefaultSession); ok && defaultSession.Claims != nil && defaultSession.Claims.Extra != nil {
-				if token, ok := defaultSession.Claims.Extra["upstream_token"].(string); ok {
-					upstreamToken = token
-					h.Log.Printf("✅ [PROXY] Found upstream token in session claims: %s...", upstreamToken[:20])
+				// Check for upstream_tokens map (used in token exchange)
+				if upstreamTokens, ok := defaultSession.Claims.Extra["upstream_tokens"].(map[string]interface{}); ok {
+					if token, ok := upstreamTokens["access_token"].(string); ok && token != "" {
+						upstreamToken = token
+						h.Log.Printf("✅ [PROXY] Found upstream access token in session claims: %s...", upstreamToken[:20])
+					}
+				}
+				// Fallback to direct upstream_token field (legacy or device flow)
+				if upstreamToken == "" {
+					if token, ok := defaultSession.Claims.Extra["upstream_token"].(string); ok {
+						upstreamToken = token
+						h.Log.Printf("✅ [PROXY] Found upstream token in session claims (legacy): %s...", upstreamToken[:20])
+					}
 				}
 				if state, ok := defaultSession.Claims.Extra["issuer_state"].(string); ok {
 					issuerState = state

@@ -93,10 +93,10 @@ var (
 )
 
 // Maps for persisting original authorization state through the OAuth2 flow in proxy mode
-var authCodeToStateMap = make(map[string]string)          // authorization_code -> original_state
-var deviceCodeToUpstreamMap = make(map[string]string)     // proxy_device_code -> upstream_device_code
-var accessTokenToIssuerStateMap = make(map[string]string) // access_token -> issuer_state
-var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData)
+var authCodeToStateMap = make(map[string]string)                       // authorization_code -> original_state
+var deviceCodeToUpstreamMap = make(map[string]string)                  // proxy_device_code -> upstream_device_code
+var accessTokenToIssuerStateMap = make(map[string]string)              // access_token -> issuer_state
+var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData) // proxy_state -> upstream session data
 
 // Map to store plain text secrets for privileged clients
 var privilegedClientSecrets = make(map[string]string)
@@ -117,6 +117,12 @@ func main() {
 	log.Printf("🚀 Starting OAuth2 Server v%s (commit: %s)", Version, GitCommit)
 
 	log.Printf("DEBUG: UPSTREAM_PROVIDER_URL: %s", os.Getenv("UPSTREAM_PROVIDER_URL"))
+
+	// Get config path for trust anchors loading
+	configPath := os.Getenv("CONFIG_FILE")
+	if configPath == "" {
+		configPath = "config.yaml"
+	}
 
 	// Load configuration from YAML
 	var err error
@@ -321,7 +327,7 @@ func main() {
 	// Initialize attestation manager if attestation is enabled
 	if configuration.Attestation != nil && configuration.Attestation.Enabled {
 		// Load trust anchor certificates from config file
-		trustAnchors, err := attestation.LoadTrustAnchorsFromConfig("config.yaml")
+		trustAnchors, err := attestation.LoadTrustAnchorsFromConfig(configPath)
 		if err != nil {
 			log.Fatalf("❌ Failed to load trust anchors: %v", err)
 		}
@@ -624,7 +630,13 @@ func initializeHandlers() {
 }
 
 func loadTemplates() error {
-	templatesDir := "templates"
+	// Get templates directory relative to config file
+	configPath := os.Getenv("CONFIG_FILE")
+	if configPath == "" {
+		configPath = "config.yaml"
+	}
+	configDir := filepath.Dir(configPath)
+	templatesDir := filepath.Join(configDir, "templates")
 
 	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
 		return fmt.Errorf("templates directory not found: %s", templatesDir)

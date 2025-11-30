@@ -160,7 +160,7 @@ func (h *ClaimsHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Extract authorization code and state from callback
 	code := r.URL.Query().Get("code")
-	//	state := r.URL.Query().Get("state")
+	state := r.URL.Query().Get("state")
 	errorParam := r.URL.Query().Get("error")
 
 	if errorParam != "" {
@@ -177,6 +177,7 @@ func (h *ClaimsHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.Logger.Infof("✅ Authorization code received: %s", code[:20]+"...")
+	h.Logger.Infof("📋 State parameter: %s", state)
 
 	// In a real implementation, you would:
 	// 1. Exchange the authorization code for tokens
@@ -190,6 +191,10 @@ func (h *ClaimsHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	claimsURL += "&access_token=demo_access_token_" + code[:10]
 	claimsURL += "&id_token=demo_id_token_" + code[:10]
 	claimsURL += "&refresh_token=demo_refresh_token_" + code[:10]
+	claimsURL += "&auth_code=" + code
+	if state != "" {
+		claimsURL += "&state=" + state
+	}
 
 	h.Logger.Infof("🔄 Redirecting to claims display: %s", claimsURL)
 	http.Redirect(w, r, claimsURL, http.StatusFound)

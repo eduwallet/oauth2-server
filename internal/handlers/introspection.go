@@ -377,7 +377,7 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Debug: Log all response keys and values
-	h.Log.Debugf("🔍 Main Introspection Response Keys: %v", getMapKeys(response))
+	h.Log.Debugf("🔍 Main Introspection Response Keys: %v", getMapKeysInterface(response))
 	for key, value := range response {
 		h.Log.Debugf("🔍 Main Response [%s]: %v", key, value)
 	}
@@ -561,7 +561,7 @@ func (h *IntrospectionHandler) handlePrivilegedIntrospectionWithAttestation(w ht
 	}
 
 	// Debug: Log all response keys and values
-	h.Log.Debugf("🔍 Privileged Introspection Response Keys: %v", getMapKeys(response))
+	h.Log.Debugf("🔍 Privileged Introspection Response Keys: %v", getMapKeysInterface(response))
 	for key, value := range response {
 		h.Log.Debugf("🔍 Privileged Response [%s]: %v", key, value)
 	}
@@ -724,7 +724,7 @@ func (h *IntrospectionHandler) handleLocalIntrospectionWithCredentials(w http.Re
 	}
 
 	// Debug: Log all response keys and values
-	h.Log.Debugf("🔍 Introspection Response Keys: %v", getMapKeys(response))
+	h.Log.Debugf("🔍 Introspection Response Keys: %v", getMapKeysInterface(response))
 	for key, value := range response {
 		h.Log.Debugf("🔍 Response [%s]: %v", key, value)
 	}
@@ -1084,8 +1084,8 @@ func (h *IntrospectionHandler) logTokenClaims(tokenValue string) {
 	}
 }
 
-// getMapKeys returns a slice of keys from a map
-func getMapKeys(m map[string]interface{}) []string {
+// getMapKeysInterface returns a slice of keys from a map[string]interface{}
+func getMapKeysInterface(m map[string]interface{}) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
