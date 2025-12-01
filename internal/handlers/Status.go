@@ -9,12 +9,18 @@ import (
 // StatusHandler manages the status page requests
 type StatusHandler struct {
 	Configuration *config.Config
+	Version       string
+	GitCommit     string
+	BuildTime     string
 }
 
 // NewStatusHandler creates a new status handler
-func NewStatusHandler(configuration *config.Config) *StatusHandler {
+func NewStatusHandler(configuration *config.Config, version, gitCommit, buildTime string) *StatusHandler {
 	return &StatusHandler{
 		Configuration: configuration,
+		Version:       version,
+		GitCommit:     gitCommit,
+		BuildTime:     buildTime,
 	}
 }
 
@@ -221,6 +227,15 @@ func (h *StatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					<span class="info-label">Mode:</span>
 					<span class="status-badge status-proxy">%s</span>
 					%s
+
+					<span class="info-label">Image Tag:</span>
+					<span class="info-value">%s</span>
+
+					<span class="info-label">Git Commit:</span>
+					<span class="info-value">%s</span>
+
+					<span class="info-label">Build Time:</span>
+					<span class="info-value">%s</span>
 				</div>
 			</div>
 
@@ -242,7 +257,7 @@ func (h *StatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					<span class="info-value">%s</span>`, upstreamURL)
 			}
 			return ""
-		}())
+		}(), h.Version, h.GitCommit, h.BuildTime)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

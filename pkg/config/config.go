@@ -471,16 +471,6 @@ func (c *Config) SetDefaults() {
 	}
 }
 
-// Helper functions
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
 func isValidGrantType(grantType string) bool {
 	validGrantTypes := []string{
 		"authorization_code",
@@ -504,4 +494,14 @@ func isValidTokenEndpointAuthMethod(method string) bool {
 		"attest_tls_client_auth", // New attestation method
 	}
 	return contains(validMethods, method)
+}
+
+// Helper function to check if a slice contains a string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

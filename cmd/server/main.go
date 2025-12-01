@@ -622,7 +622,7 @@ func initializeHandlers() {
 	// Initialize discovery and utility handlers
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
 	jwksHandler = handlers.NewJWKSHandler()
-	statusHandler = handlers.NewStatusHandler(configuration)
+	statusHandler = handlers.NewStatusHandler(configuration, Version, GitCommit, BuildTime)
 	versionHandler = handlers.NewVersionHandler()
 	claimsHandler = handlers.NewClaimsHandler(configuration, log)
 	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler)

@@ -17,18 +17,21 @@ RUN go mod download && go mod verify
 COPY . .
 
 # Build arguments
-ARG VERSION=dev
-ARG GIT_COMMIT=unknown
-ARG BUILD_TIME=unknown
+ARG VERSION
+ARG GIT_COMMIT
+ARG BUILD_TIME
 
 # Build the application with CGO enabled for SQLite support
-RUN CGO_ENABLED=1 GOOS=linux go build \
-    -ldflags="-s -w \
-              -X main.Version=${VERSION} \
-              -X main.GitCommit=${GIT_COMMIT} \
-              -X main.BuildTime=${BUILD_TIME}" \
-    -o oauth2-server \
-    cmd/server/main.go
+RUN VERSION=${VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)} && \
+    GIT_COMMIT=${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)} && \
+    BUILD_TIME=${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)} && \
+    CGO_ENABLED=1 GOOS=linux go build \
+        -ldflags="-s -w \
+                  -X main.Version=${VERSION} \
+                  -X main.GitCommit=${GIT_COMMIT} \
+                  -X main.BuildTime=${BUILD_TIME}" \
+        -o oauth2-server \
+        cmd/server/main.go
 
 # Final stage - use alpine for healthcheck capabilities
 FROM alpine:latest
