@@ -71,7 +71,7 @@ func (h *CallbackHandler) handleProxyCallback(w http.ResponseWriter, r *http.Req
 		h.Log.Errorf("❌ [PROXY] Unknown state: %s - not found in session map", proxyState)
 		http.Error(w, "unknown state", http.StatusBadRequest)
 		return
-	}	// Store the mapping from authorization code to original state for later retrieval during token exchange
+	} // Store the mapping from authorization code to original state for later retrieval during token exchange
 	if code != "" && sess.OriginalIssuerState != "" {
 		(*h.AuthCodeToStateMap)[code] = sess.OriginalIssuerState
 		h.Log.Printf("🔄 [PROXY] Stored authorization code -> original issuer state mapping: %s -> %s", code[:20]+"...", sess.OriginalIssuerState)
