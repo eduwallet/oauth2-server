@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/ory/fosite/storage"
 	"github.com/ory/fosite/token/jwt"
 	"github.com/sirupsen/logrus"
@@ -116,7 +117,10 @@ func main() {
 
 	log.Printf("🚀 Starting OAuth2 Server v%s (commit: %s)", Version, GitCommit)
 
-	log.Printf("DEBUG: UPSTREAM_PROVIDER_URL: %s", os.Getenv("UPSTREAM_PROVIDER_URL"))
+	//Load .env file if it exists
+	if err := godotenv.Load(); err != nil {
+		log.Printf("DEBUG: No .env file found or error loading: %v", err)
+	}
 
 	// Get config path for trust anchors loading
 	configPath := os.Getenv("CONFIG_FILE")
