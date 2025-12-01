@@ -1,9 +1,7 @@
 # OAuth2 Server Configuration
 
 server:
-  base_url: "http://localhost:8080"
   port: 8080
-  host: "127.0.0.1"
   read_timeout: 30
   write_timeout: 30
   shutdown_timeout: 5

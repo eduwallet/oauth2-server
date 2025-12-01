@@ -35,7 +35,7 @@ func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"version":    Version,
 		"git_commit": GitCommit,
 		"build_time": BuildTime,
-		"base_url":   h.Configuration.Server.BaseURL,
+		"base_url":   h.Configuration.PublicBaseURL,
 		"clients":    clientCount,
 		"storage":    "custom", // Indicate we're using custom storage
 	}

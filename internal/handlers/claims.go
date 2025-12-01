@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"html/template"
 	"net/http"
 	"oauth2-server/pkg/config"
@@ -122,9 +123,9 @@ func (h *ClaimsHandler) extractClaimsFromRequest(r *http.Request) ClaimsData {
 	}
 
 	now := time.Now()
-	issuer := h.Config.BaseURL
+	issuer := h.Config.PublicBaseURL
 	if issuer == "" {
-		issuer = "http://localhost:8080"
+		issuer = fmt.Sprintf("http://localhost:%d", h.Config.Server.Port)
 	}
 
 	claimsData := ClaimsData{

@@ -11,7 +11,7 @@ import (
 func (c *Config) NormalizeAllClientRedirectURIs() {
 	for i := range c.Clients {
 		for j, uri := range c.Clients[i].RedirectURIs {
-			c.Clients[i].RedirectURIs[j] = utils.NormalizeRedirectURI(c.Server.BaseURL, uri)
+			c.Clients[i].RedirectURIs[j] = utils.NormalizeRedirectURI(c.PublicBaseURL, uri)
 		}
 	}
 }
@@ -41,10 +41,6 @@ func Load() (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
-
-	cfg.BaseURL = cfg.Server.BaseURL
-	cfg.Port = fmt.Sprintf("%d", cfg.Server.Port)
-	cfg.Host = cfg.Server.Host
 
 	return cfg, nil
 }

@@ -131,7 +131,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Now that the user is authorized, we set up a session using the proper newSession helper:
-	mySessionData := userSession(h.Configuration.BaseURL, username, []string{})
+	mySessionData := userSession(h.Configuration.PublicBaseURL, username, []string{})
 
 	// Store granted scopes in session for later retrieval during token exchange
 	if mySessionData.Claims.Extra == nil {

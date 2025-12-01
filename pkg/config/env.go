@@ -9,21 +9,15 @@ import (
 // LoadFromEnv loads configuration from environment variables and overrides YAML config
 func (c *Config) LoadFromEnv() {
 	// Server configuration overrides
-	if baseURL := os.Getenv("PUBLIC_BASE_URL"); baseURL != "" {
-		c.BaseURL = baseURL
-		c.Server.BaseURL = baseURL
+	if publicBaseURL := os.Getenv("PUBLIC_BASE_URL"); publicBaseURL != "" {
+		// c.Server.BaseURL = baseURL
+		c.PublicBaseURL = publicBaseURL
 	}
 
 	if port := os.Getenv("PORT"); port != "" {
-		c.Port = port
 		if portInt, err := strconv.Atoi(port); err == nil {
 			c.Server.Port = portInt
 		}
-	}
-
-	if host := os.Getenv("HOST"); host != "" {
-		c.Host = host
-		c.Server.Host = host
 	}
 
 	// Logging configuration overrides
@@ -49,10 +43,6 @@ func (c *Config) LoadFromEnv() {
 	// Proxy configuration overrides
 	if trustHeaders := os.Getenv("TRUST_PROXY_HEADERS"); trustHeaders != "" {
 		c.TrustProxyHeaders = GetEnvBool("TRUST_PROXY_HEADERS", true)
-	}
-
-	if publicBaseURL := os.Getenv("PUBLIC_BASE_URL"); publicBaseURL != "" {
-		c.PublicBaseURL = publicBaseURL
 	}
 
 	if forceHTTPS := os.Getenv("FORCE_HTTPS"); forceHTTPS != "" {

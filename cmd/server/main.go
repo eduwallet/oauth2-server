@@ -228,7 +228,7 @@ func main() {
 				}
 
 				registrationRequest := map[string]interface{}{
-					"redirect_uris":              []string{configuration.Server.BaseURL + "/callback"},
+					"redirect_uris":              []string{configuration.PublicBaseURL + "/callback"},
 					"client_name":                "OAuth2 Federation OP",
 					"grant_types":                []string{"authorization_code"},
 					"scope":                      strings.Join(upstreamScopes, " "),
@@ -375,10 +375,10 @@ func main() {
 	setupRoutes()
 
 	// Start server
-	log.Printf("🌐 OAuth2 server starting on port %d", configuration.Server.Port)
-	log.Printf("🏥 Health check: %s/health", configuration.Server.BaseURL)
-	log.Printf("📊 Metrics endpoint: %s/metrics", configuration.Server.BaseURL)
-	log.Printf("📈 Status endpoint: %s/stats", configuration.Server.BaseURL)
+	// log.Printf("🌐 OAuth2 server starting on port %d", configuration.Server.Port)
+	log.Printf("🏥 Health check: %s/health", configuration.PublicBaseURL)
+	log.Printf("📊 Metrics endpoint: %s/metrics", configuration.PublicBaseURL)
+	log.Printf("📈 Status endpoint: %s/stats", configuration.PublicBaseURL)
 	log.Printf("✅ Server is ready to accept requests")
 
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", configuration.Server.Port), nil); err != nil {
@@ -528,7 +528,7 @@ func initializeOAuth2Provider() error {
 	log.Printf("🔍 Configuration details:")
 	log.Printf("🔍   Security.TokenExpirySeconds: %d", configuration.Security.TokenExpirySeconds)
 	log.Printf("🔍   Security.JWTSecret length: %d", len(configuration.Security.JWTSecret))
-	log.Printf("🔍   Server.BaseURL: %s", configuration.Server.BaseURL)
+	log.Printf("🔍   Server.BaseURL: %s", configuration.PublicBaseURL)
 	config := &fosite.Config{
 		AccessTokenLifespan:   time.Duration(configuration.Security.TokenExpirySeconds) * time.Second,
 		RefreshTokenLifespan:  time.Duration(configuration.Security.RefreshTokenExpirySeconds) * time.Second,
@@ -540,7 +540,7 @@ func initializeOAuth2Provider() error {
 		// Set the HMAC secret from our configuration
 		GlobalSecret: []byte(configuration.Security.JWTSecret),
 		// Set the ID token issuer
-		IDTokenIssuer: configuration.Server.BaseURL,
+		IDTokenIssuer: configuration.PublicBaseURL,
 		// RFC 8693
 		TokenExchangeEnabled: true,
 		TokenExchangeTokenTypes: []string{
@@ -820,17 +820,6 @@ func proxyAwareMiddleware(handler http.Handler) http.Handler {
 				r.Host = r.Host + ":" + port
 				r.URL.Host = r.Host
 			}
-		}
-
-		// Update the config's BaseURL for this request if needed
-		if r.URL.Scheme != "" && r.Host != "" {
-			originalBaseURL := configuration.Server.BaseURL
-			configuration.Server.BaseURL = r.URL.Scheme + "://" + r.Host
-
-			// Restore original BaseURL after request
-			defer func() {
-				configuration.Server.BaseURL = originalBaseURL
-			}()
 		}
 
 		// Log proxy information for debugging

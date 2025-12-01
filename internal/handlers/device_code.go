@@ -104,8 +104,8 @@ func (h *DeviceCodeHandler) handleLocalDeviceAuthorization(w http.ResponseWriter
 	userCode := deviceResponse.GetUserCode()
 	clientID := deviceRequest.GetClient().GetID()
 
-	deviceResponse.SetVerificationURI(h.Config.BaseURL + "/device")
-	deviceResponse.SetVerificationURIComplete(h.Config.BaseURL + "/device?user_code=" + userCode)
+	deviceResponse.SetVerificationURI(h.Config.PublicBaseURL + "/device")
+	deviceResponse.SetVerificationURIComplete(h.Config.PublicBaseURL + "/device?user_code=" + userCode)
 
 	h.Logger.Infof("✅ Device authorization created via fosite for client: %s", clientID)
 	h.Logger.Printf("🔍 Device Code: %s...", deviceCode[:20])

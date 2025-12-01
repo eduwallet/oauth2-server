@@ -178,7 +178,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 	}
 
 	// Call userinfo endpoint
-	userinfoReq, err := http.NewRequest("GET", h.Config.Server.BaseURL+"/userinfo", nil)
+	userinfoReq, err := http.NewRequest("GET", h.Config.PublicBaseURL+"/userinfo", nil)
 	if err != nil {
 		h.Log.Errorf("❌ Failed to create userinfo request: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -242,7 +242,7 @@ func (h *AuthorizationIntrospectionHandler) introspectTokenWithPrivilegedAccess(
 	form := make(url.Values)
 	form.Set("token", tokenValue)
 
-	req, err := http.NewRequest("POST", h.Config.Server.BaseURL+"/introspect", strings.NewReader(form.Encode()))
+	req, err := http.NewRequest("POST", h.Config.PublicBaseURL+"/introspect", strings.NewReader(form.Encode()))
 	if err != nil {
 		h.Log.Errorf("❌ Failed to create HTTP request: %v", err)
 		return nil, err

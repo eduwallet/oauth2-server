@@ -101,10 +101,8 @@ type Config struct {
 	Logging  LoggingConfig  `yaml:"logging"`
 	Database DatabaseConfig `yaml:"database"`
 
-	// Legacy fields for backward compatibility
-	BaseURL string
-	Port    string
-	Host    string
+	// PublicBaseURL is the public base URL of the server (can be overridden by YAML)
+	PublicBaseURL string
 
 	// Clients loaded from YAML
 	Clients []ClientConfig `yaml:"clients"`
@@ -120,19 +118,17 @@ type Config struct {
 
 	// Reverse Proxy Configuration (can be overridden by YAML)
 	TrustProxyHeaders bool
-	PublicBaseURL     string
-	ForceHTTPS        bool
-	TrustedProxies    string
+	// PublicBaseURL     string
+	ForceHTTPS     bool
+	TrustedProxies string
 }
 
 // ServerConfig holds server-specific configuration
 type ServerConfig struct {
-	Port            int    `yaml:"port"`
-	Host            string `yaml:"host"`
-	BaseURL         string `yaml:"base_url"`
-	ReadTimeout     int    `yaml:"read_timeout"`
-	WriteTimeout    int    `yaml:"write_timeout"`
-	ShutdownTimeout int    `yaml:"shutdown_timeout"`
+	Port            int `yaml:"port"`
+	ReadTimeout     int `yaml:"read_timeout"`
+	WriteTimeout    int `yaml:"write_timeout"`
+	ShutdownTimeout int `yaml:"shutdown_timeout"`
 }
 
 // SecurityConfig holds security-related configuration
@@ -243,13 +239,13 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("encryption key must be exactly 32 bytes (256 bits) for AES-256")
 	}
 
-	if c.Server.Port <= 0 || c.Server.Port > 65535 {
-		return fmt.Errorf("invalid server port: %d", c.Server.Port)
-	}
+	// if c.Server.Port <= 0 || c.Server.Port > 65535 {
+	// 	return fmt.Errorf("invalid server port: %d", c.Server.Port)
+	// }
 
-	if c.Server.Host == "" {
-		return fmt.Errorf("server host is required")
-	}
+	// if c.Server.Host == "" {
+	// 	return fmt.Errorf("server host is required")
+	// }
 
 	// Validate mode-specific configuration
 	if c.IsLocalMode() {
@@ -383,7 +379,7 @@ type User = UserConfig
 
 // GetEffectiveBaseURL returns the effective base URL considering proxy headers
 func (c *Config) GetEffectiveBaseURL(r *http.Request) string {
-	return utils.GetEffectiveBaseURL(c.Server.BaseURL, r)
+	return utils.GetEffectiveBaseURL(c.PublicBaseURL, r)
 }
 
 // GetClientByID returns a client by ID

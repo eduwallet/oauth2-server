@@ -501,7 +501,7 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 
 	// For authorization_code grant, replace redirect_uri with proxy callback URL
 	if grantType := r.Form.Get("grant_type"); grantType == "authorization_code" {
-		proxyCallbackURL := h.Configuration.Server.BaseURL + "/callback"
+		proxyCallbackURL := h.Configuration.PublicBaseURL + "/callback"
 		upstreamForm.Set("redirect_uri", proxyCallbackURL)
 		h.Log.Debugf("🔄 [PROXY-AUTH-CODE] Replaced redirect_uri with proxy callback: %s", proxyCallbackURL)
 	}
