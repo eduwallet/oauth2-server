@@ -220,7 +220,8 @@ echo "🎲 Issuer State: ${ISSUER_STATE:0:20}..."
 
 # Build authorization URL for proxy
 ENCODED_SCOPE=$(url_encode "$TEST_SCOPE")
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=http://localhost:8080/oauth/callback&state=$STATE&scope=$ENCODED_SCOPE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256&issuer_state=$ISSUER_STATE"
+CLAIMS_PARAM="edumember_is_member_of"
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=http://localhost:8080/oauth/callback&state=$STATE&scope=$ENCODED_SCOPE&claims=$CLAIMS_PARAM&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256&issuer_state=$ISSUER_STATE"
 
 echo "🔗 Proxy Authorization URL: $AUTH_URL"
 

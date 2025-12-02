@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -399,21 +400,25 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 
 	// Handle claims parameter - use client's registered claims if none provided
 	claimsParam := q.Get("claims")
+	var upstreamClaims string
 	if claimsParam == "" {
 		// No claims provided, use client's registered claims
 		if client, err := h.Storage.GetClient(r.Context(), clientID); err == nil {
 			if customClient, ok := client.(*store.CustomClient); ok {
 				clientClaims := customClient.GetClaims()
 				if len(clientClaims) > 0 {
-					claimsParam = strings.Join(clientClaims, " ")
-					h.Log.Printf("🔍 [PROXY-AUTH] No claims provided, using client's registered claims: %s", claimsParam)
+					upstreamClaims = h.buildClaimsJSON(clientClaims)
+					h.Log.Printf("🔍 [PROXY-AUTH] No claims provided, using client's registered claims: %s", upstreamClaims)
 				}
 			}
 		}
+	} else {
+		// Parse the claims parameter - could be space-separated or JSON
+		upstreamClaims = h.buildClaimsJSON(strings.Fields(claimsParam))
+		h.Log.Printf("🔍 [PROXY-AUTH] Forwarding claims to upstream: %s", upstreamClaims)
 	}
-	if claimsParam != "" {
-		vals.Set("claims", claimsParam)
-		h.Log.Printf("🔍 [PROXY-AUTH] Forwarding claims to upstream: %s", claimsParam)
+	if upstreamClaims != "" {
+		vals.Set("claims", upstreamClaims)
 	}
 
 	// Handle scope parameter - use client's registered scopes if none provided
@@ -451,4 +456,28 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	h.Log.Printf("🔄 [PROXY-AUTH] Redirecting to upstream: %s", upstreamURL)
 	http.Redirect(w, r, upstreamURL, http.StatusFound)
 	h.Log.Printf("✅ [PROXY-AUTH] Redirect sent")
+}
+
+// buildClaimsJSON builds a proper OIDC claims parameter JSON from a list of claim names
+func (h *AuthorizeHandler) buildClaimsJSON(claims []string) string {
+	if len(claims) == 0 {
+		return ""
+	}
+
+	claimsMap := make(map[string]interface{})
+	for _, claim := range claims {
+		claimsMap[claim] = nil
+	}
+
+	userinfoClaims := map[string]interface{}{
+		"userinfo": claimsMap,
+	}
+
+	jsonBytes, err := json.Marshal(userinfoClaims)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-AUTH] Failed to marshal claims JSON: %v", err)
+		return ""
+	}
+
+	return string(jsonBytes)
 }

@@ -28,6 +28,7 @@ users = {
         "family_name": "Doe",
         "preferred_username": "john.doe",
         "email_verified": True,
+        "edumember_is_member_of": ["urn:collab:group:test.surfteams.nl:nl:surfnet:diensten:admins"]
     },
     "testuser": {
         "password": "testpass",
@@ -111,10 +112,15 @@ class MockOAuth2Handler(BaseHTTPRequestHandler):
             redirect_uri = query_params.get('redirect_uri', [None])[0]
             state = query_params.get('state', [None])[0]
             scope = query_params.get('scope', ['openid'])[0]
+            claims = query_params.get('claims', [None])[0]
             
             if not redirect_uri:
                 self._error_response("invalid_request", "Missing redirect_uri")
                 return
+            
+            # Log claims if provided
+            if claims:
+                print(f"Mock provider received claims: {claims}", flush=True)
             
             # Generate authorization code
             auth_code = f"mock_code_{secrets.token_urlsafe(20)}"
@@ -151,7 +157,8 @@ class MockOAuth2Handler(BaseHTTPRequestHandler):
                 return
 
             user_data = token_data.get('user_data', {})
-            self._json_response({
+            # Return all user data fields to include requested claims
+            response_data = {
                 "sub": user_data.get("sub"),
                 "email": user_data.get("email"),
                 "name": user_data.get("name"),
@@ -159,7 +166,12 @@ class MockOAuth2Handler(BaseHTTPRequestHandler):
                 "family_name": user_data.get("family_name"),
                 "preferred_username": user_data.get("preferred_username"),
                 "email_verified": user_data.get("email_verified", False)
-            })
+            }
+            # Add any additional claims from user data
+            for key, value in user_data.items():
+                if key not in response_data:
+                    response_data[key] = value
+            self._json_response(response_data)
             return
 
         self._error_response("not_found", "Endpoint not found", 404)
