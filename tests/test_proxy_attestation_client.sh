@@ -40,136 +40,18 @@ print_status() {
         echo "$message"
     fi
 }
-
-# Start mock upstream OAuth2 provider
-start_mock_provider() {
-    print_status "info" "Starting mock upstream OAuth2 provider on port $MOCK_PROVIDER_PORT..."
-
-    # Create a simple mock server using netcat or a basic HTTP server
-    # For simplicity, we'll use a Python HTTP server with custom responses
-    cat > mock_provider.py << 'EOF'
-#!/usr/bin/env python3
-import json
-import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import urllib.parse
-
-class MockOAuthProvider(BaseHTTPRequestHandler):
-    def do_GET(self):
-        print(f"DEBUG: Received GET request for path: {self.path}")
-        parsed_path = urllib.parse.urlparse(self.path)
-        query_params = urllib.parse.parse_qs(parsed_path.query)
-        print(f"DEBUG: Parsed path: {parsed_path.path}")
-
-        if parsed_path.path == "/.well-known/openid-configuration":
-            print("DEBUG: Serving OIDC discovery document")
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            config = {
-                "issuer": "http://localhost:9999",
-                "authorization_endpoint": "http://localhost:9999/auth",
-                "token_endpoint": "http://localhost:9999/token",
-                "userinfo_endpoint": "http://localhost:9999/userinfo",
-                "jwks_uri": "http://localhost:9999/jwks",
-                "scopes_supported": ["openid", "profile", "email"],
-                "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code"],
-                "token_endpoint_auth_methods_supported": ["client_secret_basic"]
-            }
-            self.wfile.write(json.dumps(config).encode())
-            return
-
-        elif parsed_path.path == "/auth":
-            print("DEBUG: Handling auth request")
-            # Mock authorization endpoint - redirect back with code
-            redirect_uri = query_params.get('redirect_uri', [''])[0]
-            state = query_params.get('state', [''])[0]
-            code = f"mock_auth_code_{int(time.time())}"
-
-            if redirect_uri:
-                location = f"{redirect_uri}?code={code}&state={state}&scope=openid+profile+email"
-                self.send_response(302)
-                self.send_header('Location', location)
-                self.end_headers()
-            else:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"Missing redirect_uri")
-            return
-
-        print(f"DEBUG: Path not found: {parsed_path.path}")
-        self.send_response(404)
-        self.end_headers()
-        self.wfile.write(b"Not found")
-
-    def do_POST(self):
-        if self.path == "/token":
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-
-            # Mock token response
-            token_response = {
-                "access_token": f"mock_access_token_{int(time.time())}",
-                "token_type": "bearer",
-                "expires_in": 3600,
-                "scope": "openid profile email",
-                "id_token": f"mock_id_token_{int(time.time())}"
-            }
-            self.wfile.write(json.dumps(token_response).encode())
-            return
-
-        self.send_response(404)
-        self.end_headers()
-        self.wfile.write(b"Not found")
-
-    def log_message(self, format, *args):
-        # Suppress default logging
-        pass
-
-if __name__ == "__main__":
-    server = HTTPServer(('localhost', 9999), MockOAuthProvider)
-    print("Mock OAuth2 provider running on http://localhost:9999")
-    print("Ready to serve requests...")
-    server.serve_forever()
-EOF
-
-    chmod +x mock_provider.py
-    python3 mock_provider.py &
-    MOCK_PID=$!
-    echo $MOCK_PID > mock_provider.pid
-
-    # Wait for mock server to start
-    sleep 3
-
-    # Test that mock provider is responding
-    sleep 1
-    echo "Testing mock provider endpoint..."
-    MOCK_RESPONSE=$(curl -s "$MOCK_PROVIDER_URL/.well-known/openid-configuration")
-    if [ $? -eq 0 ] && [ -n "$MOCK_RESPONSE" ]; then
-        print_status "success" "Mock upstream provider started successfully"
-        echo "Mock provider response preview: ${MOCK_RESPONSE:0:100}..."
-    else
-        print_status "error" "Failed to start mock upstream provider"
-        echo "Curl exit code: $?"
-        echo "Response: $MOCK_RESPONSE"
-        exit 1
-    fi
-}
-
-# Stop mock provider
-stop_mock_provider() {
-    if [ -f mock_provider.pid ]; then
-        kill $(cat mock_provider.pid) 2>/dev/null || true
-        rm -f mock_provider.pid mock_provider.py
-        print_status "info" "Mock upstream provider stopped"
-    fi
-}
+# Verify it's accessible
+print_status "info" "Verifying mock upstream provider is accessible..."
+MOCK_RESPONSE=$(curl -s "$MOCK_PROVIDER_URL/.well-known/openid-configuration" 2>/dev/null)
+if ! echo "$MOCK_RESPONSE" | grep -q "issuer"; then
+    print_status "error" "Mock upstream provider not accessible at $MOCK_PROVIDER_URL"
+    print_status "error" "Make sure to run tests via: make test-script SCRIPT=<script-name>"
+    exit 1
+fi
+print_status "success" "Mock upstream provider is ready"
 
 # Cleanup function
 cleanup() {
-    stop_mock_provider
     if [ -f server.pid ]; then
         kill $(cat server.pid) 2>/dev/null || true
         rm -f server.pid
@@ -178,9 +60,6 @@ cleanup() {
 
 # Set trap for cleanup
 trap cleanup EXIT
-
-# Start mock upstream provider
-start_mock_provider
 
 echo ""
 echo "🧪 Step 1: Starting OAuth2 server in proxy mode..."

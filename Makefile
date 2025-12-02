@@ -255,32 +255,43 @@ setup-env:
 	@echo "Or run this command to add it temporarily:"
 	@echo "export PATH=\"$(shell go env GOPATH)/bin:\$$PATH\""
 
-# Test target - runs all test scripts with server lifecycle management and isolation
+# Test target - runs all test scripts with server lifecycle management and isolation (quiet mode)
 test: build
 	@echo "🧪 Starting automated test suite with test isolation..."
-	@echo "📦 Building server..."
-	@$(MAKE) build
-	@echo "✅ Test setup complete, running test scripts with server isolation..."
-	@passed=0; failed=0; \
+	@passed=0; failed=0; failed_tests=""; \
 	for script in tests/test_*.sh; do \
 		if [ -f "$$script" ]; then \
-			echo "🧪 Running $$script with fresh server instance..."; \
-			$(MAKE) test-script SCRIPT=$$(basename $$script) && { \
-				echo "✅ $$script passed"; \
+			script_name=$$(basename $$script); \
+			printf "Testing %-40s ... " "$$script_name"; \
+			if $(MAKE) test-script SCRIPT=$$script_name QUIET=1 > /tmp/test-$$script_name.log 2>&1; then \
+				echo "✅ PASSED"; \
 				passed=$$((passed + 1)); \
-			} || { \
-				echo "❌ $$script failed"; \
+			else \
+				echo "❌ FAILED"; \
 				failed=$$((failed + 1)); \
-			}; \
-			echo ""; \
+				failed_tests="$$failed_tests $$script_name"; \
+			fi; \
 		fi; \
 	done; \
-	echo "📊 Test Results: $$passed passed, $$failed failed"; \
+	echo ""; \
+	echo "════════════════════════════════════════════════════════════════"; \
+	echo "📊 Test Summary: $$passed passed, $$failed failed"; \
+	echo "════════════════════════════════════════════════════════════════"; \
 	if [ $$failed -gt 0 ]; then \
-		echo "❌ Some tests failed"; \
+		echo ""; \
+		echo "❌ Failed tests:"; \
+		for test in $$failed_tests; do \
+			echo "   - $$test"; \
+			echo ""; \
+			echo "   Log output from $$test:"; \
+			cat /tmp/test-$$test.log 2>/dev/null | tail -50; \
+			echo ""; \
+		done; \
+		rm -f /tmp/test-*.log; \
 		exit 1; \
 	else \
 		echo "✅ All tests passed!"; \
+		rm -f /tmp/test-*.log; \
 	fi
 
 # Test with verbose output and isolation
@@ -321,17 +332,15 @@ test-script: build
 		echo "❌ Script tests/$(SCRIPT) not found"; \
 		exit 1; \
 	fi
-	@echo "🧪 Testing single script: $(SCRIPT)"
-	@if [ ! -f "bin/oauth2-server" ]; then \
-		echo "📦 Building server..."; \
-		$(MAKE) build; \
+	@if [ -z "$(QUIET)" ]; then \
+		echo "🧪 Testing single script: $(SCRIPT)"; \
 	fi
-	@$(MAKE) check-port
-	@./scripts/run-test-script.sh "$(SCRIPT)" "$(TEST_DATABASE_TYPE)" "$(OAUTH2_SERVER_URL)" "$(TEST_USERNAME)" "$(TEST_PASSWORD)" "$(TEST_SCOPE)" "$(API_KEY)" \
-	echo "Server logs:"; \
-	cat server-test.log; \
-	rm -f server-test.log; \
-	exit $$result
+	@if [ ! -f "bin/oauth2-server" ]; then \
+		if [ -z "$(QUIET)" ]; then echo "📦 Building server..."; fi; \
+		$(MAKE) build > /dev/null 2>&1; \
+	fi
+	@if [ -z "$(QUIET)" ] && ! echo "$(SCRIPT)" | grep -q "proxy"; then $(MAKE) check-port; fi
+	@./scripts/run-test-script.sh "$(SCRIPT)" "$(TEST_DATABASE_TYPE)" "$(OAUTH2_SERVER_URL)" "$(TEST_USERNAME)" "$(TEST_PASSWORD)" "$(TEST_SCOPE)" "$(API_KEY)" "$(QUIET)"
 
 # Test specific script with verbose output
 test-script-verbose:

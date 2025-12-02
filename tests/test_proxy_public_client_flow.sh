@@ -23,6 +23,29 @@ SERVER_URL="http://localhost:8080"
 MOCK_PROVIDER_URL="http://localhost:9999"
 API_KEY="test-api-key"
 
+# Function to URL encode a string
+url_encode() {
+    local string="$1"
+    local encoded=""
+    local length="${#string}"
+    for (( i = 0; i < length; i++ )); do
+        local char="${string:i:1}"
+        case "$char" in
+            [a-zA-Z0-9.~_-])
+                encoded+="$char"
+                ;;
+            ' ')
+                encoded+="%20"
+                ;;
+            *)
+                printf -v hex '%02X' "'$char"
+                encoded+="%$hex"
+                ;;
+        esac
+    done
+    echo "$encoded"
+}
+
 # Initialize test results
 STEP1_PASS=false
 STEP2_PASS=false
@@ -53,337 +76,19 @@ print_status() {
     esac
 }
 
-# Start mock upstream provider
-start_mock_provider() {
-    print_status "info" "Starting mock upstream OAuth2 provider..."
-
-    # Kill any existing process on port 9999
-    if lsof -i :9999 > /dev/null 2>&1; then
-        echo "Port 9999 is already in use. Killing existing process..."
-        kill $(lsof -t -i :9999) 2>/dev/null || true
-        sleep 2
-    fi
-
-    cat > mock_provider.py << 'EOF'
-import http.server
-import socketserver
-import json
-import urllib.parse
-import uuid
-import time
-import base64
-import base64
-
-class MockOAuthProvider(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path = parsed_path.path
-        query_params = urllib.parse.parse_qs(parsed_path.query)
-
-        if path == "/.well-known/openid-configuration":
-            print("DEBUG: Serving OpenID configuration")
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            config = {
-                "issuer": "http://localhost:9999",
-                "authorization_endpoint": "http://localhost:9999/authorize",
-                "token_endpoint": "http://localhost:9999/token",
-                "introspection_endpoint": "http://localhost:9999/introspect",
-                "userinfo_endpoint": "http://localhost:9999/userinfo",
-                "jwks_uri": "http://localhost:9999/jwks",
-                "scopes_supported": ["openid", "profile", "email", "api:read"],
-                "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code", "urn:ietf:params:oauth:grant-type:device_code"],
-                "token_endpoint_auth_methods_supported": ["client_secret_basic"]
-            }
-            self.wfile.write(json.dumps(config).encode())
-            return
-
-        elif path == "/authorize":
-            print("DEBUG: Handling authorization request")
-            # Mock login form
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            html = """
-            <html>
-            <body>
-                <h1>Mock OAuth2 Login</h1>
-                <form method="POST" action="/authorize">
-                    <input type="hidden" name="response_type" value="{response_type}">
-                    <input type="hidden" name="client_id" value="{client_id}">
-                    <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                    <input type="hidden" name="state" value="{state}">
-                    <input type="hidden" name="scope" value="{scope}">
-                    <input type="hidden" name="code_challenge" value="{code_challenge}">
-                    <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
-                    <label>Username: <input type="text" name="username" value="john.doe"></label><br>
-                    <label>Password: <input type="password" name="password" value="password123"></label><br>
-                    <button type="submit">Login</button>
-                </form>
-            </body>
-            </html>
-            """.format(
-                response_type=parsed_path.query_params.get('response_type', [''])[0] if hasattr(parsed_path, 'query_params') else '',
-                client_id=urllib.parse.parse_qs(parsed_path.query)['client_id'][0] if 'client_id' in urllib.parse.parse_qs(parsed_path.query) else '',
-                redirect_uri=urllib.parse.parse_qs(parsed_path.query).get('redirect_uri', [''])[0],
-                state=urllib.parse.parse_qs(parsed_path.query).get('state', [''])[0],
-                scope=urllib.parse.parse_qs(parsed_path.query).get('scope', [''])[0],
-                code_challenge=urllib.parse.parse_qs(parsed_path.query).get('code_challenge', [''])[0],
-                code_challenge_method=urllib.parse.parse_qs(parsed_path.query).get('code_challenge_method', [''])[0]
-            )
-            self.wfile.write(html.encode())
-            return
-
-        elif path == "/userinfo":
-            print("DEBUG: Handling userinfo request")
-            # Check for authorization header
-            auth_header = self.headers.get('Authorization', '')
-            if not auth_header.startswith('Bearer '):
-                self.send_response(401)
-                self.send_header('WWW-Authenticate', 'Bearer')
-                self.end_headers()
-                self.wfile.write(b'{"error": "invalid_token"}')
-                return
-
-            token = auth_header[7:]  # Remove 'Bearer ' prefix
-
-            # Mock userinfo response
-            userinfo = {
-                "sub": "john.doe",
-                "name": "John Doe",
-                "email": "john.doe@example.com",
-                "username": "john.doe",
-                "preferred_username": "john.doe"
-            }
-
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(userinfo).encode())
-            print(f"DEBUG: Served userinfo for token: {token[:20]}...")
-            return
-
-        print(f"DEBUG: Path not found: {path}")
-        self.send_response(404)
-        self.end_headers()
-        self.wfile.write(b"Not found")
-
-    def do_POST(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path = parsed_path.path
-
-        if path == "/authorize":
-            print("DEBUG: Handling login submission")
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length).decode('utf-8')
-            params = urllib.parse.parse_qs(post_data)
-
-            username = params.get('username', [''])[0]
-            password = params.get('password', [''])[0]
-
-            if username == "john.doe" and password == "password123":
-                # Generate authorization code
-                auth_code = f"mock_auth_code_{uuid.uuid4().hex}"
-
-                # Build redirect URI
-                redirect_uri = params.get('redirect_uri', [''])[0]
-                state = params.get('state', [''])[0]
-                redirect_url = f"{redirect_uri}?code={auth_code}&state={state}"
-
-                self.send_response(302)
-                self.send_header('Location', redirect_url)
-                self.end_headers()
-                print(f"DEBUG: Redirecting to: {redirect_url}")
-            else:
-                self.send_response(401)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                self.wfile.write(b"<h1>Invalid credentials</h1>")
-            return
-
-        elif path == "/token":
-            print("DEBUG: Handling token request")
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length).decode('utf-8')
-            params = urllib.parse.parse_qs(post_data)
-
-            grant_type = params.get('grant_type', [''])[0]
-
-            if grant_type == "authorization_code":
-                auth_code = params.get('code', [''])[0]
-
-                if auth_code.startswith('mock_auth_code_'):
-                    # Check requested scope
-                    requested_scope = params.get('scope', ['openid profile email'])[0]
-                    scope_parts = requested_scope.split()
-                    
-                    # Issue token
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    token_response = {
-                        "access_token": f"mock_access_token_{uuid.uuid4().hex}",
-                        "token_type": "bearer",
-                        "expires_in": 3600,
-                        "scope": requested_scope,
-                        "refresh_token": f"mock_refresh_token_{uuid.uuid4().hex}",
-                        "id_token": f"mock_id_token_{uuid.uuid4().hex}"
-                    }
-                    
-                    self.wfile.write(json.dumps(token_response).encode())
-                    print(f"DEBUG: Issued token for auth code: {auth_code} with scope: {requested_scope}")
-                else:
-                    # Invalid code
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    error_response = {"error": "invalid_grant"}
-                    self.wfile.write(json.dumps(error_response).encode())
-            elif grant_type == "client_credentials":
-                # Check basic auth
-                auth_header = self.headers.get('Authorization', '')
-                if not auth_header.startswith('Basic '):
-                    self.send_response(401)
-                    self.send_header('WWW-Authenticate', 'Basic realm="token"')
-                    self.end_headers()
-                    self.wfile.write(b'{"error": "invalid_client"}')
-                    return
-
-                # Decode basic auth
-                try:
-                    encoded_creds = auth_header[6:]  # Remove 'Basic '
-                    decoded_creds = base64.b64decode(encoded_creds).decode('utf-8')
-                    client_id, client_secret = decoded_creds.split(':', 1)
-                except:
-                    self.send_response(401)
-                    self.send_header('WWW-Authenticate', 'Basic realm="token"')
-                    self.end_headers()
-                    self.wfile.write(b'{"error": "invalid_client"}')
-                    return
-
-                # Mock validation - accept any client_id/secret for demo
-                if client_id and client_secret:
-                    # Issue token
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    token_response = {
-                        "access_token": f"mock_cc_token_{uuid.uuid4().hex}",
-                        "token_type": "bearer",
-                        "expires_in": 3600,
-                        "scope": "openid profile email"
-                    }
-                    self.wfile.write(json.dumps(token_response).encode())
-                    print(f"DEBUG: Issued client_credentials token for client: {client_id}")
-                else:
-                    self.send_response(401)
-                    self.send_header('WWW-Authenticate', 'Basic realm="token"')
-                    self.end_headers()
-                    self.wfile.write(b'{"error": "invalid_client"}')
-            else:
-                # Handle other grant types
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                token_response = {
-                    "access_token": f"mock_access_token_{uuid.uuid4().hex}",
-                    "token_type": "bearer",
-                    "expires_in": 3600,
-                    "scope": "openid profile email",
-                    "id_token": f"mock_id_token_{uuid.uuid4().hex}"
-                }
-                self.wfile.write(json.dumps(token_response).encode())
-            return
-
-        elif path == "/introspect":
-            print("DEBUG: Handling introspection request")
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length).decode('utf-8')
-            params = urllib.parse.parse_qs(post_data)
-
-            token = params.get('token', [''])[0]
-
-            if token.startswith('mock_access_token_'):
-                # Mock active token response
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                introspect_response = {
-                    "active": True,
-                    "client_id": "mock-client-id",
-                    "sub": "john.doe",
-                    "scope": "openid profile api:read",
-                    "token_type": "bearer",
-                    "exp": int(time.time()) + 3600,
-                    "iat": int(time.time()),
-                    "iss": "http://localhost:9999"
-                }
-                self.wfile.write(json.dumps(introspect_response).encode())
-                print(f"DEBUG: Introspected active token: {token[:20]}...")
-            else:
-                # Mock inactive token response
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                introspect_response = {
-                    "active": False
-                }
-                self.wfile.write(json.dumps(introspect_response).encode())
-                print(f"DEBUG: Introspected inactive token: {token[:20]}...")
-            return
-
-        self.send_response(404)
-        self.end_headers()
-        self.wfile.write(b"Not found")
-
-    def log_message(self, format, *args):
-        # Suppress default logging
-        pass
-
-if __name__ == "__main__":
-    server = socketserver.TCPServer(('localhost', 9999), MockOAuthProvider)
-    print("Mock OAuth2 provider running on http://localhost:9999")
-    print("Ready to serve requests...")
-    server.serve_forever()
-EOF
-
-    chmod +x mock_provider.py
-    python3 mock_provider.py &
-    MOCK_PID=$!
-    echo $MOCK_PID > mock_provider.pid
-
-    # Wait for mock server to start
-    sleep 3
-
-    # Test that mock provider is responding
-    sleep 1
-    echo "Testing mock provider endpoint..."
-    MOCK_RESPONSE=$(curl -s "$MOCK_PROVIDER_URL/.well-known/openid-configuration")
-    if [ $? -eq 0 ] && [ -n "$MOCK_RESPONSE" ]; then
-        print_status "success" "Mock upstream provider started successfully"
-        echo "Mock provider response preview: ${MOCK_RESPONSE:0:100}..."
-    else
-        print_status "error" "Failed to start mock upstream provider"
-        echo "Curl exit code: $?"
-        echo "Response: $MOCK_RESPONSE"
-        exit 1
-    fi
-}
-
-# Stop mock provider
-stop_mock_provider() {
-    if [ -f mock_provider.pid ]; then
-        kill $(cat mock_provider.pid) 2>/dev/null || true
-        rm -f mock_provider.pid mock_provider.py
-        print_status "info" "Mock upstream provider stopped"
-    fi
-}
+# Note: Mock upstream provider is started automatically by run-test-script.sh
+# Verify it's accessible
+print_status "info" "Verifying mock upstream provider is accessible..."
+MOCK_RESPONSE=$(curl -s "$MOCK_PROVIDER_URL/.well-known/openid-configuration" 2>/dev/null)
+if ! echo "$MOCK_RESPONSE" | grep -q "issuer"; then
+    print_status "error" "Mock upstream provider not accessible at $MOCK_PROVIDER_URL"
+    print_status "error" "Make sure to run tests via: make test-script SCRIPT=<script-name>"
+    exit 1
+fi
+print_status "success" "Mock upstream provider is ready"
 
 # Cleanup function
 cleanup() {
-    stop_mock_provider
     if [ -f server.pid ]; then
         kill $(cat server.pid) 2>/dev/null || true
         rm -f server.pid
@@ -392,9 +97,6 @@ cleanup() {
 
 # Set trap for cleanup
 trap cleanup EXIT
-
-# Start mock upstream provider
-start_mock_provider
 
 echo ""
 echo "🧪 Step 1: Starting OAuth2 server in proxy mode..."
@@ -517,7 +219,8 @@ ISSUER_STATE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
 echo "🎲 Issuer State: ${ISSUER_STATE:0:20}..."
 
 # Build authorization URL for proxy
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=http://localhost:8080/oauth/callback&state=$STATE&scope=$TEST_SCOPE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256&issuer_state=$ISSUER_STATE"
+ENCODED_SCOPE=$(url_encode "$TEST_SCOPE")
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=http://localhost:8080/oauth/callback&state=$STATE&scope=$ENCODED_SCOPE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256&issuer_state=$ISSUER_STATE"
 
 echo "🔗 Proxy Authorization URL: $AUTH_URL"
 
@@ -560,17 +263,8 @@ fi
 
 echo "🎲 Upstream State: $UPSTREAM_STATE"
 
-# Simulate login by POSTing to upstream /authorize
-UPSTREAM_LOGIN_RESPONSE=$(curl -s -i -X POST "$UPSTREAM_AUTH_URL" \
-    --data-urlencode "username=$TEST_USERNAME" \
-    --data-urlencode "password=$TEST_PASSWORD" \
-    --data-urlencode "response_type=code" \
-    --data-urlencode "client_id=mock-client-id" \
-    --data-urlencode "redirect_uri=$SERVER_URL/callback" \
-    --data-urlencode "state=$UPSTREAM_STATE" \
-    --data-urlencode "scope=openid" \
-    --data-urlencode "code_challenge=$CODE_CHALLENGE" \
-    --data-urlencode "code_challenge_method=S256")
+# Simulate upstream authorization by GETting the upstream URL (mock provider auto-approves)
+UPSTREAM_LOGIN_RESPONSE=$(curl -s -i -X GET "$UPSTREAM_AUTH_URL")
 
 # Check for redirect back to proxy callback with authorization code
 if echo "$UPSTREAM_LOGIN_RESPONSE" | grep -q "302 Found" && echo "$UPSTREAM_LOGIN_RESPONSE" | grep -q "Location: $SERVER_URL/callback"; then
@@ -737,3 +431,4 @@ else
     print_status "error" "Proxy public client authorization code flow test FAILED!"
     exit 1
 fi
+exit 0

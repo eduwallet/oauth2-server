@@ -181,6 +181,41 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			wellKnown["scopes_supported"] = upstreamScopes
 		}
 
+		// claims_supported
+		if upstreamClaims, ok := upstream["claims_supported"]; ok {
+			wellKnown["claims_supported"] = upstreamClaims
+		}
+
+		// response_types_supported
+		if upstreamResponseTypes, ok := upstream["response_types_supported"]; ok {
+			wellKnown["response_types_supported"] = upstreamResponseTypes
+		}
+
+		// grant_types_supported - merge with our token-exchange grant type
+		if upstreamGrantTypes, ok := upstream["grant_types_supported"]; ok {
+			if grantTypesList, ok := upstreamGrantTypes.([]interface{}); ok {
+				// Add upstream grant types
+				mergedGrantTypes := make([]string, 0, len(grantTypesList)+1)
+				for _, gt := range grantTypesList {
+					if gtStr, ok := gt.(string); ok {
+						mergedGrantTypes = append(mergedGrantTypes, gtStr)
+					}
+				}
+				// Add our token-exchange grant type if not already present
+				hasTokenExchange := false
+				for _, gt := range mergedGrantTypes {
+					if gt == "urn:ietf:params:oauth:grant-type:token-exchange" {
+						hasTokenExchange = true
+						break
+					}
+				}
+				if !hasTokenExchange {
+					mergedGrantTypes = append(mergedGrantTypes, "urn:ietf:params:oauth:grant-type:token-exchange")
+				}
+				wellKnown["grant_types_supported"] = mergedGrantTypes
+			}
+		}
+
 		// code_challenge_methods_supported
 		if upstreamPKCE, ok := upstream["code_challenge_methods_supported"]; ok {
 			wellKnown["code_challenge_methods_supported"] = upstreamPKCE
@@ -191,9 +226,64 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			wellKnown["subject_types_supported"] = upstreamSubjectTypes
 		}
 
+		// id_token_signing_alg_values_supported
+		if upstreamIDTokenSigningAlgs, ok := upstream["id_token_signing_alg_values_supported"]; ok {
+			wellKnown["id_token_signing_alg_values_supported"] = upstreamIDTokenSigningAlgs
+		}
+
+		// id_token_encryption_alg_values_supported
+		if upstreamIDTokenEncryptionAlgs, ok := upstream["id_token_encryption_alg_values_supported"]; ok {
+			wellKnown["id_token_encryption_alg_values_supported"] = upstreamIDTokenEncryptionAlgs
+		}
+
+		// id_token_encryption_enc_values_supported
+		if upstreamIDTokenEncryptionEnc, ok := upstream["id_token_encryption_enc_values_supported"]; ok {
+			wellKnown["id_token_encryption_enc_values_supported"] = upstreamIDTokenEncryptionEnc
+		}
+
+		// userinfo_signing_alg_values_supported
+		if upstreamUserInfoSigningAlgs, ok := upstream["userinfo_signing_alg_values_supported"]; ok {
+			wellKnown["userinfo_signing_alg_values_supported"] = upstreamUserInfoSigningAlgs
+		}
+
+		// response_modes_supported
+		if upstreamResponseModes, ok := upstream["response_modes_supported"]; ok {
+			wellKnown["response_modes_supported"] = upstreamResponseModes
+		}
+
+		// token_endpoint_auth_methods_supported
+		if upstreamTokenAuthMethods, ok := upstream["token_endpoint_auth_methods_supported"]; ok {
+			wellKnown["token_endpoint_auth_methods_supported"] = upstreamTokenAuthMethods
+		}
+
 		// token_endpoint_auth_signing_alg_values_supported
 		if upstreamSigningAlgs, ok := upstream["token_endpoint_auth_signing_alg_values_supported"]; ok {
 			wellKnown["token_endpoint_auth_signing_alg_values_supported"] = upstreamSigningAlgs
+		}
+
+		// acr_values_supported
+		if upstreamACRValues, ok := upstream["acr_values_supported"]; ok {
+			wellKnown["acr_values_supported"] = upstreamACRValues
+		}
+
+		// display_values_supported
+		if upstreamDisplayValues, ok := upstream["display_values_supported"]; ok {
+			wellKnown["display_values_supported"] = upstreamDisplayValues
+		}
+
+		// claim_types_supported
+		if upstreamClaimTypes, ok := upstream["claim_types_supported"]; ok {
+			wellKnown["claim_types_supported"] = upstreamClaimTypes
+		}
+
+		// claims_locales_supported
+		if upstreamClaimsLocales, ok := upstream["claims_locales_supported"]; ok {
+			wellKnown["claims_locales_supported"] = upstreamClaimsLocales
+		}
+
+		// ui_locales_supported
+		if upstreamUILocales, ok := upstream["ui_locales_supported"]; ok {
+			wellKnown["ui_locales_supported"] = upstreamUILocales
 		}
 	}
 
