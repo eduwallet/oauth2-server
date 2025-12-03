@@ -24,6 +24,12 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - Supports audience-specific tokens
 - **Supports `requested_token_type`**: Request a `refresh_token` or `access_token` as the result of a token exchange
 
+### 🔐 Pushed Authorization Requests (PAR) (RFC 9126)
+- **Secure Request Pushing**: Clients can push authorization requests securely before redirecting users
+- **Request URI Support**: Generated request URIs for secure parameter transmission
+- **Proxy Mode Support**: PAR requests are properly forwarded to upstream providers in proxy mode
+- **Standards Compliance**: Full RFC 9126 implementation with proper expiration and validation
+
 ### 🔧 Dynamic Client Registration (RFC 7591)
 - Programmatic client registration at runtime via API
 - Specify `audience` during registration
@@ -64,11 +70,13 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - ✅ Device Code
 - ✅ Token Exchange
 - ✅ Refresh Token
+- ✅ Pushed Authorization Requests (PAR)
 
 ### RFC Compliance
 - ✅ **RFC 6749** - OAuth 2.0 Authorization Framework
 - ✅ **RFC 8628** - Device Authorization Grant
 - ✅ **RFC 8693** - Token Exchange
+- ✅ **RFC 9126** - OAuth 2.0 Pushed Authorization Requests
 - ✅ **RFC 7591** - Dynamic Client Registration
 - ✅ **RFC 8414** - Authorization Server Metadata
 - ✅ **OpenID Connect Core 1.0**
@@ -93,7 +101,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **internal/auth/**: Authentication and authorization logic for OAuth2 flows.
 - **internal/attestation/**: OAuth 2.0 Attestation-Based Client Authentication implementation with JWT and TLS certificate verification, comprehensive debugging, and proxy mode support.
 - **internal/flows/**: Implements various OAuth2 flows.
-- **internal/handlers/**: Defines HTTP handlers for API endpoints including trust anchor management and dynamic client registration (removed unused secret_manager.go file).
+- **internal/handlers/**: Defines HTTP handlers for API endpoints including trust anchor management, dynamic client registration, and pushed authorization requests (removed unused secret_manager.go file).
 - **internal/models/**: Data models used in the application.
 - **internal/store/**: Storage and retrieval of data.
 - **internal/utils/**: Core utility functions for JWT operations, token handling, and string manipulation (cleaned of unused functions during deadcode removal).
@@ -108,7 +116,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 
 ## Features
 
-- **OAuth2 Authorization Flows**: Authorization Code, Client Credentials, Device Authorization, Refresh Token, Token Exchange
+- **OAuth2 Authorization Flows**: Authorization Code, Client Credentials, Device Authorization, Refresh Token, Token Exchange, Pushed Authorization Requests (PAR)
 - **Attestation-Based Authentication**: Hardware-backed client authentication with JWT and TLS certificate support, proxy mode verification, and comprehensive debugging
 - **Trust Anchor Management**: Dynamic upload and management of X.509 trust anchor certificates for attestation validation
 - **OpenID 4 Verifiable Credentials**: Full `issuer_state` parameter support for verifiable credential issuance flows

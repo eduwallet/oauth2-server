@@ -27,6 +27,14 @@ type CustomClient struct {
 	Claims []string `json:"claims,omitempty"`
 }
 
+// PARRequest represents a pushed authorization request
+type PARRequest struct {
+	RequestURI string            `json:"request_uri"`
+	ClientID   string            `json:"client_id"`
+	ExpiresAt  time.Time         `json:"expires_at"`
+	Parameters map[string]string `json:"parameters"`
+}
+
 // GetClaims returns the registered claims for this client
 func (c *CustomClient) GetClaims() []string {
 	return c.Claims
@@ -1045,6 +1053,11 @@ type Storage interface {
 	StoreUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string, upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64) error
 	GetUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) (upstreamAccessToken string, upstreamRefreshToken string, upstreamTokenType string, upstreamExpiresIn int64, err error)
 	DeleteUpstreamTokenMapping(ctx context.Context, proxyTokenSignature string) error
+
+	// PAR (Pushed Authorization Request) methods
+	StorePARRequest(ctx context.Context, request *PARRequest) error
+	GetPARRequest(ctx context.Context, requestURI string) (*PARRequest, error)
+	DeletePARRequest(ctx context.Context, requestURI string) error
 }
 
 // MemoryStoreWrapper wraps fosite's MemoryStore to implement our Storage interface
@@ -1054,6 +1067,7 @@ type MemoryStoreWrapper struct {
 	attestationConfigs    map[string]*config.ClientAttestationConfig
 	trustAnchors          map[string][]byte
 	upstreamTokenMappings map[string]*UpstreamTokenMapping
+	parRequests           map[string]*PARRequest
 	logger                *logrus.Logger
 }
 
@@ -1074,6 +1088,7 @@ func NewMemoryStoreWrapper(memoryStore *storage.MemoryStore, logger *logrus.Logg
 		attestationConfigs:    make(map[string]*config.ClientAttestationConfig),
 		trustAnchors:          make(map[string][]byte),
 		upstreamTokenMappings: make(map[string]*UpstreamTokenMapping),
+		parRequests:           make(map[string]*PARRequest),
 		logger:                logger,
 	}
 }
@@ -1301,6 +1316,35 @@ func (m *MemoryStoreWrapper) DeleteUpstreamTokenMapping(ctx context.Context, pro
 	return nil
 }
 
+// PAR methods
+func (m *MemoryStoreWrapper) StorePARRequest(ctx context.Context, request *PARRequest) error {
+	m.parRequests[request.RequestURI] = request
+	m.logger.Warnf("⚠️  [MEMORY STORE] PAR request stored in memory for URI %s - this data is not persistent", request.RequestURI)
+	return nil
+}
+
+func (m *MemoryStoreWrapper) GetPARRequest(ctx context.Context, requestURI string) (*PARRequest, error) {
+	request, exists := m.parRequests[requestURI]
+	if !exists {
+		return nil, fmt.Errorf("PAR request not found")
+	}
+	if time.Now().After(request.ExpiresAt) {
+		// Clean up expired request
+		delete(m.parRequests, requestURI)
+		return nil, fmt.Errorf("PAR request expired")
+	}
+	return request, nil
+}
+
+func (m *MemoryStoreWrapper) DeletePARRequest(ctx context.Context, requestURI string) error {
+	if _, exists := m.parRequests[requestURI]; !exists {
+		return fmt.Errorf("PAR request not found")
+	}
+	delete(m.parRequests, requestURI)
+	m.logger.Warnf("⚠️  [MEMORY STORE] PAR request deleted from memory for URI %s - this data is not persistent", requestURI)
+	return nil
+}
+
 // SQLiteStore implements Fosite storage interfaces using SQLite
 type SQLiteStore struct {
 	db     *sql.DB
@@ -1406,6 +1450,15 @@ func (s *SQLiteStore) initTables() error {
 			upstream_expires_in INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// PAR (Pushed Authorization Request) table
+		`CREATE TABLE IF NOT EXISTS par_requests (
+			request_uri TEXT PRIMARY KEY,
+			client_id TEXT NOT NULL,
+			expires_at DATETIME NOT NULL,
+			parameters TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 
@@ -2070,6 +2123,71 @@ func (s *SQLiteStore) DeleteUpstreamTokenMapping(ctx context.Context, proxyToken
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("upstream token mapping not found")
+	}
+	return nil
+}
+
+// PAR methods
+func (s *SQLiteStore) StorePARRequest(ctx context.Context, request *PARRequest) error {
+	parametersJSON, err := json.Marshal(request.Parameters)
+	if err != nil {
+		return fmt.Errorf("failed to marshal PAR parameters: %w", err)
+	}
+
+	_, err = s.db.Exec(
+		"INSERT OR REPLACE INTO par_requests (request_uri, client_id, expires_at, parameters) VALUES (?, ?, ?, ?)",
+		request.RequestURI, request.ClientID, request.ExpiresAt, string(parametersJSON),
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetPARRequest(ctx context.Context, requestURI string) (*PARRequest, error) {
+	var clientID string
+	var expiresAt time.Time
+	var parametersJSON string
+
+	err := s.db.QueryRow(
+		"SELECT client_id, expires_at, parameters FROM par_requests WHERE request_uri = ?",
+		requestURI,
+	).Scan(&clientID, &expiresAt, &parametersJSON)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("PAR request not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if time.Now().After(expiresAt) {
+		// Clean up expired request
+		s.db.Exec("DELETE FROM par_requests WHERE request_uri = ?", requestURI)
+		return nil, fmt.Errorf("PAR request expired")
+	}
+
+	var parameters map[string]string
+	if err := json.Unmarshal([]byte(parametersJSON), &parameters); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal PAR parameters: %w", err)
+	}
+
+	return &PARRequest{
+		RequestURI: requestURI,
+		ClientID:   clientID,
+		ExpiresAt:  expiresAt,
+		Parameters: parameters,
+	}, nil
+}
+
+func (s *SQLiteStore) DeletePARRequest(ctx context.Context, requestURI string) error {
+	result, err := s.db.Exec("DELETE FROM par_requests WHERE request_uri = ?", requestURI)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("PAR request not found")
 	}
 	return nil
 }

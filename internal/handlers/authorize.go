@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"html/template"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"oauth2-server/pkg/config"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ory/fosite"
 	"github.com/sirupsen/logrus"
@@ -41,6 +44,25 @@ func NewAuthorizeHandler(oauth2Provider fosite.OAuth2Provider, configuration *co
 // ServeHTTP handles authorization requests following fosite-example patterns
 func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Log.Printf("🚀 [AUTH-HANDLER] Authorization request received: %s %s", r.Method, r.URL.String())
+
+	// Handle POST requests - check if this is a Pushed Authorization Request (PAR)
+	if r.Method == http.MethodPost {
+		// Check if this is a PAR request by looking for OAuth2 parameters in POST body
+		if h.isPushedAuthorizeRequest(r) {
+			h.Log.Printf("🚀 [PUSHED-AUTHORIZE-REQUEST-HANDLER] Pushed Authorization Request detected")
+			h.handlePushedAuthorizeRequest(w, r)
+			return
+		}
+		// Otherwise, treat as login form submission (parameters in query string)
+		h.Log.Printf("🔐 [AUTH-HANDLER] Login form submission detected, proceeding with authorization")
+	}
+
+	// Handle GET requests and login form submissions as normal authorization
+	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodHead {
+		h.Log.Errorf("❌ [AUTH-HANDLER] Invalid method: %s", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
 	h.Log.Printf("🔍 IsProxyMode: %t, ProviderURL: %s", h.Configuration.IsProxyMode(), h.Configuration.UpstreamProvider.ProviderURL)
 
@@ -75,6 +97,52 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if _, exists := r.Form[key]; !exists {
 				r.Form[key] = values
 			}
+		}
+	}
+
+	// Handle PAR (Pushed Authorization Request) - if request_uri is provided, load stored parameters
+	requestURI := r.Form.Get("request_uri")
+	if requestURI != "" {
+		h.Log.Printf("🔍 [PAR] Handling request_uri: %s", requestURI)
+
+		// Retrieve the stored PAR request
+		parRequest, err := h.Storage.GetPARRequest(ctx, requestURI)
+		if err != nil {
+			h.Log.Errorf("❌ [PAR] Failed to retrieve PAR request: %v", err)
+			http.Error(w, "Invalid or expired request_uri", http.StatusBadRequest)
+			return
+		}
+
+		// Validate client_id matches
+		clientID := r.Form.Get("client_id")
+		if clientID != "" && clientID != parRequest.ClientID {
+			h.Log.Errorf("❌ [PAR] Client ID mismatch: expected %s, got %s", parRequest.ClientID, clientID)
+			http.Error(w, "client_id does not match the pushed authorization request", http.StatusBadRequest)
+			return
+		}
+
+		h.Log.Printf("✅ [PAR] Retrieved stored parameters for client %s", parRequest.ClientID)
+
+		// Merge stored parameters with current request parameters
+		// Stored parameters take precedence over URL parameters, but allow overrides for certain parameters
+		for key, value := range parRequest.Parameters {
+			if _, exists := r.Form[key]; !exists {
+				r.Form[key] = []string{value}
+				h.Log.Printf("🔄 [PAR] Added stored parameter: %s = %s", key, value)
+			} else {
+				h.Log.Printf("🔄 [PAR] Parameter %s already present in request, keeping request value", key)
+			}
+		}
+
+		// Set client_id from stored request if not provided
+		if clientID == "" {
+			r.Form.Set("client_id", parRequest.ClientID)
+			h.Log.Printf("🔄 [PAR] Set client_id from stored request: %s", parRequest.ClientID)
+		}
+
+		// Clean up the used PAR request
+		if err := h.Storage.DeletePARRequest(ctx, requestURI); err != nil {
+			h.Log.Warnf("⚠️ [PAR] Failed to delete used PAR request: %v", err)
 		}
 	}
 
@@ -480,4 +548,131 @@ func (h *AuthorizeHandler) buildClaimsJSON(claims []string) string {
 	}
 
 	return string(jsonBytes)
+}
+
+// isPushedAuthorizeRequest determines if a POST request to /authorize is a Pushed Authorization Request
+// PAR requests have OAuth2 parameters in the POST body but NO username/password fields
+// Login form submissions have username/password PLUS OAuth2 parameters (as hidden form fields)
+func (h *AuthorizeHandler) isPushedAuthorizeRequest(r *http.Request) bool {
+	// Parse the form to get POST body parameters
+	if err := r.ParseForm(); err != nil {
+		h.Log.Debugf("🔍 [PAR-DETECT] Failed to parse form, not a PAR request: %v", err)
+		return false
+	}
+
+	// Check for username/password fields - if present, this is definitely a login form submission
+	username := r.PostForm.Get("username")
+	password := r.PostForm.Get("password")
+	if username != "" || password != "" {
+		h.Log.Debugf("🔍 [PAR-DETECT] Found username/password fields in POST body, treating as login form submission")
+		return false
+	}
+
+	// Check for OAuth2 authorization parameters in POST body only
+	clientID := r.PostForm.Get("client_id")
+	responseType := r.PostForm.Get("response_type")
+
+	// If we have client_id and response_type in the POST body, this is likely a PAR request
+	if clientID != "" && responseType != "" {
+		h.Log.Debugf("🔍 [PAR-DETECT] Found OAuth2 parameters in POST body (client_id=%s, response_type=%s) with no username/password, treating as PAR request", clientID, responseType)
+		return true
+	}
+
+	// Check if there are any OAuth2 parameters in POST body at all
+	oauth2Params := []string{"client_id", "response_type", "redirect_uri", "scope", "state", "code_challenge", "code_challenge_method"}
+	for _, param := range oauth2Params {
+		if r.PostForm.Get(param) != "" {
+			h.Log.Debugf("🔍 [PAR-DETECT] Found OAuth2 parameter '%s' in POST body with no username/password, treating as PAR request", param)
+			return true
+		}
+	}
+
+	h.Log.Debugf("🔍 [PAR-DETECT] No OAuth2 parameters found in POST body, treating as login form submission")
+	return false
+}
+
+// handlePushedAuthorizeRequest handles POST requests to /authorize for Pushed Authorization Requests
+func (h *AuthorizeHandler) handlePushedAuthorizeRequest(w http.ResponseWriter, r *http.Request) {
+	h.Log.Printf("🚀 [PUSHED-AUTHORIZE-REQUEST-HANDLER] Pushed Authorization Request received: %s %s", r.Method, r.URL.String())
+
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
+		h.Log.Errorf("❌ [PUSHED-AUTHORIZE-REQUEST-HANDLER] Failed to parse form: %v", err)
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	// Extract client_id
+	clientID := r.Form.Get("client_id")
+	if clientID == "" {
+		h.Log.Errorf("❌ [PUSHED-AUTHORIZE-REQUEST-HANDLER] Missing client_id")
+		http.Error(w, "Missing client_id", http.StatusBadRequest)
+		return
+	}
+
+	// Validate client exists
+	if _, err := h.Storage.GetClient(r.Context(), clientID); err != nil {
+		h.Log.Errorf("❌ [PUSHED-AUTHORIZE-REQUEST-HANDLER] Client validation failed: %v", err)
+		http.Error(w, "Unknown client", http.StatusBadRequest)
+		return
+	}
+
+	// Generate request URI
+	requestURI, err := h.generateRequestURI()
+	if err != nil {
+		h.Log.Errorf("❌ [PUSHED-AUTHORIZE-REQUEST-HANDLER] Failed to generate request URI: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Store PAR request parameters
+	parameters := make(map[string]string)
+	for key, values := range r.Form {
+		if len(values) > 0 {
+			parameters[key] = values[0]
+		}
+	}
+
+	parRequest := &store.PARRequest{
+		RequestURI: requestURI,
+		ClientID:   clientID,
+		ExpiresAt:  time.Now().Add(10 * time.Minute), // PAR requests expire in 10 minutes per RFC
+		Parameters: parameters,
+	}
+
+	// Store in storage
+	if err := h.Storage.StorePARRequest(r.Context(), parRequest); err != nil {
+		h.Log.Errorf("❌ [PUSHED-AUTHORIZE-REQUEST-HANDLER] Failed to store PAR request: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	h.Log.Printf("✅ [PUSHED-AUTHORIZE-REQUEST-HANDLER] PAR request stored with URI: %s", requestURI)
+
+	// Return response
+	response := map[string]interface{}{
+		"request_uri": requestURI,
+		"expires_in":  600, // 10 minutes in seconds
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	json.NewEncoder(w).Encode(response)
+}
+
+// generateRequestURI generates a unique request URI for PAR
+func (h *AuthorizeHandler) generateRequestURI() (string, error) {
+	// Generate random bytes
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+
+	// Base64url encode
+	encoded := base64.RawURLEncoding.EncodeToString(bytes)
+
+	// Create request URI
+	requestURI := "urn:ietf:params:oauth:request_uri:" + encoded
+
+	return requestURI, nil
 }

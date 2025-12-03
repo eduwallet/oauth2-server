@@ -602,3 +602,34 @@ func (s *CustomStorage) DeleteTrustAnchor(ctx context.Context, name string) erro
 	}
 	return fmt.Errorf("underlying store does not support trust anchor storage")
 }
+
+// PAR methods
+func (s *CustomStorage) StorePARRequest(ctx context.Context, request *PARRequest) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.StorePARRequest(ctx, request)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.StorePARRequest(ctx, request)
+	}
+	return fmt.Errorf("underlying store does not support PAR storage")
+}
+
+func (s *CustomStorage) GetPARRequest(ctx context.Context, requestURI string) (*PARRequest, error) {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.GetPARRequest(ctx, requestURI)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.GetPARRequest(ctx, requestURI)
+	}
+	return nil, fmt.Errorf("underlying store does not support PAR storage")
+}
+
+func (s *CustomStorage) DeletePARRequest(ctx context.Context, requestURI string) error {
+	if store, ok := s.Storage.(*MemoryStoreWrapper); ok {
+		return store.DeletePARRequest(ctx, requestURI)
+	}
+	if store, ok := s.Storage.(*SQLiteStore); ok {
+		return store.DeletePARRequest(ctx, requestURI)
+	}
+	return fmt.Errorf("underlying store does not support PAR storage")
+}

@@ -45,10 +45,11 @@ func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	// OAuth2 Authorization Server Metadata (RFC 8414)
 	oauth2Metadata := map[string]interface{}{
 		// Required fields
-		"issuer":                 baseURL,
-		"authorization_endpoint": baseURL + "/authorize",
-		"token_endpoint":         baseURL + "/token",
-		"jwks_uri":               baseURL + "/.well-known/jwks.json",
+		"issuer":                                baseURL,
+		"authorization_endpoint":                baseURL + "/authorize",
+		"pushed_authorization_request_endpoint": baseURL + "/authorize",
+		"token_endpoint":                        baseURL + "/token",
+		"jwks_uri":                              baseURL + "/.well-known/jwks.json",
 
 		// Optional but recommended fields
 		"registration_endpoint":                baseURL + "/register",
