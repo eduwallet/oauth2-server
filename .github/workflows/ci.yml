@@ -96,6 +96,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set build time
+        run: echo "BUILD_TIME=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Set version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            SHORT_COMMIT=$(git rev-parse --short HEAD)
+            VERSION="${LATEST_TAG}-rc.${SHORT_COMMIT}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -143,9 +157,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ env.VERSION }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_TIME=${{ github.run_id }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
 
   release:
     name: Create Release
