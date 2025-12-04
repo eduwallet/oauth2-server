@@ -24,3 +24,7 @@ test_jwt_introspection.sh
 oauth2.db
 submodules/fosite
 examples/hsm-attestation-wallet/config.js
+mock.log
+.gitignore
+mock.pid
+mock_provider.log

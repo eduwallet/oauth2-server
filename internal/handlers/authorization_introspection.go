@@ -112,7 +112,7 @@ func (h *AuthorizationIntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *
 		h.Log.Printf("ℹ️ Proxy token detected, translating to upstream token for userinfo call")
 
 		// Translate proxy token to upstream token (similar to userinfo handler logic)
-		upstreamToken, err := h.getUpstreamTokenFromProxyToken(accessToken)
+		upstreamToken, err := h.getUpstreamTokenFromProxyToken(r.Context(), accessToken)
 		if err != nil {
 			h.Log.Errorf("❌ Failed to translate proxy token to upstream token: %v", err)
 			w.Header().Set("Content-Type", "application/json")
@@ -355,7 +355,7 @@ func (rc *authResponseCapture) WriteHeader(statusCode int) {
 }
 
 // getUpstreamTokenFromProxyToken translates a proxy access token to its upstream equivalent
-func (h *AuthorizationIntrospectionHandler) getUpstreamTokenFromProxyToken(proxyToken string) (string, error) {
+func (h *AuthorizationIntrospectionHandler) getUpstreamTokenFromProxyToken(ctx context.Context, proxyToken string) (string, error) {
 	h.Log.Printf("🔄 [PROXY-TRANSLATE] Translating proxy token to upstream token")
 
 	// First, try to get upstream token mapping from AccessTokenToIssuerStateMap
@@ -381,16 +381,16 @@ func (h *AuthorizationIntrospectionHandler) getUpstreamTokenFromProxyToken(proxy
 	}
 
 	// Fallback: Try persistent storage
-	upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(nil, proxyToken)
-	if err == nil && upstreamAccessToken != "" {
-		h.Log.Printf("✅ [PROXY-TRANSLATE] Found upstream token in persistent storage: %s...", upstreamAccessToken[:20])
-		return upstreamAccessToken, nil
+	upstreamTokenFromStorage, _, _, _, storageErr := h.Storage.GetUpstreamTokenMapping(ctx, proxyToken)
+	if storageErr == nil && upstreamTokenFromStorage != "" {
+		h.Log.Printf("✅ [PROXY-TRANSLATE] Found upstream token in persistent storage: %s...", upstreamTokenFromStorage[:20])
+		return upstreamTokenFromStorage, nil
 	}
-	h.Log.Printf("⚠️ [PROXY-TRANSLATE] No upstream token mapping found in storage (%v), trying session claims", err)
+	h.Log.Printf("⚠️ [PROXY-TRANSLATE] No upstream token mapping found in storage (%v), trying session claims", storageErr)
 
 	// Fallback: Use fosite's introspection to validate the proxy token and get session data
-	ctx := context.Background()
-	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
+	introspectionCtx := context.Background()
+	_, requester, err := h.OAuth2Provider.IntrospectToken(introspectionCtx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
 	if err != nil {
 		h.Log.Printf("⚠️ [PROXY-TRANSLATE] Token introspection failed (%v), assuming direct upstream token (device flow)", err)
 		// For device flow, the token itself is the upstream token

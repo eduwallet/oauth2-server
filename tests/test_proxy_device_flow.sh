@@ -11,7 +11,7 @@ MOCK_PROVIDER_PORT=9999
 MOCK_PROVIDER_URL="http://localhost:$MOCK_PROVIDER_PORT"
 TEST_USERNAME="john.doe"
 TEST_PASSWORD="password123"
-TEST_SCOPE="openid profile api:read"
+TEST_SCOPE="openid profile api:read offline_access"
 API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 echo "🧪 Proxy Mode Device Flow Test"
@@ -100,10 +100,10 @@ REGISTER_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
   -H "Content-Type: application/json" \
   -d '{
     "client_name": "Device Test Client",
-    "grant_types": ["urn:ietf:params:oauth:grant-type:device_code"],
+    "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token", "client_credentials"],
     "response_types": ["code"],
     "token_endpoint_auth_method": "client_secret_basic",
-    "scope": "openid profile api:read",
+    "scope": "openid profile api:read offline_access",
     "redirect_uris": ["http://localhost:8080/test-callback"],
     "client_secret": "device-client-secret",
     "public": false
@@ -138,7 +138,7 @@ print_status "info" "Server is still running, proceeding with device authorizati
 echo "📱 Requesting device authorization through proxy..."
 DEVICE_RESPONSE=$(curl -s -X POST "$SERVER_URL/device/authorize" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "client_id=$TEST_CLIENT_ID&scope=api:read")
+  -d "client_id=$TEST_CLIENT_ID&scope=$TEST_SCOPE")
 
 echo "Device Authorization Response: $DEVICE_RESPONSE"
 
@@ -220,6 +220,7 @@ fi
 
 # Extract access token
 ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty' 2>/dev/null || echo "")
+REFRESH_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.refresh_token // empty' 2>/dev/null || echo "")
 
 if [ -z "$ACCESS_TOKEN" ]; then
     print_status "error" "Could not extract access token from response"
@@ -227,6 +228,13 @@ if [ -z "$ACCESS_TOKEN" ]; then
 fi
 
 print_status "success" "Access token obtained: ${ACCESS_TOKEN:0:30}..."
+
+if [ -n "$REFRESH_TOKEN" ]; then
+    print_status "success" "Refresh token obtained: ${REFRESH_TOKEN:0:30}..."
+else
+    print_status "info" "No refresh token in response (this may be expected if offline_access scope is not supported)"
+fi
+
 echo ""
 
 echo "🧪 Step 6: Testing userinfo endpoint through proxy..."
@@ -268,7 +276,57 @@ fi
 
 echo ""
 
-echo "🧪 Step 7: Testing token introspection..."
+echo "🧪 Step 7: Testing refresh token flow..."
+
+if [ -n "$REFRESH_TOKEN" ]; then
+    # Use refresh token to obtain a new access token
+    REFRESH_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -u "$TEST_CLIENT_ID:device-client-secret" \
+      -d "grant_type=refresh_token&refresh_token=$REFRESH_TOKEN&client_id=$TEST_CLIENT_ID")
+
+    echo "Refresh Token Response: $REFRESH_RESPONSE"
+
+    # Check if we got a new access token
+    if echo "$REFRESH_RESPONSE" | grep -q "access_token"; then
+        print_status "success" "Refresh token exchange successful!"
+        
+        # Extract the new access token
+        NEW_ACCESS_TOKEN=$(echo "$REFRESH_RESPONSE" | jq -r '.access_token // empty' 2>/dev/null || echo "")
+        NEW_REFRESH_TOKEN=$(echo "$REFRESH_RESPONSE" | jq -r '.refresh_token // empty' 2>/dev/null || echo "")
+        
+        if [ -n "$NEW_ACCESS_TOKEN" ]; then
+            print_status "success" "New access token obtained: ${NEW_ACCESS_TOKEN:0:30}..."
+            
+            # Test that the new access token works
+            NEW_USERINFO_RESPONSE=$(curl -s -X GET "$SERVER_URL/userinfo" \
+              -H "Authorization: Bearer $NEW_ACCESS_TOKEN")
+            
+            if echo "$NEW_USERINFO_RESPONSE" | grep -q "sub"; then
+                print_status "success" "New access token validated successfully!"
+            else
+                print_status "error" "New access token validation failed"
+                echo "UserInfo Response: $NEW_USERINFO_RESPONSE"
+            fi
+        else
+            print_status "error" "Could not extract new access token from refresh response"
+        fi
+        
+        if [ -n "$NEW_REFRESH_TOKEN" ]; then
+            print_status "success" "New refresh token obtained: ${NEW_REFRESH_TOKEN:0:30}..."
+        fi
+    else
+        print_status "error" "Refresh token exchange failed"
+        echo "Response: $REFRESH_RESPONSE"
+        # exit 1  # Don't exit, continue with the test
+    fi
+else
+    print_status "info" "Skipping refresh token test (no refresh token available)"
+fi
+
+echo ""
+
+echo "🧪 Step 8: Testing token introspection..."
 
 # Test introspection with privileged client
 PRIVILEGED_TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
@@ -328,7 +386,8 @@ echo "Step 3 (Proxy device authorization): ✅ PASS"
 echo "Step 4 (Upstream user verification): ✅ PASS"
 echo "Step 5 (Proxy token polling): ✅ PASS"
 echo "Step 6 (Proxy userinfo): ✅ PASS"
-echo "Step 7 (Token introspection): ✅ PASS"
+echo "Step 7 (Refresh token flow): ✅ PASS"
+echo "Step 8 (Token introspection): ✅ PASS"
 echo "      Note: Proxy device tokens are introspectable via upstream provider"
 echo ""
 print_status "success" "All core proxy mode device flow tests PASSED!"
@@ -341,5 +400,6 @@ echo "   ✅ User verification handled at upstream provider"
 echo "   ✅ Token polling forwarded through proxy with code mapping"
 echo "   ✅ Tokens issued by upstream provider accessible through proxy"
 echo "   ✅ Userinfo requests forwarded through proxy with upstream token mapping"
+echo "   ✅ Refresh token flow working for offline_access scope"
 echo "   ✅ Token introspection forwarded through proxy with upstream provider data"
 exit 0

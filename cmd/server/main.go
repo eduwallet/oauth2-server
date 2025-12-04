@@ -94,20 +94,49 @@ var (
 )
 
 // Maps for persisting original authorization state through the OAuth2 flow in proxy mode
-var authCodeToStateMap = make(map[string]string)                       // authorization_code -> original_state
-var deviceCodeToUpstreamMap = make(map[string]string)                  // proxy_device_code -> upstream_device_code
-var accessTokenToIssuerStateMap = make(map[string]string)              // access_token -> issuer_state
-var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData) // proxy_state -> upstream session data
+var authCodeToStateMap = make(map[string]string)                          // authorization_code -> original_state
+var deviceCodeToUpstreamMap = make(map[string]handlers.DeviceCodeMapping) // proxy_device_code -> upstream device code mapping
+var accessTokenToIssuerStateMap = make(map[string]string)                 // access_token -> issuer_state
+var UpstreamSessionMap = make(map[string]handlers.UpstreamSessionData)    // proxy_state -> upstream session data
 
 // Map to store plain text secrets for privileged clients
 var privilegedClientSecrets = make(map[string]string)
 
 func main() {
-	// Handle version flag
+	// Handle command line flags
 	var showVersion = flag.Bool("version", false, "Show version information")
+	var versionShort = flag.Bool("v", false, "Show version information (short)")
+	var showHelp = flag.Bool("help", false, "Show help information")
+	var helpShort = flag.Bool("h", false, "Show help information (short)")
+	var configFile = flag.String("config", "config.yaml", "Path to configuration file")
+	var configShort = flag.String("c", "config.yaml", "Path to configuration file (short)")
+
+	// Custom usage function
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "OAuth2 Server\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options]\n\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "Options:\n")
+		flag.PrintDefaults()
+		fmt.Fprintf(flag.CommandLine.Output(), "\nEnvironment Variables:\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  CONFIG_FILE    Path to configuration file (overrides --config/-c)\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "\nExamples:\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s                           # Start server with default config.yaml\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s --config custom.yaml     # Use custom configuration file\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s -c custom.yaml           # Same as above (short form)\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s --version                # Show version information\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s -v                       # Same as above (short form)\n", os.Args[0])
+	}
+
 	flag.Parse()
 
-	if *showVersion {
+	// Check help flags
+	if *showHelp || *helpShort {
+		flag.Usage()
+		return
+	}
+
+	// Check version flags
+	if *showVersion || *versionShort {
 		fmt.Printf("OAuth2 Server\n")
 		fmt.Printf("Version: %s\n", Version)
 		fmt.Printf("Git Commit: %s\n", GitCommit)
@@ -122,15 +151,18 @@ func main() {
 		log.Printf("DEBUG: No .env file found or error loading: %v", err)
 	}
 
-	// Get config path for trust anchors loading
-	configPath := os.Getenv("CONFIG_FILE")
-	if configPath == "" {
-		configPath = "config.yaml"
+	// Get config path from flags or environment
+	configPath := *configFile
+	if *configShort != "config.yaml" {
+		configPath = *configShort
+	}
+	if envConfig := os.Getenv("CONFIG_FILE"); envConfig != "" {
+		configPath = envConfig
 	}
 
 	// Load configuration from YAML
 	var err error
-	configuration, err = config.Load()
+	configuration, err = config.LoadFromPath(configPath)
 	if err != nil {
 		log.Fatalf("❌ Failed to load configuration: %v", err)
 	}
@@ -744,7 +776,6 @@ func corsAndProxyMiddleware(handler http.Handler) http.Handler {
 	log.Printf("🔧 [MIDDLEWARE] Setting up corsAndProxyMiddleware for handler")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("🔄 [CORS+PROXY] Processing request: %s %s", r.Method, r.URL.Path)
-		// Handle CORS headers
 		origin := r.Header.Get("Origin")
 		allowedOrigins := []string{
 			"https://demo-app.oauth2-server.orb.local",

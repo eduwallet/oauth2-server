@@ -22,6 +22,13 @@ type UpstreamSessionData struct {
 	UpstreamUserCode   string
 	ProxyDeviceCode    string
 	ProxyUserCode      string
+	Scope              string // Requested scope for device flow
+}
+
+// DeviceCodeMapping represents the mapping data for device codes
+type DeviceCodeMapping struct {
+	UpstreamDeviceCode string
+	Scope              string
 }
 
 func userSession(issuer, user string, audience []string) *openid.DefaultSession {

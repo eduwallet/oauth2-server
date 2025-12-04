@@ -85,12 +85,12 @@ echo ""
 echo "🧪 Step 2: Using pre-configured clients for token exchange..."
 
 # Use pre-configured clients from config.yaml
-FRONTEND_CLIENT_ID="frontend-client"
-FRONTEND_CLIENT_SECRET="frontend-client-secret"
+FRONTEND_CLIENT_ID="frontend-app"
+FRONTEND_CLIENT_SECRET="frontend-secret"
 BACKEND_CLIENT_ID="backend-client"
 BACKEND_CLIENT_SECRET="backend-client-secret"
 
-print_status "success" "Using pre-configured clients: frontend-client and backend-client"
+print_status "success" "Using pre-configured clients: frontend-app and backend-client"
 echo ""
 
 echo "🧪 Step 3: Obtaining initial access token via authorization code flow..."

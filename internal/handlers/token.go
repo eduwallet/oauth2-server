@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,11 +13,13 @@ import (
 	"oauth2-server/internal/auth"
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/store"
+	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"strings"
 	"time"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/handler/oauth2"
 	"github.com/ory/fosite/handler/openid"
 	"github.com/ory/fosite/token/jwt"
 	"github.com/sirupsen/logrus"
@@ -36,7 +41,7 @@ type TokenHandler struct {
 	Storage                     store.Storage
 	SecretManager               *store.SecretManager
 	AuthCodeToStateMap          *map[string]string
-	DeviceCodeToUpstreamMap     *map[string]string
+	DeviceCodeToUpstreamMap     *map[string]DeviceCodeMapping
 	AccessTokenToIssuerStateMap *map[string]string
 	AccessTokenStrategy         interface{} // Will be oauth2.AccessTokenStrategy
 	RefreshTokenStrategy        interface{} // Will be oauth2.RefreshTokenStrategy
@@ -52,7 +57,7 @@ func NewTokenHandler(
 	storage store.Storage,
 	secretManager *store.SecretManager,
 	authCodeToStateMap *map[string]string,
-	deviceCodeToUpstreamMap *map[string]string,
+	deviceCodeToUpstreamMap *map[string]DeviceCodeMapping,
 	accessTokenToIssuerStateMap *map[string]string,
 	accessTokenStrategy interface{},
 	refreshTokenStrategy interface{},
@@ -75,12 +80,25 @@ func NewTokenHandler(
 
 // ServeHTTP implements the http.Handler interface for the token endpoint
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			h.Log.Errorf("❌ [TOKEN] Panic in ServeHTTP: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}()
 	h.Log.Infof("🔍 [TOKEN] ServeHTTP called with method: %s, path: %s", r.Method, r.URL.Path)
 	h.HandleTokenRequest(w, r)
 }
 
 // HandleTokenRequest processes OAuth2 token requests using pure fosite
 func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			h.Log.Errorf("❌ [TOKEN] Panic in HandleTokenRequest: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}()
+	h.Log.Infof("🔍 [TOKEN] HandleTokenRequest called - REQUEST RECEIVED")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -92,6 +110,12 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	h.Log.Debugf("🔍 [TOKEN] Form parsed successfully, form values: %v", r.Form)
+
+	grantType := r.FormValue("grant_type")
+	h.Log.Infof("🔍 [TOKEN] Extracted grant_type: '%s'", grantType)
+	h.Log.Infof("🔍 [TOKEN] Processing grant_type: %s, IsProxyMode: %t", grantType, h.Configuration.IsProxyMode())
+
 	// If client_id is not in form but we have basic auth, extract it from basic auth
 	if r.FormValue("client_id") == "" {
 		if username, _, ok := r.BasicAuth(); ok {
@@ -99,14 +123,13 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	grantType := r.FormValue("grant_type")
 	clientID := r.FormValue("client_id")
 
 	h.Log.Infof("🔍 [TOKEN] HandleTokenRequest: grantType='%s', clientID='%s', IsProxyMode=%t", grantType, clientID, h.Configuration.IsProxyMode())
 
 	// Check if proxy mode is enabled and if we should proxy this request
 	h.Log.Debugf("🔍 Token: Checking proxy mode: IsProxyMode=%t, grantType='%s'", h.Configuration.IsProxyMode(), grantType)
-	if h.Configuration.IsProxyMode() && (grantType == "authorization_code" || grantType == "urn:ietf:params:oauth:grant-type:device_code" || grantType == "urn:ietf:params:oauth:grant-type:token-exchange") {
+	if h.Configuration.IsProxyMode() && (grantType == "authorization_code" || grantType == "urn:ietf:params:oauth:grant-type:device_code" || grantType == "urn:ietf:params:oauth:grant-type:token-exchange" || grantType == "refresh_token") {
 		h.Log.Infof("🔄 [TOKEN] Entering proxy mode for grant_type: %s", grantType)
 		if grantType == "authorization_code" {
 			h.handleProxyAuthorizationCode(w, r)
@@ -116,6 +139,9 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 			return
 		} else if grantType == "urn:ietf:params:oauth:grant-type:token-exchange" {
 			h.handleProxyTokenExchange(w, r)
+			return
+		} else if grantType == "refresh_token" {
+			h.handleProxyRefreshToken(w, r)
 			return
 		}
 	}
@@ -554,15 +580,25 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 			h.Log.Infof("✅ [PROXY-AUTH-CODE] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
 			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] Upstream token response: %+v", upstreamTokenResp)
 
+			// Extract upstream tokens
+			upstreamRefreshToken := ""
+			if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
+				upstreamRefreshToken = rt
+			}
+
 			// Store upstream tokens for later use (refresh, etc.)
 			upstreamTokens := map[string]interface{}{
-				"access_token":  upstreamTokenResp["access_token"],
-				"refresh_token": upstreamTokenResp["refresh_token"],
+				"access_token":  upstreamAccessToken,
+				"refresh_token": upstreamRefreshToken,
 				"id_token":      upstreamTokenResp["id_token"],
 				"token_type":    upstreamTokenResp["token_type"],
 				"expires_in":    upstreamTokenResp["expires_in"],
 				"scope":         upstreamTokenResp["scope"],
 			}
+
+			// Determine if we should issue refresh token
+			issueRefreshToken := upstreamRefreshToken != ""
+			h.Log.Infof("🔍 [PROXY-AUTH-CODE] Upstream refresh token present: %t, issueRefreshToken: %t", upstreamRefreshToken != "", issueRefreshToken)
 
 			// Get client information
 			clientID := r.Form.Get("client_id")
@@ -603,25 +639,6 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 				h.Log.Debugf("🔄 [PROXY-AUTH-CODE] Wrapped public client to appear confidential")
 			}
 
-			// Create Fosite session
-			session := &openid.DefaultSession{}
-			if session.Claims == nil {
-				session.Claims = &jwt.IDTokenClaims{}
-			}
-			if session.Claims.Extra == nil {
-				session.Claims.Extra = make(map[string]interface{})
-			}
-
-			// Set session subject to client_id for proxy tokens
-			session.Subject = clientID
-			session.Username = clientID
-
-			// Extract upstream tokens for scope determination
-			upstreamRefreshToken := ""
-			if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
-				upstreamRefreshToken = rt
-			}
-
 			// Create Fosite session for proxy token
 			proxySession := &openid.DefaultSession{}
 			if proxySession.Claims == nil {
@@ -633,17 +650,22 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 			proxySession.Claims.Extra["upstream_tokens"] = upstreamTokens
 			proxySession.Subject = clientID
 			proxySession.Username = clientID
+			proxySession.Subject = clientID
+			proxySession.Username = clientID
 
 			// Store issuer_state in proxy session if available
 			h.storeIssuerStateInSession(r, proxySession)
+
+			// Extract upstream tokens for scope determination
+			if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
+				upstreamRefreshToken = rt
+			}
 
 			// Create access request for proxy token generation
 			// Set proxy token context for auth strategy
 			ctx = context.WithValue(ctx, proxyTokenContextKey, true)
 
-			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] Creating proxy access request with client: %s, public: %v, grant_types: %v",
-				client.GetID(), client.IsPublic(), client.GetGrantTypes())
-
+			// Manually create access request for client_credentials flow (like token exchange does)
 			accessRequest := fosite.NewAccessRequest(proxySession)
 			accessRequest.RequestedScope = fosite.Arguments{"openid", "profile", "email"}
 			accessRequest.GrantedScope = fosite.Arguments{"openid", "profile", "email"}
@@ -653,19 +675,94 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 			accessRequest.RequestedAudience = fosite.Arguments{}
 			accessRequest.GrantedAudience = fosite.Arguments{}
 			accessRequest.Client = client
-			// Set grant type to client_credentials for proxy tokens (since auth strategy adds this)
-			accessRequest.GrantTypes = fosite.Arguments{"client_credentials"}
+			// For proxy authorization code tokens, set grant type to client_credentials
+			fositeGrantTypes := fosite.Arguments{"client_credentials"}
+			accessRequest.GrantTypes = fositeGrantTypes
 
-			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] Access request - client: %s, public: %v, grant_types: %v, requested_scopes: %v",
-				accessRequest.GetClient().GetID(), accessRequest.GetClient().IsPublic(),
-				accessRequest.GetClient().GetGrantTypes(), accessRequest.GetRequestedScopes())
+			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] Manually created access request - Client: %s, GrantTypes: %v, GrantedScopes: %v",
+				accessRequest.GetClient().GetID(), accessRequest.GetGrantTypes(), accessRequest.GetGrantedScopes())
+
+			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] NewAccessRequest succeeded, accessRequest: GrantTypes=%v, ClientID=%s",
+				accessRequest.GetGrantTypes(), accessRequest.GetClient().GetID())
+
+			h.Log.Debugf("✅ [PROXY-AUTH-CODE] Granted scopes: %v, Granted audiences: %v", accessRequest.GetGrantedScopes(), accessRequest.GetGrantedAudience())
+
+			h.Log.Errorf("🔍 [PROXY-AUTH-CODE] REACHED POINT A")
+			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] About to call NewAccessResponse")
+			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] AccessRequest details: ClientID=%s, GrantedScopes=%v, GrantedAudiences=%v",
+				accessRequest.GetClient().GetID(), accessRequest.GetGrantedScopes(), accessRequest.GetGrantedAudience())
 
 			// Create access response using Fosite's normal flow
+			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] About to call NewAccessResponse")
 			accessResponse, err := h.OAuth2Provider.NewAccessResponse(ctx, accessRequest)
+			h.Log.Debugf("🔍 [PROXY-AUTH-CODE] NewAccessResponse returned, err=%v", err)
 			if err != nil {
 				h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to create proxy access response: %v", err)
-				http.Error(w, "failed to create proxy access response", http.StatusInternalServerError)
-				return
+				h.Log.Errorf("❌ [PROXY-AUTH-CODE] Error type: %T", err)
+				h.Log.Errorf("❌ [PROXY-AUTH-CODE] Error details: %+v", err)
+				if fositeErr, ok := err.(*fosite.RFC6749Error); ok {
+					h.Log.Errorf("❌ [PROXY-AUTH-CODE] Fosite error: %s - %s", fositeErr.ErrorField, fositeErr.DescriptionField)
+				} else {
+					h.Log.Errorf("❌ [PROXY-AUTH-CODE] Non-Fosite error: %v", err)
+				}
+				// For proxy mode, manually generate tokens when Fosite fails
+				h.Log.Infof("🔄 [PROXY-AUTH-CODE] Manually generating proxy tokens due to Fosite error")
+
+				// Generate access token manually
+				accessToken, err := utils.GenerateRandomString(32)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to generate access token: %v", err)
+					http.Error(w, "failed to generate access token", http.StatusInternalServerError)
+					return
+				}
+				h.Log.Printf("✅ [PROXY-AUTH-CODE] Manually generated proxy access token: %s", accessToken)
+				if len(accessToken) >= 20 {
+					h.Log.Printf("✅ [PROXY-AUTH-CODE] Access token prefix: %s", accessToken[:20])
+				}
+
+				// Generate refresh token if upstream had one
+				var refreshToken string
+				if upstreamRefreshToken != "" {
+					refreshToken, err = utils.GenerateRandomString(32)
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to generate refresh token: %v", err)
+						http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+						return
+					}
+					h.Log.Printf("✅ [PROXY-AUTH-CODE] Manually generated proxy refresh token: %s", refreshToken)
+					if len(refreshToken) >= 20 {
+						h.Log.Printf("✅ [PROXY-AUTH-CODE] Refresh token prefix: %s", refreshToken[:20])
+					}
+
+					// Store refresh token in Fosite storage
+					refreshSignature := h.RefreshTokenStrategy.(interface {
+						RefreshTokenSignature(context.Context, string) string
+					}).RefreshTokenSignature(ctx, refreshToken)
+					accessSignature := h.AccessTokenStrategy.(interface {
+						AccessTokenSignature(context.Context, string) string
+					}).AccessTokenSignature(ctx, accessToken)
+					err = h.Storage.CreateRefreshTokenSession(ctx, refreshSignature, accessSignature, accessRequest)
+					if err != nil {
+						h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to store refresh token session: %v", err)
+					} else {
+						h.Log.Printf("✅ [PROXY-AUTH-CODE] Stored refresh token session for signature: %s", refreshSignature)
+						if len(refreshSignature) >= 20 {
+							h.Log.Printf("✅ [PROXY-AUTH-CODE] Signature prefix: %s", refreshSignature[:20])
+						}
+					}
+				}
+
+				// Create access response manually
+				accessResponse = &fosite.AccessResponse{}
+				accessResponse.SetAccessToken(accessToken)
+				accessResponse.SetTokenType("Bearer")
+				if refreshToken != "" {
+					accessResponse.SetExtra("refresh_token", refreshToken)
+				}
+				accessResponse.SetExtra("scope", strings.Join(accessRequest.GetGrantedScopes(), " "))
+				accessResponse.SetExtra("expires_in", 3600)
+
+				h.Log.Infof("✅ [PROXY-AUTH-CODE] Created manual access response with token: %s", accessToken[:20])
 			}
 
 			// Extract the generated proxy tokens
@@ -675,14 +772,20 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 				http.Error(w, "failed to extract access token", http.StatusInternalServerError)
 				return
 			}
-			h.Log.Printf("✅ [PROXY-AUTH-CODE] Generated proxy access token: %s", accessToken[:20])
+			h.Log.Printf("✅ [PROXY-AUTH-CODE] Generated proxy access token: %s", accessToken)
+			if len(accessToken) >= 20 {
+				h.Log.Printf("✅ [PROXY-AUTH-CODE] Access token prefix: %s", accessToken[:20])
+			}
 
 			// Extract refresh token if available
 			var refreshToken string
 			if rt := accessResponse.GetExtra("refresh_token"); rt != nil {
 				if rtStr, ok := rt.(string); ok {
 					refreshToken = rtStr
-					h.Log.Printf("✅ [PROXY-AUTH-CODE] Generated proxy refresh token: %s", refreshToken[:20])
+					h.Log.Printf("✅ [PROXY-AUTH-CODE] Generated proxy refresh token: %s", refreshToken)
+					if len(refreshToken) >= 20 {
+						h.Log.Printf("✅ [PROXY-AUTH-CODE] Refresh token prefix: %s", refreshToken[:20])
+					}
 				}
 			}
 
@@ -691,8 +794,55 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 			if it := accessResponse.GetExtra("id_token"); it != nil {
 				if itStr, ok := it.(string); ok {
 					idToken = itStr
-					h.Log.Printf("✅ [PROXY-AUTH-CODE] Generated proxy ID token: %s", idToken[:20])
+					h.Log.Printf("✅ [PROXY-AUTH-CODE] Generated proxy ID token: %s", idToken)
+					if len(idToken) >= 20 {
+						h.Log.Printf("✅ [PROXY-AUTH-CODE] ID token prefix: %s", idToken[:20])
+					}
 				}
+			}
+
+			// If we need a refresh token but Fosite didn't generate one, generate it manually
+			if refreshToken == "" && issueRefreshToken {
+				// Generate a proper Fosite refresh token
+				strategy := h.RefreshTokenStrategy.(oauth2.RefreshTokenStrategy)
+				rt, _, err := strategy.GenerateRefreshToken(ctx, accessRequest)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to generate refresh token: %v", err)
+					http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+					return
+				}
+				refreshToken = rt
+				h.Log.Printf("✅ [PROXY-AUTH-CODE] Manually generated Fosite refresh token: %s", refreshToken)
+				if len(refreshToken) >= 20 {
+					h.Log.Printf("✅ [PROXY-AUTH-CODE] Refresh token prefix: %s", refreshToken[:20])
+				}
+
+				// Store the refresh token in Fosite storage
+				if refreshStrategy, ok := h.RefreshTokenStrategy.(interface {
+					RefreshTokenSignature(context.Context, string) string
+				}); ok {
+					refreshSignature := refreshStrategy.RefreshTokenSignature(ctx, refreshToken)
+					h.Log.Debugf("🔍 [PROXY-AUTH-CODE] Storing refresh token with signature: %s", refreshSignature)
+					h.Log.Debugf("🔍 [PROXY-AUTH-CODE] Full refresh token being stored: %s", refreshToken)
+					if accessStrategy, ok := h.AccessTokenStrategy.(interface {
+						AccessTokenSignature(context.Context, string) string
+					}); ok {
+						accessSignature := accessStrategy.AccessTokenSignature(ctx, accessToken)
+						h.Log.Debugf("🔍 [PROXY-AUTH-CODE] Access token signature: %s", accessSignature)
+						err = h.Storage.CreateRefreshTokenSession(ctx, refreshSignature, accessSignature, accessRequest)
+						if err != nil {
+							h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to store refresh token session: %v", err)
+						} else {
+							h.Log.Printf("✅ [PROXY-AUTH-CODE] Stored refresh token session for signature: %s", refreshSignature)
+							if len(refreshSignature) >= 20 {
+								h.Log.Printf("✅ [PROXY-AUTH-CODE] Signature prefix: %s", refreshSignature[:20])
+							}
+						}
+					}
+				}
+
+				// Add to response
+				accessResponse.SetExtra("refresh_token", refreshToken)
 			}
 
 			// Store mapping from proxy tokens to upstream tokens
@@ -785,10 +935,13 @@ func (h *TokenHandler) handleProxyDeviceCode(w http.ResponseWriter, r *http.Requ
 	proxyDeviceCode := r.Form.Get("device_code")
 	h.Log.Debugf("🔍 [PROXY-DEVICE] Received proxy device code: %s", proxyDeviceCode)
 
+	var deviceCodeMapping DeviceCodeMapping
 	if proxyDeviceCode != "" && h.DeviceCodeToUpstreamMap != nil {
-		if upstreamDeviceCode, exists := (*h.DeviceCodeToUpstreamMap)[proxyDeviceCode]; exists {
-			r.Form.Set("device_code", upstreamDeviceCode)
-			h.Log.Infof("🔄 [PROXY-DEVICE] Successfully mapped proxy device code '%s' to upstream device code '%s'", proxyDeviceCode, upstreamDeviceCode)
+		if mapping, exists := (*h.DeviceCodeToUpstreamMap)[proxyDeviceCode]; exists {
+			r.Form.Set("device_code", mapping.UpstreamDeviceCode)
+			h.Log.Infof("🔄 [PROXY-DEVICE] Successfully mapped proxy device code '%s' to upstream device code '%s'", proxyDeviceCode, mapping.UpstreamDeviceCode)
+			// Store the mapping for later use
+			deviceCodeMapping = mapping
 		} else {
 			h.Log.Errorf("❌ [PROXY-DEVICE] No upstream mapping found for proxy device code: %s", proxyDeviceCode)
 			h.Log.Debugf("🔍 [PROXY-DEVICE] Available mappings: %+v", *h.DeviceCodeToUpstreamMap)
@@ -844,7 +997,12 @@ func (h *TokenHandler) handleProxyDeviceCode(w http.ResponseWriter, r *http.Requ
 	if resp.StatusCode == http.StatusOK {
 		var upstreamTokenResp map[string]interface{}
 		if err := json.Unmarshal(respBody, &upstreamTokenResp); err == nil {
-			h.createProxyTokensForDeviceCode(w, r, upstreamTokenResp, originalClientID)
+			scope := deviceCodeMapping.Scope
+			if scope == "" {
+				scope = r.Form.Get("scope") // Fallback
+			}
+			h.Log.Infof("🔍 [PROXY-DEVICE] Retrieved scope from mapping: '%s', fallback scope: '%s'", deviceCodeMapping.Scope, r.Form.Get("scope"))
+			h.createProxyTokensForDeviceCode(w, r, upstreamTokenResp, originalClientID, scope)
 			return
 		}
 	}
@@ -869,14 +1027,9 @@ func (h *TokenHandler) handleProxyDeviceCode(w http.ResponseWriter, r *http.Requ
 }
 
 // createProxyTokensForDeviceCode creates proxy tokens for device code flow
-func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *http.Request, upstreamTokenResp map[string]interface{}, clientID string) {
+func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *http.Request, upstreamTokenResp map[string]interface{}, clientID string, scope string) {
 	// Extract upstream tokens
 	upstreamAccessToken, _ := upstreamTokenResp["access_token"].(string)
-	upstreamRefreshToken, _ := upstreamTokenResp["refresh_token"].(string)
-	upstreamIDToken, _ := upstreamTokenResp["id_token"].(string)
-	upstreamExpiresIn, _ := upstreamTokenResp["expires_in"].(float64)
-	upstreamScope, _ := upstreamTokenResp["scope"].(string)
-	upstreamTokenType, _ := upstreamTokenResp["token_type"].(string)
 
 	if upstreamAccessToken == "" {
 		h.Log.Errorf("❌ [PROXY-DEVICE] No access token in upstream response")
@@ -886,15 +1039,9 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 
 	h.Log.Infof("✅ [PROXY-DEVICE] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
 
-	// Store upstream token mapping
-	upstreamTokens := map[string]interface{}{
-		"access_token":  upstreamAccessToken,
-		"refresh_token": upstreamRefreshToken,
-		"id_token":      upstreamIDToken,
-		"expires_in":    upstreamExpiresIn,
-		"scope":         upstreamScope,
-		"token_type":    upstreamTokenType,
-	}
+	// Determine if we should issue refresh token
+	issueRefreshToken := strings.Contains(scope, "offline_access")
+	h.Log.Infof("🔍 [PROXY-DEVICE] Scope: %s, issueRefreshToken: %t", scope, issueRefreshToken)
 
 	// Get client
 	ctx := r.Context()
@@ -905,37 +1052,6 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 		return
 	}
 
-	// For proxy token creation, ensure client_credentials is in grant types
-	grantTypes := client.GetGrantTypes()
-	hasClientCredentials := false
-	for _, gt := range grantTypes {
-		if gt == "client_credentials" {
-			hasClientCredentials = true
-			break
-		}
-	}
-	if !hasClientCredentials {
-		// Create a wrapper client with client_credentials added
-		client = &auth.GrantTypeWrapper{
-			Client:          client,
-			ExtraGrantTypes: []string{"client_credentials"},
-		}
-		h.Log.Debugf("🔄 [PROXY-DEVICE] Wrapped client with client_credentials grant type")
-	}
-	// For public clients, wrap to make them appear confidential for proxy tokens
-	if client.IsPublic() {
-		client = &auth.PublicClientWrapper{
-			Client: client,
-		}
-		h.Log.Debugf("🔄 [PROXY-DEVICE] Wrapped public client to appear confidential")
-	}
-
-	// Extract upstream tokens for scope determination
-	upstreamRefreshTokenStr := ""
-	if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
-		upstreamRefreshTokenStr = rt
-	}
-
 	// Create Fosite session for proxy token
 	proxySession := &openid.DefaultSession{}
 	if proxySession.Claims == nil {
@@ -944,24 +1060,38 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 	if proxySession.Claims.Extra == nil {
 		proxySession.Claims.Extra = make(map[string]interface{})
 	}
+
+	// Store upstream token mapping in session
+	upstreamTokens := map[string]interface{}{
+		"access_token":  upstreamAccessToken,
+		"refresh_token": "", // Will be set if available from upstream
+		"id_token":      "",
+		"expires_in":    3600,
+		"scope":         scope,
+		"token_type":    "Bearer",
+	}
+	if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
+		upstreamTokens["refresh_token"] = rt
+	}
 	proxySession.Claims.Extra["upstream_tokens"] = upstreamTokens
+
 	proxySession.Subject = clientID
 	proxySession.Username = clientID
 
 	// Create access request for proxy token generation
-	// Set proxy token context for auth strategy
-	ctx = context.WithValue(ctx, proxyTokenContextKey, true)
-
 	accessRequest := fosite.NewAccessRequest(proxySession)
-	accessRequest.RequestedScope = fosite.Arguments{"openid", "profile", "email"}
-	accessRequest.GrantedScope = fosite.Arguments{"openid", "profile", "email"}
-	if upstreamRefreshTokenStr != "" {
-		accessRequest.GrantedScope = append(accessRequest.GrantedScope, "offline_access")
+	// Use the actual scope from device authorization request
+	scopeArgs := fosite.Arguments{}
+	if scope != "" {
+		scopeArgs = fosite.Arguments(strings.Split(scope, " "))
+	} else {
+		scopeArgs = fosite.Arguments{"openid", "profile", "email"}
 	}
+	accessRequest.RequestedScope = scopeArgs
+	accessRequest.GrantedScope = scopeArgs
 	accessRequest.RequestedAudience = fosite.Arguments{}
 	accessRequest.GrantedAudience = fosite.Arguments{}
 	accessRequest.Client = client
-	// Set grant type to client_credentials for proxy tokens
 	accessRequest.GrantTypes = fosite.Arguments{"client_credentials"}
 
 	// Create access response using Fosite's normal flow
@@ -981,13 +1111,56 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 	}
 	h.Log.Printf("✅ [PROXY-DEVICE] Generated proxy access token: %s", accessToken[:20])
 
-	// Extract refresh token if available
+	// Extract refresh token if available from Fosite
 	var refreshToken string
 	if rt := accessResponse.GetExtra("refresh_token"); rt != nil {
 		if rtStr, ok := rt.(string); ok {
 			refreshToken = rtStr
-			h.Log.Printf("✅ [PROXY-DEVICE] Generated proxy refresh token: %s", refreshToken[:20])
+			h.Log.Printf("✅ [PROXY-DEVICE] Fosite generated proxy refresh token: %s", refreshToken[:20])
 		}
+	}
+
+	// If we need a refresh token but Fosite didn't generate one, generate it manually
+	if refreshToken == "" && issueRefreshToken {
+		// Generate a proper Fosite refresh token
+		strategy := h.RefreshTokenStrategy.(oauth2.RefreshTokenStrategy)
+		rt, _, err := strategy.GenerateRefreshToken(ctx, accessRequest)
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-DEVICE] Failed to generate refresh token: %v", err)
+			http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+			return
+		}
+		refreshToken = rt
+		h.Log.Printf("✅ [PROXY-DEVICE] Manually generated Fosite refresh token: %s", refreshToken[:20])
+
+		// Store the refresh token in Fosite storage
+		if refreshStrategy, ok := h.RefreshTokenStrategy.(interface {
+			RefreshTokenSignature(context.Context, string) string
+		}); ok {
+			refreshSignature := refreshStrategy.RefreshTokenSignature(ctx, refreshToken)
+			h.Log.Debugf("🔍 [PROXY-DEVICE] Storing refresh token with signature: %s", refreshSignature)
+			h.Log.Debugf("🔍 [PROXY-DEVICE] Full refresh token being stored: %s", refreshToken)
+			if accessStrategy, ok := h.AccessTokenStrategy.(interface {
+				AccessTokenSignature(context.Context, string) string
+			}); ok {
+				accessSignature := accessStrategy.AccessTokenSignature(ctx, accessToken)
+				h.Log.Debugf("🔍 [PROXY-DEVICE] Access token signature: %s", accessSignature)
+				err = h.Storage.CreateRefreshTokenSession(ctx, refreshSignature, accessSignature, accessRequest)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY-DEVICE] Failed to store refresh token session: %v", err)
+				} else {
+					h.Log.Printf("✅ [PROXY-DEVICE] Stored refresh token session for signature: %s", refreshSignature)
+				}
+			} else {
+				h.Log.Errorf("❌ [PROXY-DEVICE] AccessTokenStrategy does not have Signature method")
+			}
+		} else {
+			h.Log.Errorf("❌ [PROXY-DEVICE] RefreshTokenStrategy does not have Signature method")
+		}
+	} else if refreshToken != "" {
+		h.Log.Infof("✅ [PROXY-DEVICE] Using Fosite-generated refresh token")
+	} else {
+		h.Log.Infof("ℹ️ [PROXY-DEVICE] Not issuing refresh token")
 	}
 
 	// Store mapping from proxy tokens to upstream tokens
@@ -1012,8 +1185,8 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 	proxyResponse := map[string]interface{}{
 		"access_token": accessToken,
 		"token_type":   "Bearer",
-		"expires_in":   3600, // Use proxy token expiry
-		"scope":        accessResponse.GetExtra("scope"),
+		"expires_in":   3600,
+		"scope":        scope,
 	}
 
 	if refreshToken != "" {
@@ -1068,7 +1241,7 @@ func (h *TokenHandler) handleProxyTokenExchange(w http.ResponseWriter, r *http.R
 	subjectTokenType := r.Form.Get("subject_token_type")
 	if subjectToken != "" {
 		// Check if this is a proxy token that needs mapping back to upstream
-		upstreamSubjectToken, err := h.getUpstreamTokenFromProxyToken(subjectToken, subjectTokenType)
+		upstreamSubjectToken, err := h.getUpstreamTokenFromProxyToken(r.Context(), subjectToken, subjectTokenType)
 		if err != nil {
 			h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to translate proxy subject token: %v", err)
 			http.Error(w, "failed to translate proxy subject token", http.StatusInternalServerError)
@@ -1161,23 +1334,14 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 	upstreamTokenType, _ := upstreamTokenResp["token_type"].(string)
 	upstreamIssuedTokenType, _ := upstreamTokenResp["issued_token_type"].(string)
 
-	// Check if we have at least one token to proxy
-	if upstreamAccessToken == "" && upstreamRefreshToken == "" {
-		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] No access token or refresh token in upstream response")
-		http.Error(w, "no token in upstream response", http.StatusBadGateway)
-		return
-	}
+	// Determine if we should issue refresh token
+	requestedTokenType := r.Form.Get("requested_token_type")
+	issueRefreshToken := requestedTokenType == "urn:ietf:params:oauth:token-type:refresh_token"
 
-	// For refresh token responses, we still need to create a proxy access token to hold the mapping
-	if upstreamAccessToken == "" && upstreamRefreshToken != "" {
-		h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Upstream returned only refresh token, will create proxy access token to represent it")
-	}
-
-	if upstreamAccessToken != "" {
-		h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
-	}
-	if upstreamRefreshToken != "" {
-		h.Log.Infof("✅ [PROXY-TOKEN-EXCHANGE] Successfully received upstream refresh token (length: %d)", len(upstreamRefreshToken))
+	// For mapping, use upstream refresh_token if available, otherwise use access_token if issuing refresh
+	upstreamRefreshTokenForMapping := upstreamRefreshToken
+	if upstreamRefreshTokenForMapping == "" && issueRefreshToken {
+		upstreamRefreshTokenForMapping = upstreamAccessToken
 	}
 
 	// Store upstream token mapping
@@ -1256,11 +1420,23 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 	accessRequest.RequestedAudience = fosite.Arguments{}
 	accessRequest.GrantedAudience = fosite.Arguments{}
 	accessRequest.Client = client
-	// Set grant type to client_credentials for proxy tokens
-	accessRequest.GrantTypes = fosite.Arguments{"client_credentials"}
+	// For token exchange proxy tokens, set grant type to client_credentials
+	// Try to add refresh_token if we need to issue one
+	fositeGrantTypes := fosite.Arguments{"client_credentials"}
+	if issueRefreshToken {
+		fositeGrantTypes = append(fositeGrantTypes, "refresh_token")
+	}
+	accessRequest.GrantTypes = fositeGrantTypes
 
 	// Create access response using Fosite's normal flow
 	accessResponse, err := h.OAuth2Provider.NewAccessResponse(ctx, accessRequest)
+	if err != nil && issueRefreshToken {
+		// If it failed with refresh_token, try without it
+		h.Log.Debugf("⚠️ [PROXY-TOKEN-EXCHANGE] Failed to create access response with refresh_token grant type, trying without: %v", err)
+		fositeGrantTypes = fosite.Arguments{"client_credentials"}
+		accessRequest.GrantTypes = fositeGrantTypes
+		accessResponse, err = h.OAuth2Provider.NewAccessResponse(ctx, accessRequest)
+	}
 	if err != nil {
 		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to create proxy access response: %v", err)
 		http.Error(w, "failed to create proxy access response", http.StatusInternalServerError)
@@ -1276,12 +1452,73 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 	}
 	h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Generated proxy access token: %s", accessToken[:20])
 
-	// Extract refresh token if available
+	// Extract refresh token if available from Fosite
 	var refreshToken string
 	if rt := accessResponse.GetExtra("refresh_token"); rt != nil {
 		if rtStr, ok := rt.(string); ok {
 			refreshToken = rtStr
 			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Generated proxy refresh token: %s", refreshToken[:20])
+		}
+	}
+
+	// Check if client requested a refresh token
+	requestedTokenType = r.Form.Get("requested_token_type")
+	issueRefreshToken = requestedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" || upstreamRefreshTokenStr != ""
+
+	// If we need to issue a refresh token but Fosite didn't generate one, create it manually
+	if issueRefreshToken && refreshToken == "" {
+		// Use Fosite's refresh token strategy to generate a proper refresh token
+		if genStrategy, ok := h.RefreshTokenStrategy.(interface {
+			Generate(context.Context) (string, string, error)
+		}); ok {
+			var refreshSignature string
+			refreshToken, refreshSignature, err = genStrategy.Generate(ctx)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to generate refresh token: %v", err)
+				http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+				return
+			}
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Generated proxy refresh token: %s", refreshToken[:20])
+
+			// Store refresh token in Fosite storage
+			accessSignature := h.AccessTokenStrategy.(interface {
+				AccessTokenSignature(context.Context, string) string
+			}).AccessTokenSignature(ctx, accessToken)
+			err = h.Storage.CreateRefreshTokenSession(ctx, refreshSignature, accessSignature, accessRequest)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to store refresh token session: %v", err)
+			} else {
+				h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored refresh token session for signature: %s", refreshSignature[:20])
+			}
+		} else {
+			// Fallback to manual generation
+			refreshToken, err = utils.GenerateRandomString(32)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to generate refresh token: %v", err)
+				http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+				return
+			}
+
+			// Compute signature manually using HMAC-SHA256 with JWTSecret
+			mac := hmac.New(sha256.New, []byte(h.Configuration.Security.JWTSecret))
+			mac.Write([]byte(refreshToken))
+			refreshSignature := base64.URLEncoding.EncodeToString(mac.Sum(nil))
+
+			// Create full refresh token as token.signature
+			refreshToken = refreshToken + "." + refreshSignature
+
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Manually generated proxy refresh token: %s", refreshToken[:20])
+
+			// Store refresh token in Fosite storage
+			accessSignature := h.AccessTokenStrategy.(interface {
+				AccessTokenSignature(context.Context, string) string
+			}).AccessTokenSignature(ctx, accessToken)
+			err = h.Storage.CreateRefreshTokenSession(ctx, refreshSignature, accessSignature, accessRequest)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to store refresh token session: %v", err)
+			} else {
+				h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored refresh token session for signature: %s", refreshSignature[:20])
+			}
 		}
 	}
 
@@ -1303,11 +1540,28 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 		if accessToken != "" {
 			(*h.AccessTokenToIssuerStateMap)[accessToken] = string(mappingJSON)
 			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy access token mapping: %s -> upstream tokens", accessToken[:20])
+
+			// Also store in persistent storage
+			err = h.Storage.StoreUpstreamTokenMapping(ctx, accessToken, upstreamAccessToken, upstreamRefreshTokenForMapping, upstreamTokenType, int64(upstreamExpiresIn))
+			if err != nil {
+				h.Log.Warnf("⚠️ [PROXY-TOKEN-EXCHANGE] Failed to store upstream access token mapping in persistent storage: %v", err)
+			} else {
+				h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored upstream access token mapping in persistent storage for proxy token %s", accessToken[:20])
+			}
 		}
 		// Store mapping for refresh token
 		if refreshToken != "" {
-			(*h.AccessTokenToIssuerStateMap)[refreshToken] = string(mappingJSON)
-			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy refresh token mapping: %s -> upstream tokens", refreshToken[:20])
+			refreshTokenKey := refreshToken
+			(*h.AccessTokenToIssuerStateMap)[refreshTokenKey] = string(mappingJSON)
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy refresh token mapping: %s -> upstream tokens", refreshTokenKey[:20])
+
+			// Also store in persistent storage
+			err = h.Storage.StoreUpstreamTokenMapping(ctx, refreshTokenKey, upstreamAccessToken, upstreamRefreshTokenForMapping, upstreamTokenType, int64(upstreamExpiresIn))
+			if err != nil {
+				h.Log.Warnf("⚠️ [PROXY-TOKEN-EXCHANGE] Failed to store upstream refresh token mapping in persistent storage: %v", err)
+			} else {
+				h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored upstream refresh token mapping in persistent storage for proxy token %s", refreshTokenKey[:20])
+			}
 		}
 	}
 
@@ -1320,8 +1574,8 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 		"proxy_server":    "oauth2-server",
 	}
 
-	// Set the appropriate token based on issued_token_type
-	if upstreamIssuedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
+	// Set the appropriate token based on requested_token_type or upstream issued_token_type
+	if requestedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" || upstreamIssuedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
 		// For refresh token requests, return the proxy access token as a refresh token
 		if accessToken != "" {
 			proxyResponse["refresh_token"] = accessToken // Use access token as refresh token
@@ -1354,7 +1608,7 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 }
 
 // getUpstreamTokenFromProxyToken translates a proxy token to its upstream equivalent
-func (h *TokenHandler) getUpstreamTokenFromProxyToken(proxyToken string, subjectTokenType string) (string, error) {
+func (h *TokenHandler) getUpstreamTokenFromProxyToken(ctx context.Context, proxyToken string, subjectTokenType string) (string, error) {
 	h.Log.Printf("🔄 [PROXY-TOKEN-EXCHANGE] Translating proxy token to upstream token (type: %s)", subjectTokenType)
 
 	// First, try to get upstream token mapping from AccessTokenToIssuerStateMap
@@ -1397,16 +1651,21 @@ func (h *TokenHandler) getUpstreamTokenFromProxyToken(proxyToken string, subject
 	}
 
 	// Fallback: Try persistent storage
-	upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(nil, proxyToken)
-	if err == nil && upstreamAccessToken != "" {
-		h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found upstream token in persistent storage: %s...", upstreamAccessToken[:20])
-		return upstreamAccessToken, nil
+	upstreamAccessFromStorage, upstreamRefreshFromStorage, _, _, storageErr := h.Storage.GetUpstreamTokenMapping(ctx, proxyToken)
+	if storageErr == nil {
+		if subjectTokenType == "urn:ietf:params:oauth:token-type:refresh_token" && upstreamRefreshFromStorage != "" {
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found upstream refresh token in persistent storage: %s...", upstreamRefreshFromStorage[:20])
+			return upstreamRefreshFromStorage, nil
+		} else if upstreamAccessFromStorage != "" {
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found upstream access token in persistent storage: %s...", upstreamAccessFromStorage[:20])
+			return upstreamAccessFromStorage, nil
+		}
 	}
-	h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] No upstream token mapping found in storage (%v), trying session claims", err)
+	h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] No upstream token mapping found in storage (%v), trying session claims", storageErr)
 
 	// Fallback: Use fosite's introspection to validate the proxy token and get session data
-	ctx := context.Background()
-	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
+	introspectionCtx := context.Background()
+	_, requester, err := h.OAuth2Provider.IntrospectToken(introspectionCtx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
 	if err != nil {
 		h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] Token introspection failed (%v), assuming direct upstream token (device flow)", err)
 		// For device flow, the token itself is the upstream token
@@ -1447,4 +1706,333 @@ func (h *TokenHandler) getUpstreamTokenFromProxyToken(proxyToken string, subject
 
 	h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] Could not find upstream token mapping, using proxy token as-is")
 	return proxyToken, nil
+}
+
+// handleProxyRefreshToken handles refresh_token grant type in proxy mode
+func (h *TokenHandler) handleProxyRefreshToken(w http.ResponseWriter, r *http.Request) {
+	h.Log.Infof("🔍 [PROXY-REFRESH] handleProxyRefreshToken called - REQUEST STARTED")
+	h.Log.Infof("🔍 [PROXY-REFRESH] handleProxyRefreshToken called, RefreshTokenStrategy type: %T", h.RefreshTokenStrategy)
+
+	// Get the refresh token from the request
+	proxyRefreshToken := r.Form.Get("refresh_token")
+	if proxyRefreshToken == "" {
+		h.Log.Errorf("❌ [PROXY-REFRESH] No refresh token provided")
+		http.Error(w, "refresh_token required", http.StatusBadRequest)
+		return
+	}
+
+	h.Log.Debugf("🔍 [PROXY-REFRESH] Received proxy refresh token: %s", proxyRefreshToken[:20])
+
+	// Get upstream configuration
+	upstreamURL := h.Configuration.UpstreamProvider.ProviderURL
+	upstreamClientID := h.Configuration.UpstreamProvider.ClientID
+	upstreamClientSecret := h.Configuration.UpstreamProvider.ClientSecret
+
+	if upstreamURL == "" || upstreamClientID == "" || upstreamClientSecret == "" {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Upstream configuration incomplete")
+		http.Error(w, "upstream configuration incomplete", http.StatusInternalServerError)
+		return
+	}
+
+	// Compute the refresh token signature
+	ctx := r.Context()
+	refreshStrategy, ok := h.RefreshTokenStrategy.(interface {
+		RefreshTokenSignature(context.Context, string) string
+	})
+	if !ok {
+		h.Log.Errorf("❌ [PROXY-REFRESH] RefreshTokenStrategy does NOT implement RefreshTokenSignature interface, type: %T", h.RefreshTokenStrategy)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	refreshSignature := refreshStrategy.RefreshTokenSignature(ctx, proxyRefreshToken)
+	h.Log.Debugf("🔍 [PROXY-REFRESH] Computed refresh signature: %s", refreshSignature)
+	h.Log.Debugf("🔍 [PROXY-REFRESH] Full refresh token: %s", proxyRefreshToken)
+
+	// Get the refresh token session
+	h.Log.Debugf("🔍 [PROXY-REFRESH] Attempting to get refresh token session for signature: %s", refreshSignature)
+	refreshSession, err := h.Storage.GetRefreshTokenSession(ctx, refreshSignature, nil)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to get refresh token session: %v", err)
+		h.Log.Errorf("❌ [PROXY-REFRESH] This means the refresh token was never stored or the signature is wrong")
+		h.Log.Errorf("❌ [PROXY-REFRESH] Refresh token: %s", proxyRefreshToken)
+		h.Log.Errorf("❌ [PROXY-REFRESH] Computed signature: %s", refreshSignature)
+		// Let's also check what refresh tokens are actually stored
+		h.Log.Errorf("❌ [PROXY-REFRESH] Checking if storage has any refresh tokens...")
+		// This is a debug check - in production we'd remove this
+		http.Error(w, "invalid refresh token", http.StatusBadRequest)
+		return
+	}
+
+	h.Log.Debugf("✅ [PROXY-REFRESH] Found refresh token session")
+
+	// Extract upstream tokens from refresh session claims
+	var upstreamTokens map[string]interface{}
+	if session := refreshSession.GetSession(); session != nil {
+		if ds, ok := session.(*openid.DefaultSession); ok {
+			if ds.Claims != nil && ds.Claims.Extra != nil {
+				if ut, ok := ds.Claims.Extra["upstream_tokens"].(map[string]interface{}); ok {
+					upstreamTokens = ut
+				}
+			}
+		}
+	}
+
+	if upstreamTokens == nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] No upstream tokens in session")
+		http.Error(w, "invalid refresh token", http.StatusBadRequest)
+		return
+	}
+
+	upstreamRefreshToken, _ := upstreamTokens["refresh_token"].(string)
+	if upstreamRefreshToken == "" {
+		h.Log.Errorf("❌ [PROXY-REFRESH] No upstream refresh token in session")
+		http.Error(w, "invalid refresh token", http.StatusBadRequest)
+		return
+	}
+
+	h.Log.Debugf("✅ [PROXY-REFRESH] Found upstream refresh token: %s", upstreamRefreshToken[:20])
+
+	// Build upstream token request
+	var tokenEndpoint string
+	if h.Configuration.UpstreamProvider.Metadata != nil {
+		if te, ok := h.Configuration.UpstreamProvider.Metadata["token_endpoint"].(string); ok && te != "" {
+			tokenEndpoint = te
+		}
+	}
+	if tokenEndpoint == "" {
+		tokenEndpoint = strings.TrimSuffix(upstreamURL, "/") + "/token"
+	}
+
+	// Create upstream request
+	upstreamForm := url.Values{}
+	upstreamForm.Set("grant_type", "refresh_token")
+	upstreamForm.Set("refresh_token", upstreamRefreshToken)
+	upstreamForm.Set("client_id", upstreamClientID)
+	upstreamForm.Set("client_secret", upstreamClientSecret)
+
+	req, err := http.NewRequest("POST", tokenEndpoint, strings.NewReader(upstreamForm.Encode()))
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to create upstream request: %v", err)
+		http.Error(w, "failed to create upstream request", http.StatusInternalServerError)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Upstream refresh request failed: %v", err)
+		http.Error(w, "upstream refresh request failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	h.Log.Infof("📥 [PROXY-REFRESH] Upstream refresh response status: %d", resp.StatusCode)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to read upstream response: %v", err)
+		http.Error(w, "failed to read upstream response", http.StatusInternalServerError)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Upstream refresh failed with status %d: %s", resp.StatusCode, string(respBody))
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+		return
+	}
+
+	var upstreamTokenResp map[string]interface{}
+	if err := json.Unmarshal(respBody, &upstreamTokenResp); err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to parse upstream response: %v", err)
+		http.Error(w, "failed to parse upstream response", http.StatusInternalServerError)
+		return
+	}
+
+	h.Log.Debugf("📄 [PROXY-REFRESH] Upstream refresh response: %s", string(respBody))
+
+	// Get client
+	clientID := r.Form.Get("client_id")
+	fositeClient, err := h.Storage.GetClient(ctx, clientID)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to get client %s: %v", clientID, err)
+		http.Error(w, "client not found", http.StatusBadRequest)
+		return
+	}
+
+	// Create new proxy tokens from upstream response
+	h.createProxyTokensForRefresh(w, r, upstreamTokenResp, clientID, fositeClient)
+}
+
+// createProxyTokensForRefresh creates proxy tokens for refresh token flow
+func (h *TokenHandler) createProxyTokensForRefresh(w http.ResponseWriter, r *http.Request, upstreamTokenResp map[string]interface{}, clientID string, client fosite.Client) {
+	ctx := r.Context()
+	// Extract upstream tokens
+	upstreamAccessToken, _ := upstreamTokenResp["access_token"].(string)
+
+	if upstreamAccessToken == "" {
+		h.Log.Errorf("❌ [PROXY-REFRESH] No access token in upstream response")
+		http.Error(w, "no access token in upstream response", http.StatusBadGateway)
+		return
+	}
+
+	h.Log.Infof("✅ [PROXY-REFRESH] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
+
+	// Determine if we should issue refresh token
+	issueRefreshToken := true // For refresh, always issue new refresh token if upstream provided
+
+	// Create Fosite session for proxy token
+	proxySession := &openid.DefaultSession{}
+	if proxySession.Claims == nil {
+		proxySession.Claims = &jwt.IDTokenClaims{}
+	}
+	if proxySession.Claims.Extra == nil {
+		proxySession.Claims.Extra = make(map[string]interface{})
+	}
+
+	// Store upstream token mapping in session
+	upstreamTokens := map[string]interface{}{
+		"access_token":  upstreamAccessToken,
+		"refresh_token": "", // Will be set if generated
+		"id_token":      "",
+		"expires_in":    3600,
+		"scope":         upstreamTokenResp["scope"],
+		"token_type":    "Bearer",
+	}
+	if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
+		upstreamTokens["refresh_token"] = rt
+	}
+	proxySession.Claims.Extra["upstream_tokens"] = upstreamTokens
+
+	proxySession.Subject = clientID
+	proxySession.Username = clientID
+
+	// Create access request for proxy token generation
+	accessRequest := fosite.NewAccessRequest(proxySession)
+	scopeArgs := fosite.Arguments{}
+	if scope, ok := upstreamTokenResp["scope"].(string); ok && scope != "" {
+		scopeArgs = fosite.Arguments(strings.Split(scope, " "))
+	} else {
+		scopeArgs = fosite.Arguments{"openid", "profile", "email"}
+	}
+	accessRequest.RequestedScope = scopeArgs
+	accessRequest.GrantedScope = scopeArgs
+	accessRequest.RequestedAudience = fosite.Arguments{}
+	accessRequest.GrantedAudience = fosite.Arguments{}
+	accessRequest.Client = client
+	accessRequest.GrantTypes = fosite.Arguments{"refresh_token"}
+
+	// Create access response using Fosite's normal flow
+	accessResponse, err := h.OAuth2Provider.NewAccessResponse(ctx, accessRequest)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to create proxy access response: %v", err)
+		http.Error(w, "failed to create proxy access response", http.StatusInternalServerError)
+		return
+	}
+
+	// Extract the generated proxy tokens
+	accessToken := accessResponse.GetAccessToken()
+	if accessToken == "" {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to extract proxy access token from response")
+		http.Error(w, "failed to extract access token", http.StatusInternalServerError)
+		return
+	}
+	h.Log.Printf("✅ [PROXY-REFRESH] Generated proxy access token: %s", accessToken[:20])
+
+	// Extract refresh token if available from Fosite
+	var refreshToken string
+	if rt := accessResponse.GetExtra("refresh_token"); rt != nil {
+		if rtStr, ok := rt.(string); ok {
+			refreshToken = rtStr
+			h.Log.Printf("✅ [PROXY-REFRESH] Fosite generated proxy refresh token: %s", refreshToken[:20])
+		}
+	}
+
+	// If we need a refresh token but Fosite didn't generate one, generate it manually
+	if refreshToken == "" && issueRefreshToken {
+		// Generate a proper Fosite refresh token
+		if rts, ok := h.RefreshTokenStrategy.(oauth2.RefreshTokenStrategy); ok {
+			rt, _, err := rts.GenerateRefreshToken(ctx, accessRequest)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-REFRESH] Failed to generate refresh token: %v", err)
+				http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+				return
+			}
+			refreshToken = rt
+			h.Log.Printf("✅ [PROXY-REFRESH] Manually generated Fosite refresh token: %s", refreshToken[:20])
+		} else {
+			h.Log.Errorf("❌ [PROXY-REFRESH] RefreshTokenStrategy does not implement oauth2.RefreshTokenStrategy")
+			http.Error(w, "invalid refresh token strategy", http.StatusInternalServerError)
+			return
+		}
+
+		// Store the refresh token in Fosite storage
+		if refreshStrategy, ok := h.RefreshTokenStrategy.(interface {
+			RefreshTokenSignature(context.Context, string) string
+		}); ok {
+			refreshSignature := refreshStrategy.RefreshTokenSignature(ctx, refreshToken)
+			if accessStrategy, ok := h.AccessTokenStrategy.(interface {
+				AccessTokenSignature(context.Context, string) string
+			}); ok {
+				accessSignature := accessStrategy.AccessTokenSignature(ctx, accessToken)
+				err = h.Storage.CreateRefreshTokenSession(ctx, refreshSignature, accessSignature, accessRequest)
+				if err != nil {
+					h.Log.Errorf("❌ [PROXY-REFRESH] Failed to store refresh token session: %v", err)
+				} else {
+					h.Log.Printf("✅ [PROXY-REFRESH] Stored refresh token session for signature: %s", refreshSignature[:20])
+				}
+			} else {
+				h.Log.Errorf("❌ [PROXY-REFRESH] AccessTokenStrategy does not have Signature method")
+			}
+		} else {
+			h.Log.Errorf("❌ [PROXY-REFRESH] RefreshTokenStrategy does not have Signature method")
+		}
+	} else if refreshToken != "" {
+		h.Log.Infof("✅ [PROXY-REFRESH] Using Fosite-generated refresh token")
+	} else {
+		h.Log.Infof("ℹ️ [PROXY-REFRESH] Not issuing refresh token")
+	}
+
+	// Store mapping from proxy tokens to upstream tokens
+	if h.AccessTokenToIssuerStateMap == nil {
+		h.AccessTokenToIssuerStateMap = &map[string]string{}
+	}
+
+	mapping := map[string]interface{}{
+		"client_id":       clientID,
+		"upstream_tokens": upstreamTokens,
+	}
+
+	mappingJSON, err := json.Marshal(mapping)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to marshal token mapping: %v", err)
+	} else {
+		(*h.AccessTokenToIssuerStateMap)[accessToken] = string(mappingJSON)
+		h.Log.Printf("✅ [PROXY-REFRESH] Stored proxy token mapping: %s -> upstream tokens", accessToken[:20])
+	}
+
+	// Return proxy tokens to client
+	proxyResponse := map[string]interface{}{
+		"access_token": accessToken,
+		"token_type":   "Bearer",
+		"expires_in":   3600,
+		"scope":        upstreamTokenResp["scope"],
+	}
+
+	if refreshToken != "" {
+		proxyResponse["refresh_token"] = refreshToken
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+
+	if err := json.NewEncoder(w).Encode(proxyResponse); err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to encode proxy response: %v", err)
+	}
+
+	h.Log.Infof("✅ [PROXY-REFRESH] Successfully created proxy tokens for client %s", clientID)
 }

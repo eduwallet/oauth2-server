@@ -1,4 +1,4 @@
-.PHONY: build test clean run dev
+.PHONY: build test clean run run-proxy dev
 
 # Configuration variables
 OAUTH2_SERVER_URL ?= http://localhost:8080
@@ -101,6 +101,11 @@ check:
 run:
 	@echo "🚀 Starting OAuth2 server..."
 	go run cmd/server/main.go
+
+# Run the application in proxy mode
+run-proxy:
+	@echo "🔄 Starting OAuth2 server in proxy mode..."
+	UPSTREAM_PROVIDER_URL="http://localhost:9999" UPSTREAM_CLIENT_ID="upstream_client" UPSTREAM_CLIENT_SECRET="upstream_secret" ENABLE_TRUST_ANCHOR_API=true API_KEY="$(API_KEY)" go run cmd/server/main.go
 
 # Run with live reload (requires air: go install github.com/cosmtrek/air@latest)
 dev:
@@ -426,7 +431,8 @@ help:
 	@echo "Available targets:"
 	@echo "  build              - Build the OAuth2 server binary"
 	@echo "  build-version      - Build with embedded version information"
-	@echo "  run                - Build and run the server"
+	@echo "  run                - Build and run the server (local/frontend mode)"
+	@echo "  run-proxy          - Build and run the server in proxy mode"
 	@echo "  dev                - Run in development mode with auto-reload"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  tidy               - Tidy and vendor Go modules"

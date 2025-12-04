@@ -28,7 +28,7 @@ type DeviceCodeHandler struct {
 	Templates               *template.Template
 	Config                  *config.Config
 	Logger                  *logrus.Logger
-	DeviceCodeToUpstreamMap *map[string]string
+	DeviceCodeToUpstreamMap *map[string]DeviceCodeMapping
 	UpstreamSessionMap      *map[string]UpstreamSessionData
 }
 
@@ -40,7 +40,7 @@ func NewDeviceCodeHandler(
 	templates *template.Template,
 	config *config.Config,
 	logger *logrus.Logger,
-	deviceCodeToUpstreamMap *map[string]string,
+	deviceCodeToUpstreamMap *map[string]DeviceCodeMapping,
 	upstreamSessionMap *map[string]UpstreamSessionData,
 ) *DeviceCodeHandler {
 	return &DeviceCodeHandler{
@@ -281,7 +281,10 @@ func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter
 	h.Logger.Printf("✅ [PROXY-DEVICE] Generated proxy device code: %s...", proxyDeviceCode[:10])
 
 	// Store mapping from proxy device code to upstream device code
-	(*h.DeviceCodeToUpstreamMap)[proxyDeviceCode] = upstreamDeviceCode
+	(*h.DeviceCodeToUpstreamMap)[proxyDeviceCode] = DeviceCodeMapping{
+		UpstreamDeviceCode: upstreamDeviceCode,
+		Scope:              scopeParam,
+	}
 
 	// Create session data for device flow - use upstream user code as session ID
 	sessionID := upstreamUserCode
@@ -290,6 +293,7 @@ func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter
 		UpstreamUserCode:   upstreamUserCode,
 		ProxyDeviceCode:    proxyDeviceCode,
 		ProxyUserCode:      upstreamUserCode, // Use upstream user code directly
+		Scope:              scopeParam,
 	}
 
 	h.Logger.Printf("✅ [PROXY-DEVICE] Stored mappings for session: %s", sessionID)

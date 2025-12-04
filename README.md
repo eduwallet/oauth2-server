@@ -145,6 +145,42 @@ make run
 go run cmd/server/main.go
 ```
 
+## Command Line Options
+
+The OAuth2 server supports several command line options for configuration and information:
+
+### Options
+
+- `--config`, `-c` (string): Path to configuration file (default: "config.yaml")
+- `--version`, `-v`: Show version information
+- `--help`, `-h`: Show help information
+
+### Environment Variables
+
+- `CONFIG_FILE`: Path to configuration file (overrides `--config`/`-c`)
+
+### Examples
+
+```bash
+# Start server with default configuration
+./bin/oauth2-server
+
+# Use custom configuration file
+./bin/oauth2-server --config custom.yaml
+./bin/oauth2-server -c custom.yaml
+
+# Show version information
+./bin/oauth2-server --version
+./bin/oauth2-server -v
+
+# Show help
+./bin/oauth2-server --help
+./bin/oauth2-server -h
+
+# Using environment variable
+CONFIG_FILE=/path/to/config.yaml ./bin/oauth2-server
+```
+
 ## Deployment
 
 For detailed deployment instructions including Kubernetes Helm charts and configuration options, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

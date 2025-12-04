@@ -18,10 +18,14 @@ func (c *Config) NormalizeAllClientRedirectURIs() {
 
 // LoadConfig loads configuration from environment variables and config file
 func Load() (*Config, error) {
+	return LoadFromPath("config.yaml")
+}
+
+// LoadFromPath loads configuration from a specific config file path
+func LoadFromPath(configPath string) (*Config, error) {
 	cfg := &Config{}
 
 	// 1. Load YAML config
-	configPath := getEnv("CONFIG_FILE", "config.yaml")
 	if _, err := os.Stat(configPath); err == nil {
 		if err := LoadFromFile(configPath, cfg); err != nil {
 			return nil, fmt.Errorf("failed to load config file: %w", err)
