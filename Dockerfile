@@ -2,7 +2,7 @@
 FROM golang:1.25-alpine AS builder
 
 # Install build dependencies including C compiler and SQLite dev libraries
-RUN apk add --no-cache git ca-certificates tzdata gcc musl-dev sqlite-dev
+RUN apk add --no-cache git ca-certificates gcc musl-dev sqlite-dev
 
 # Set working directory
 WORKDIR /app
