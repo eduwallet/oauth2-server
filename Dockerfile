@@ -36,7 +36,7 @@ RUN VERSION=${VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)} 
         cmd/server/main.go
 
 # Final stage - use alpine for healthcheck capabilities
-FROM alpine:latest
+FROM alpine:3.20
 
 # Install ca-certificates for HTTPS calls and SQLite runtime libraries
 RUN apk add --no-cache ca-certificates curl sqlite-libs
