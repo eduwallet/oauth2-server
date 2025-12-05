@@ -210,6 +210,49 @@ For detailed information about version management processes, release procedures,
 
 For comprehensive testing documentation including test scripts, validation procedures, and expected results, see [docs/TESTING.md](docs/TESTING.md).
 
+You can test all test cases with command **make test**
+
+```
+$ make test
+🔨 Building OAuth2 server...
+go build -ldflags "-s -w" -o bin/oauth2-server cmd/server/main.go
+✅ Build completed: bin/oauth2-server
+🧪 Starting automated test suite with test isolation...
+Testing test_attestation_auth.sh                 ... ✅ PASSED
+Testing test_attestation_integration.sh          ... ✅ PASSED
+Testing test_attestation_privileged_audience.sh  ... ✅ PASSED
+Testing test_auth_code_pkce.sh                   ... ✅ PASSED
+Testing test_authorization_introspection.sh      ... ✅ PASSED
+Testing test_client_registration.sh              ... ✅ PASSED
+Testing test_complete_flow.sh                    ... ✅ PASSED
+Testing test_device_flow.sh                      ... ✅ PASSED
+Testing test_introspection_jwt_client_assertion.sh ... ✅ PASSED
+Testing test_introspection.sh                    ... ✅ PASSED
+Testing test_oauth2_flow.sh                      ... ✅ PASSED
+Testing test_privileged_introspection.sh         ... ✅ PASSED
+Testing test_proxy_attestation_client.sh         ... ✅ PASSED
+Testing test_proxy_authorization_introspection.sh ... ✅ PASSED
+Testing test_proxy_device_flow.sh                ... ✅ PASSED
+Testing test_proxy_full_authentication_flow.sh   ... ✅ PASSED
+Testing test_proxy_public_client_flow.sh         ... ✅ PASSED
+Testing test_proxy_pushed_authorize_request.sh   ... ✅ PASSED
+Testing test_proxy_token_exchange.sh             ... ✅ PASSED
+Testing test_proxy_userinfo.sh                   ... ✅ PASSED
+Testing test_public_client_flow.sh               ... ✅ PASSED
+Testing test_pushed_authorize_request.sh         ... ✅ PASSED
+Testing test_refresh_token_basic.sh              ... ✅ PASSED
+Testing test_refresh_token_exchange.sh           ... ✅ PASSED
+Testing test_scope_handling.sh                   ... ✅ PASSED
+Testing test_token_exchange.sh                   ... ✅ PASSED
+Testing test_userinfo.sh                         ... ✅ PASSED
+Testing test_validation.sh                       ... ✅ PASSED
+
+════════════════════════════════════════════════════════════════
+📊 Test Summary: 28 passed, 0 failed
+════════════════════════════════════════════════════════════════
+✅ All tests passed!
+```
+
 ## Configuration
 
 For detailed configuration options including environment variables, configuration files, and proxy mode setup, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
