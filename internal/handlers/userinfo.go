@@ -16,21 +16,23 @@ import (
 )
 
 type UserInfoHandler struct {
-	OAuth2Provider fosite.OAuth2Provider
-	Configuration  *config.Config
-	Metrics        *metrics.MetricsCollector
-	Log            *logrus.Logger
-	Storage        store.Storage
+	OAuth2Provider              fosite.OAuth2Provider
+	Configuration               *config.Config
+	Metrics                     *metrics.MetricsCollector
+	Log                         *logrus.Logger
+	Storage                     store.Storage
+	AccessTokenToIssuerStateMap *map[string]string
 }
 
 // NewUserInfoHandler creates a new userinfo handler
-func NewUserInfoHandler(config *config.Config, oauth2Provider fosite.OAuth2Provider, metrics *metrics.MetricsCollector, log *logrus.Logger, storage store.Storage) *UserInfoHandler {
+func NewUserInfoHandler(config *config.Config, oauth2Provider fosite.OAuth2Provider, metrics *metrics.MetricsCollector, log *logrus.Logger, storage store.Storage, accessTokenToIssuerStateMap *map[string]string) *UserInfoHandler {
 	return &UserInfoHandler{
-		Configuration:  config,
-		OAuth2Provider: oauth2Provider,
-		Metrics:        metrics,
-		Log:            log,
-		Storage:        storage,
+		Configuration:               config,
+		OAuth2Provider:              oauth2Provider,
+		Metrics:                     metrics,
+		Log:                         log,
+		Storage:                     storage,
+		AccessTokenToIssuerStateMap: accessTokenToIssuerStateMap,
 	}
 }
 
@@ -203,15 +205,41 @@ func (h *UserInfoHandler) handleProxyUserinfo(w http.ResponseWriter, r *http.Req
 	var upstreamToken string
 	var issuerState string
 
-	// First, try to get upstream token mapping from persistent storage
-	upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(r.Context(), proxyToken)
-	if err == nil && upstreamAccessToken != "" {
-		h.Log.Printf("✅ [PROXY] Found upstream token in persistent storage: %s...", upstreamAccessToken[:20])
-		upstreamToken = upstreamAccessToken
-	} else {
-		h.Log.Printf("⚠️ [PROXY] No upstream token mapping found in storage (%v), trying session claims", err)
+	// First, try to get upstream token mapping from AccessTokenToIssuerStateMap (in-memory)
+	if h.AccessTokenToIssuerStateMap != nil {
+		if mappingJSON, exists := (*h.AccessTokenToIssuerStateMap)[proxyToken]; exists {
+			h.Log.Printf("✅ [PROXY] Found mapping in AccessTokenToIssuerStateMap")
+			var mapping map[string]interface{}
+			if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
+				h.Log.Printf("⚠️ [PROXY] Failed to unmarshal mapping JSON: %v", err)
+			} else {
+				if upstreamTokens, ok := mapping["upstream_tokens"].(map[string]interface{}); ok {
+					if accessToken, ok := upstreamTokens["access_token"].(string); ok && accessToken != "" {
+						upstreamToken = accessToken
+						h.Log.Printf("✅ [PROXY] Found upstream access token in AccessTokenToIssuerStateMap: %s...", upstreamToken[:20])
+					}
+					if state, ok := mapping["issuer_state"].(string); ok && state != "" {
+						issuerState = state
+						h.Log.Printf("✅ [PROXY] Found issuer state in AccessTokenToIssuerStateMap: %s", issuerState)
+					}
+				}
+			}
+		}
+	}
 
-		// Fallback: Use fosite's introspection to validate the proxy token and get session data
+	// Fallback: Try persistent storage
+	if upstreamToken == "" {
+		upstreamAccessToken, _, _, _, err := h.Storage.GetUpstreamTokenMapping(r.Context(), proxyToken)
+		if err == nil && upstreamAccessToken != "" {
+			h.Log.Printf("✅ [PROXY] Found upstream token in persistent storage: %s...", upstreamAccessToken[:20])
+			upstreamToken = upstreamAccessToken
+		} else {
+			h.Log.Printf("⚠️ [PROXY] No upstream token mapping found in storage (%v), trying session claims", err)
+		}
+	}
+
+	// Final fallback: Use fosite's introspection to validate the proxy token and get session data
+	if upstreamToken == "" {
 		ctx := r.Context()
 		_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
 		if err != nil {

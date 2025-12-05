@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -867,8 +868,15 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 			if err != nil {
 				h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to marshal token mapping: %v", err)
 			} else {
+				// Store mapping for access token
 				(*h.AccessTokenToIssuerStateMap)[accessToken] = string(mappingJSON)
-				h.Log.Printf("✅ [PROXY-AUTH-CODE] Stored proxy token mapping: %s -> upstream tokens", accessToken[:20])
+				h.Log.Printf("✅ [PROXY-AUTH-CODE] Stored proxy access token mapping: %s -> upstream tokens", accessToken[:20])
+
+				// Store mapping for refresh token if available
+				if refreshToken != "" {
+					(*h.AccessTokenToIssuerStateMap)[refreshToken] = string(mappingJSON)
+					h.Log.Printf("✅ [PROXY-AUTH-CODE] Stored proxy refresh token mapping: %s -> upstream tokens", refreshToken[:20])
+				}
 			}
 
 			// Return proxy tokens to client
@@ -1178,7 +1186,13 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 		h.Log.Errorf("❌ [PROXY-DEVICE] Failed to marshal token mapping: %v", err)
 	} else {
 		(*h.AccessTokenToIssuerStateMap)[accessToken] = string(mappingJSON)
-		h.Log.Printf("✅ [PROXY-DEVICE] Stored proxy token mapping: %s -> upstream tokens", accessToken[:20])
+		h.Log.Printf("✅ [PROXY-DEVICE] Stored proxy access token mapping: %s -> upstream tokens", accessToken[:20])
+
+		// Also store mapping for refresh token if it exists
+		if refreshToken != "" {
+			(*h.AccessTokenToIssuerStateMap)[refreshToken] = string(mappingJSON)
+			h.Log.Printf("✅ [PROXY-DEVICE] Stored proxy refresh token mapping: %s -> upstream tokens", refreshToken[:20])
+		}
 	}
 
 	// Return proxy tokens to client
@@ -1574,15 +1588,15 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 		"proxy_server":    "oauth2-server",
 	}
 
-	// Set the appropriate token based on requested_token_type or upstream issued_token_type
-	if requestedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" || upstreamIssuedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
-		// For refresh token requests, return the proxy access token as a refresh token
-		if accessToken != "" {
-			proxyResponse["refresh_token"] = accessToken // Use access token as refresh token
+	// Set the appropriate token based on requested_token_type
+	if requestedTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
+		// For refresh token requests, return the proxy refresh token
+		if refreshToken != "" {
+			proxyResponse["refresh_token"] = refreshToken
 			proxyResponse["issued_token_type"] = "urn:ietf:params:oauth:token-type:refresh_token"
 		} else {
-			h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Expected proxy access token but none generated")
-			http.Error(w, "failed to generate proxy token", http.StatusInternalServerError)
+			h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Requested refresh token but none available")
+			http.Error(w, "refresh token not available", http.StatusBadRequest)
 			return
 		}
 	} else {
@@ -1664,47 +1678,19 @@ func (h *TokenHandler) getUpstreamTokenFromProxyToken(ctx context.Context, proxy
 	h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] No upstream token mapping found in storage (%v), trying session claims", storageErr)
 
 	// Fallback: Use fosite's introspection to validate the proxy token and get session data
-	introspectionCtx := context.Background()
-	_, requester, err := h.OAuth2Provider.IntrospectToken(introspectionCtx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
-	if err != nil {
-		h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] Token introspection failed (%v), assuming direct upstream token (device flow)", err)
-		// For device flow, the token itself is the upstream token
-		return proxyToken, nil
+	h.Log.Printf("🔍 [PROXY-TOKEN-EXCHANGE] About to call IntrospectToken, provider: %v, proxyToken: %s", h.OAuth2Provider, proxyToken)
+	if h.OAuth2Provider == nil {
+		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] OAuth2Provider is nil")
+		return proxyToken, fmt.Errorf("OAuth2Provider is nil")
 	}
-	h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Token introspection successful")
-
-	// Try to extract upstream token from session claims
-	if requester != nil {
-		if session, ok := requester.GetSession().(*openid.DefaultSession); ok {
-			if session.Claims != nil && session.Claims.Extra != nil {
-				if upstreamTokens, ok := session.Claims.Extra["upstream_tokens"].(map[string]interface{}); ok {
-					// Return the appropriate upstream token based on subject_token_type
-					var upstreamToken string
-					var tokenType string
-
-					if subjectTokenType == "urn:ietf:params:oauth:token-type:refresh_token" {
-						if refreshToken, ok := upstreamTokens["refresh_token"].(string); ok && refreshToken != "" {
-							upstreamToken = refreshToken
-							tokenType = "refresh_token"
-						}
-					} else {
-						// Default to access_token
-						if accessToken, ok := upstreamTokens["access_token"].(string); ok && accessToken != "" {
-							upstreamToken = accessToken
-							tokenType = "access_token"
-						}
-					}
-
-					if upstreamToken != "" {
-						h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Found upstream %s in session claims: %s...", tokenType, upstreamToken[:20])
-						return upstreamToken, nil
-					}
-				}
-			}
-		}
+	if proxyToken == "" {
+		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] proxyToken is empty")
+		return proxyToken, fmt.Errorf("proxyToken is empty")
 	}
 
-	h.Log.Printf("⚠️ [PROXY-TOKEN-EXCHANGE] Could not find upstream token mapping, using proxy token as-is")
+	// For token exchange, if we can't find a mapping, assume the proxy token is the upstream token
+	// This handles cases where the token was issued by a different proxy instance or the mapping was lost
+	h.Log.Printf("ℹ️ [PROXY-TOKEN-EXCHANGE] No upstream token mapping found, using proxy token as upstream token")
 	return proxyToken, nil
 }
 
@@ -2010,8 +1996,15 @@ func (h *TokenHandler) createProxyTokensForRefresh(w http.ResponseWriter, r *htt
 	if err != nil {
 		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to marshal token mapping: %v", err)
 	} else {
+		// Store mapping for access token
 		(*h.AccessTokenToIssuerStateMap)[accessToken] = string(mappingJSON)
-		h.Log.Printf("✅ [PROXY-REFRESH] Stored proxy token mapping: %s -> upstream tokens", accessToken[:20])
+		h.Log.Printf("✅ [PROXY-REFRESH] Stored proxy access token mapping: %s -> upstream tokens", accessToken[:20])
+
+		// Store mapping for refresh token if available
+		if refreshToken != "" {
+			(*h.AccessTokenToIssuerStateMap)[refreshToken] = string(mappingJSON)
+			h.Log.Printf("✅ [PROXY-REFRESH] Stored proxy refresh token mapping: %s -> upstream tokens", refreshToken[:20])
+		}
 	}
 
 	// Return proxy tokens to client

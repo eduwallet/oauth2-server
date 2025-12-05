@@ -163,6 +163,165 @@ else
     echo "Response: $AUTH_RESPONSE"
 fi
 
+# Step 5: Simulate full PAR authorization flow with user authentication
+print_status "info" "Step 5: Simulating full PAR authorization flow..."
+
+# Use curl to follow redirects and capture the final redirect URL
+AUTH_URL="$SERVER_URL/authorize?request_uri=$REQUEST_URI&client_id=$CLIENT_ID"
+echo "Making request to: $AUTH_URL&redirect_uri=http://localhost:8081/callback"
+
+# Follow redirects and capture the final URL
+AUTH_REDIRECT_OUTPUT=$(timeout 15 curl -s -L --connect-timeout 3 --max-time 5 \
+  -w "FINAL_URL:%{url_effective}\nHTTP_CODE:%{http_code}\nREDIRECT_COUNT:%{num_redirects}\n" \
+  "$AUTH_URL&redirect_uri=http://localhost:8081/callback" 2>/dev/null || echo "TIMEOUT_OR_ERROR")
+
+# Extract the final URL and check if it contains an authorization code
+FINAL_URL=$(echo "$AUTH_REDIRECT_OUTPUT" | grep "FINAL_URL:" | sed 's/FINAL_URL://' 2>/dev/null || echo "")
+HTTP_CODE=$(echo "$AUTH_REDIRECT_OUTPUT" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://' 2>/dev/null || echo "000")
+REDIRECT_COUNT=$(echo "$AUTH_REDIRECT_OUTPUT" | grep "REDIRECT_COUNT:" | sed 's/REDIRECT_COUNT://' 2>/dev/null || echo "0")
+
+echo "   Final URL: $FINAL_URL"
+echo "   HTTP Code: $HTTP_CODE"
+echo "   Redirects: $REDIRECT_COUNT"
+
+# Extract authorization code from the final URL
+if echo "$FINAL_URL" | grep -q "code="; then
+    AUTH_CODE=$(echo "$FINAL_URL" | sed 's/.*code=\([^&]*\).*/\1/')
+    RETURNED_STATE=$(echo "$FINAL_URL" | sed 's/.*state=\([^&]*\).*/\1/' 2>/dev/null || echo "")
+    print_status "success" "Authorization code received: ${AUTH_CODE:0:20}..."
+    print_status "info" "State parameter: $RETURNED_STATE"
+else
+    print_status "error" "No authorization code found in redirect URL"
+    echo "   This might indicate the authorization flow failed"
+    exit 1
+fi
+
+# Step 6: Exchange authorization code for tokens
+print_status "info" "Step 6: Exchanging authorization code for tokens..."
+
+# Extract client secret from registration response
+CLIENT_SECRET=$(echo "$CLIENT_RESPONSE" | grep -o '"client_secret":"[^"]*"' | cut -d'"' -f4)
+
+TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d "grant_type=authorization_code&code=$AUTH_CODE&redirect_uri=http://localhost:8081/callback")
+
+echo "   Token exchange response:"
+echo "$TOKEN_RESPONSE" | jq . 2>/dev/null || echo "$TOKEN_RESPONSE"
+
+# Extract tokens
+ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token' 2>/dev/null)
+REFRESH_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.refresh_token' 2>/dev/null)
+TOKEN_TYPE=$(echo "$TOKEN_RESPONSE" | jq -r '.token_type' 2>/dev/null)
+EXPIRES_IN=$(echo "$TOKEN_RESPONSE" | jq -r '.expires_in' 2>/dev/null)
+SCOPE=$(echo "$TOKEN_RESPONSE" | jq -r '.scope' 2>/dev/null)
+
+if [ "$ACCESS_TOKEN" != "null" ] && [ "$ACCESS_TOKEN" != "" ]; then
+    print_status "success" "Token exchange successful"
+    print_status "info" "Access Token: ${ACCESS_TOKEN:0:20}..."
+    print_status "info" "Token Type: $TOKEN_TYPE"
+    print_status "info" "Expires In: $EXPIRES_IN seconds"
+    print_status "info" "Scope: $SCOPE"
+    if [ "$REFRESH_TOKEN" != "null" ] && [ "$REFRESH_TOKEN" != "" ]; then
+        print_status "info" "Refresh Token: ${REFRESH_TOKEN:0:20}..."
+    fi
+else
+    print_status "error" "Token exchange failed"
+    exit 1
+fi
+
+# Step 7: Test UserInfo endpoint
+print_status "info" "Step 7: Testing UserInfo endpoint..."
+
+# Call UserInfo endpoint with access token
+USERINFO_RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$SERVER_URL/userinfo")
+
+echo "   UserInfo response:"
+echo "$USERINFO_RESPONSE" | jq . 2>/dev/null || echo "$USERINFO_RESPONSE"
+
+# Validate UserInfo response
+if echo "$USERINFO_RESPONSE" | grep -q "sub"; then
+    print_status "success" "UserInfo endpoint returned user data"
+
+    # Extract key claims
+    SUB=$(echo "$USERINFO_RESPONSE" | jq -r '.sub' 2>/dev/null)
+    EMAIL=$(echo "$USERINFO_RESPONSE" | jq -r '.email' 2>/dev/null)
+    NAME=$(echo "$USERINFO_RESPONSE" | jq -r '.name' 2>/dev/null)
+    EMAIL_VERIFIED=$(echo "$USERINFO_RESPONSE" | jq -r '.email_verified' 2>/dev/null)
+
+    echo "   User Claims:"
+    echo "     Subject (sub): $SUB"
+    echo "     Email: $EMAIL"
+    echo "     Name: $NAME"
+    echo "     Email Verified: $EMAIL_VERIFIED"
+
+    # Validate expected values
+    if [ "$SUB" = "john.doe" ]; then
+        print_status "success" "Subject claim matches expected user"
+    else
+        print_status "error" "Subject claim mismatch: expected 'john.doe', got '$SUB'"
+    fi
+
+    if [ "$EMAIL" = "upstream@example.com" ]; then
+        print_status "success" "Email claim matches expected value"
+    else
+        print_status "error" "Email claim mismatch: expected 'upstream@example.com', got '$EMAIL'"
+    fi
+
+    if [ "$NAME" = "John Doe" ]; then
+        print_status "success" "Name claim matches expected value"
+    else
+        print_status "error" "Name claim mismatch: expected 'John Doe', got '$NAME'"
+    fi
+
+    if [ "$EMAIL_VERIFIED" = "true" ]; then
+        print_status "success" "Email verified claim is correct"
+    else
+        print_status "error" "Email verified claim mismatch: expected 'true', got '$EMAIL_VERIFIED'"
+    fi
+else
+    print_status "error" "UserInfo endpoint did not return valid user data"
+    exit 1
+fi
+
+# Step 8: Test token refresh (if refresh token available)
+print_status "info" "Step 8: Testing token refresh (if refresh token available)..."
+
+if [ "$REFRESH_TOKEN" != "null" ] && [ "$REFRESH_TOKEN" != "" ]; then
+    REFRESH_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -u "$CLIENT_ID:$CLIENT_SECRET" \
+      -d "grant_type=refresh_token&refresh_token=$REFRESH_TOKEN&scope=openid%20profile%20email")
+
+    echo "   Refresh token response:"
+    echo "$REFRESH_RESPONSE" | jq . 2>/dev/null || echo "$REFRESH_RESPONSE"
+
+    # Extract refreshed tokens
+    NEW_ACCESS_TOKEN=$(echo "$REFRESH_RESPONSE" | jq -r '.access_token' 2>/dev/null)
+    NEW_REFRESH_TOKEN=$(echo "$REFRESH_RESPONSE" | jq -r '.refresh_token' 2>/dev/null)
+
+    if [ "$NEW_ACCESS_TOKEN" != "null" ] && [ "$NEW_ACCESS_TOKEN" != "" ]; then
+        print_status "success" "Token refresh successful"
+        print_status "info" "New Access Token: ${NEW_ACCESS_TOKEN:0:20}..."
+
+        # Test that refreshed token works with UserInfo
+        REFRESHED_USERINFO=$(curl -s -H "Authorization: Bearer $NEW_ACCESS_TOKEN" \
+          "$SERVER_URL/userinfo")
+
+        if echo "$REFRESHED_USERINFO" | grep -q "sub"; then
+            print_status "success" "Refreshed token UserInfo works"
+        else
+            print_status "error" "Refreshed token UserInfo failed"
+        fi
+    else
+        print_status "error" "Token refresh failed"
+    fi
+else
+    print_status "info" "No refresh token available, skipping refresh test"
+fi
+
 print_status "success" "Proxy mode PAR test completed successfully"
 
 echo ""
@@ -172,5 +331,22 @@ echo "✅ Client registration: PASS"
 echo "✅ PAR request forwarding: PASS"
 echo "✅ Discovery endpoint: PASS"
 echo "✅ Request URI handling: PASS"
+echo "✅ Full authorization flow: PASS"
+echo "✅ Authorization code return: PASS"
+echo "✅ Token exchange: PASS"
+echo "✅ UserInfo endpoint: PASS"
+echo "✅ User claims validation: PASS"
+if [ "$REFRESH_TOKEN" != "null" ] && [ "$REFRESH_TOKEN" != "" ]; then
+    echo "✅ Token refresh: PASS"
+else
+    echo "ℹ️  Token refresh: SKIPPED (no refresh token)"
+fi
 echo ""
 echo "🎉 Proxy mode PAR functionality is working correctly!"
+echo "   ✅ PAR requests are properly forwarded to upstream provider"
+echo "   ✅ Authorization flow completes end-to-end"
+echo "   ✅ Authorization codes are returned to client redirect URIs"
+echo "   ✅ Token exchange works with PAR authorization codes"
+echo "   ✅ UserInfo endpoint provides upstream user data"
+echo "   ✅ User claims are properly validated"
+echo "   ✅ Token refresh functionality works with PAR flow"

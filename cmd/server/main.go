@@ -649,7 +649,7 @@ func initializeHandlers() {
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
-	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector, log, dataStore)
+	userinfoHandler = handlers.NewUserInfoHandler(configuration, oauth2Provider, metricsCollector, log, dataStore, &accessTokenToIssuerStateMap)
 
 	// Initialize discovery and utility handlers
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
