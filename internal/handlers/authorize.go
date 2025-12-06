@@ -78,7 +78,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Add panic recovery to catch any internal fosite panics
 	defer func() {
 		if rec := recover(); rec != nil {
-			h.Log.Fatalf("🚨 PANIC in authorization handler: %v", rec)
+			h.Log.Errorf("🚨 PANIC in authorization handler: %v", rec)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
 	}()
@@ -140,9 +140,15 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.Log.Printf("🔄 [PAR] Set client_id from stored request: %s", parRequest.ClientID)
 		}
 
-		// Clean up the used PAR request
-		if err := h.Storage.DeletePARRequest(ctx, requestURI); err != nil {
-			h.Log.Warnf("⚠️ [PAR] Failed to delete used PAR request: %v", err)
+		// Clean up the used PAR request (but not for HEAD requests - they should not have side effects)
+		if r.Method != http.MethodHead {
+			if err := h.Storage.DeletePARRequest(ctx, requestURI); err != nil {
+				h.Log.Warnf("⚠️ [PAR] Failed to delete used PAR request: %v", err)
+			} else {
+				h.Log.Printf("✅ [PAR] Deleted used PAR request: %s", requestURI)
+			}
+		} else {
+			h.Log.Printf("🔍 [PAR] Skipping PAR deletion for HEAD request")
 		}
 	}
 
@@ -267,7 +273,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	func() {
 		defer func() {
 			if rec := recover(); rec != nil {
-				h.Log.Fatalf("🚨 PANIC in NewAuthorizeResponse: %v", rec)
+				h.Log.Errorf("🚨 PANIC in NewAuthorizeResponse: %v", rec)
 				authErr = fosite.ErrServerError.WithHint("Internal panic during authorization response generation")
 			}
 		}()
@@ -414,7 +420,63 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	q := r.URL.Query()
+	// Parse form to handle both query and POST parameters
+	if err := r.ParseForm(); err != nil {
+		h.Log.Errorf("❌ [PROXY-AUTH] Failed to parse form: %v", err)
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	// Handle PAR (Pushed Authorization Request) - if request_uri is provided, load stored parameters
+	requestURI := r.Form.Get("request_uri")
+	if requestURI != "" {
+		h.Log.Printf("🔍 [PROXY-AUTH] [PAR] Handling request_uri: %s", requestURI)
+
+		// Retrieve the stored PAR request
+		parRequest, err := h.Storage.GetPARRequest(r.Context(), requestURI)
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-AUTH] [PAR] Failed to retrieve PAR request: %v", err)
+			http.Error(w, "Invalid or expired request_uri", http.StatusBadRequest)
+			return
+		}
+
+		// Validate client_id matches
+		formClientID := r.Form.Get("client_id")
+		if formClientID != "" && formClientID != parRequest.ClientID {
+			h.Log.Errorf("❌ [PROXY-AUTH] [PAR] Client ID mismatch: expected %s, got %s", parRequest.ClientID, formClientID)
+			http.Error(w, "client_id does not match the pushed authorization request", http.StatusBadRequest)
+			return
+		}
+
+		h.Log.Printf("✅ [PROXY-AUTH] [PAR] Retrieved stored parameters for client %s", parRequest.ClientID)
+
+		// Merge stored parameters with current request parameters
+		for key, value := range parRequest.Parameters {
+			if _, exists := r.Form[key]; !exists {
+				r.Form[key] = []string{value}
+				h.Log.Printf("🔄 [PROXY-AUTH] [PAR] Added stored parameter: %s = %s", key, value)
+			}
+		}
+
+		// Set client_id from stored request if not provided
+		if formClientID == "" {
+			r.Form.Set("client_id", parRequest.ClientID)
+			h.Log.Printf("🔄 [PROXY-AUTH] [PAR] Set client_id from stored request: %s", parRequest.ClientID)
+		}
+
+		// Clean up the used PAR request (but not for HEAD requests - they should not have side effects)
+		if r.Method != http.MethodHead {
+			if err := h.Storage.DeletePARRequest(r.Context(), requestURI); err != nil {
+				h.Log.Warnf("⚠️ [PROXY-AUTH] [PAR] Failed to delete used PAR request: %v", err)
+			} else {
+				h.Log.Printf("✅ [PROXY-AUTH] [PAR] Deleted used PAR request: %s", requestURI)
+			}
+		} else {
+			h.Log.Printf("🔍 [PROXY-AUTH] [PAR] Skipping PAR deletion for HEAD request")
+		}
+	}
+
+	q := r.Form // Use Form instead of URL.Query() to support both GET and POST with PAR
 	clientID := q.Get("client_id")
 	redirectURI := q.Get("redirect_uri")
 	h.Log.Printf("🔍 [PROXY-AUTH] ClientID: %s, RedirectURI: %s", clientID, redirectURI)

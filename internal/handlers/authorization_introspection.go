@@ -389,8 +389,7 @@ func (h *AuthorizationIntrospectionHandler) getUpstreamTokenFromProxyToken(ctx c
 	h.Log.Printf("⚠️ [PROXY-TRANSLATE] No upstream token mapping found in storage (%v), trying session claims", storageErr)
 
 	// Fallback: Use fosite's introspection to validate the proxy token and get session data
-	introspectionCtx := context.Background()
-	_, requester, err := h.OAuth2Provider.IntrospectToken(introspectionCtx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
+	_, requester, err := h.OAuth2Provider.IntrospectToken(ctx, proxyToken, fosite.AccessToken, &openid.DefaultSession{})
 	if err != nil {
 		h.Log.Printf("⚠️ [PROXY-TRANSLATE] Token introspection failed (%v), assuming direct upstream token (device flow)", err)
 		// For device flow, the token itself is the upstream token

@@ -380,10 +380,15 @@ func main() {
 
 		// Create a wrapper function for dynamic config checking that matches the expected signature
 		dynamicConfigChecker := func(clientID string) (*config.ClientAttestationConfig, bool) {
-			return handlers.GetClientAttestationConfig(clientID, dataStore)
+			return handlers.GetClientAttestationConfig(context.Background(), clientID, dataStore)
 		}
 
-		attestationManager = attestation.NewVerifierManager(configuration.Attestation, trustAnchors, log, dynamicConfigChecker, trustAnchorHandler.ResolvePath)
+		// Create a wrapper function for ResolvePath that uses background context
+		resolvePathFunc := func(name string) ([]byte, error) {
+			return trustAnchorHandler.ResolvePath(context.Background(), name)
+		}
+
+		attestationManager = attestation.NewVerifierManager(configuration.Attestation, trustAnchors, log, dynamicConfigChecker, resolvePathFunc)
 		if err := attestationManager.PreloadVerifiers(); err != nil {
 			log.Fatalf("❌ Failed to preload attestation verifiers: %v", err)
 		}

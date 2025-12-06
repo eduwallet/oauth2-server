@@ -151,9 +151,9 @@ func (h *TrustAnchorHandler) HandleDelete(w http.ResponseWriter, r *http.Request
 }
 
 // ResolvePath resolves a trust anchor name to its certificate data
-func (h *TrustAnchorHandler) ResolvePath(name string) ([]byte, error) {
+func (h *TrustAnchorHandler) ResolvePath(ctx context.Context, name string) ([]byte, error) {
 	if strings.Contains(name, "/") || strings.Contains(name, "..") {
 		return nil, fmt.Errorf("invalid trust anchor name")
 	}
-	return h.storage.GetTrustAnchor(context.Background(), name)
+	return h.storage.GetTrustAnchor(ctx, name)
 }

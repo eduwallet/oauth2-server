@@ -151,7 +151,8 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 					http.Error(w, "failed to parse proxy token mapping", http.StatusInternalServerError)
 					return
 				}
-				// For proxy tokens, return a synthetic active response
+
+				// Build response with basic fields
 				response := map[string]interface{}{
 					"active":          true,
 					"client_id":       mapping["client_id"],
@@ -161,6 +162,46 @@ func (h *IntrospectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 					"issued_by_proxy": true,
 					"proxy_server":    "oauth2-server",
 				}
+
+				// Extract upstream token claims if available
+				if upstreamTokens, ok := mapping["upstream_tokens"].(map[string]interface{}); ok {
+					if accessToken, ok := upstreamTokens["access_token"].(string); ok && accessToken != "" {
+						h.Log.Debugf("🔍 [INTROSPECT] Extracting claims from upstream access token")
+
+						// Parse JWT without verification to extract claims (already verified by upstream)
+						claims := h.parseJWTClaims(accessToken)
+						if claims != nil {
+							// Add standard OAuth2 introspection fields from upstream token
+							if sub, ok := claims["sub"].(string); ok {
+								response["sub"] = sub
+							}
+							if scope, ok := claims["scope"].(string); ok {
+								response["scope"] = scope
+							}
+							if exp, ok := claims["exp"].(float64); ok {
+								response["exp"] = int64(exp)
+							}
+							if iat, ok := claims["iat"].(float64); ok {
+								response["iat"] = int64(iat)
+							}
+							if iss, ok := claims["iss"].(string); ok {
+								response["iss"] = iss
+							}
+							if aud, ok := claims["aud"]; ok {
+								response["aud"] = aud
+							}
+							h.Log.Debugf("✅ [INTROSPECT] Added upstream token claims to response")
+						}
+					}
+
+					// Also check if scope is in the token response (some providers include it)
+					if scope, ok := upstreamTokens["scope"].(string); ok && scope != "" {
+						if _, hasScope := response["scope"]; !hasScope {
+							response["scope"] = scope
+						}
+					}
+				}
+
 				w.Header().Set("Content-Type", "application/json")
 				if err := json.NewEncoder(w).Encode(response); err != nil {
 					h.Log.Errorf("❌ [INTROSPECT] Failed to encode response: %v", err)
@@ -674,7 +715,7 @@ func (h *IntrospectionHandler) handleLocalIntrospectionWithCredentials(w http.Re
 
 	// Set basic auth with the attested client's credentials
 	// This assumes the client has stored credentials (like in the token handler)
-	if secret, ok := GetClientSecret(clientID, h.Storage, h.SecretManager); ok {
+	if secret, ok := GetClientSecret(r.Context(), clientID, h.Storage, h.SecretManager); ok {
 		localReq.SetBasicAuth(clientID, secret)
 		h.Log.Debugf("✅ Used stored credentials for basic auth in local introspection")
 	} else {
@@ -1082,6 +1123,30 @@ func (h *IntrospectionHandler) logTokenClaims(tokenValue string) {
 	for key, value := range claims {
 		h.Log.Debugf("🔍 Token Claim [%s]: %v", key, value)
 	}
+}
+
+// parseJWTClaims parses a JWT token and returns its claims without verification
+// This is used for extracting claims from already-verified upstream tokens
+func (h *IntrospectionHandler) parseJWTClaims(tokenValue string) map[string]interface{} {
+	parts := strings.Split(tokenValue, ".")
+	if len(parts) != 3 {
+		h.Log.Debugf("🔍 Token is not a valid JWT (not 3 parts)")
+		return nil
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		h.Log.Debugf("🔍 Error decoding token payload: %v", err)
+		return nil
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		h.Log.Debugf("🔍 Error parsing token claims: %v", err)
+		return nil
+	}
+
+	return claims
 }
 
 // getMapKeysInterface returns a slice of keys from a map[string]interface{}

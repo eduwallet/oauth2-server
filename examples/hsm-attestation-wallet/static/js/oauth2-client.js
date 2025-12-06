@@ -100,9 +100,13 @@ class OAuth2Client {
                         revocation_endpoint: metadata.revocation_endpoint,
                         jwks_uri: metadata.jwks_uri,
                         registration_endpoint: metadata.registration_endpoint,
-                        device_authorization_endpoint: metadata.device_authorization_endpoint
+                        device_authorization_endpoint: metadata.device_authorization_endpoint,
+                        pushed_authorization_request_endpoint: metadata.pushed_authorization_request_endpoint
                     };
                     this.log('Endpoints discovered via metadata', 'success');
+                    if (this.endpoints.pushed_authorization_request_endpoint) {
+                        this.log('PAR endpoint available: ' + this.endpoints.pushed_authorization_request_endpoint, 'info');
+                    }
                     return;
                 }
             } catch (error) {
@@ -133,7 +137,8 @@ class OAuth2Client {
             revocation_endpoint: `${this.config.serverUrl}/revoke`,
             jwks_uri: `${this.config.serverUrl}/.well-known/jwks.json`,
             registration_endpoint: `${this.config.serverUrl}/register`,
-            device_authorization_endpoint: `${this.config.serverUrl}/device/authorize`
+            device_authorization_endpoint: `${this.config.serverUrl}/device/authorize`,
+            pushed_authorization_request_endpoint: `${this.config.serverUrl}/authorize`
         };
     }
 
@@ -234,11 +239,11 @@ class OAuth2Client {
     }
 
     /**
-     * Start authorization code flow with PKCE
+     * Start authorization code flow with PKCE using Pushed Authorization Request (PAR)
      */
     async startAuthorizationCodeFlow() {
         try {
-            this.log('Starting authorization code flow...');
+            this.log('Starting authorization code flow with PAR...');
             
             // Generate PKCE parameters
             const codeVerifier = this.crypto.generateRandomString(128);
@@ -251,8 +256,30 @@ class OAuth2Client {
             sessionStorage.setItem('pkce_code_verifier', codeVerifier);
             sessionStorage.setItem('oauth_state', this.state);
             
-            // Build authorization URL
-            const authParams = new URLSearchParams({
+            // Check if PAR endpoint is available
+            if (!this.endpoints.pushed_authorization_request_endpoint) {
+                this.log('PAR endpoint not available, falling back to direct authorization', 'warning');
+                return await this.startDirectAuthorizationFlow(codeChallenge);
+            }
+            
+            // Push authorization request to PAR endpoint
+            this.log('Pushing authorization request to PAR endpoint...');
+            
+            // Create attestation JWT for client authentication
+            const attestationToken = await this.attestationService.createAttestationToken({
+                subject: this.config.clientId,
+                audience: this.endpoints.pushed_authorization_request_endpoint,
+                keyId: this.clientKeyId,
+                bioAuth: true,
+                claims: {
+                    client_assertion: true,
+                    auth_method: 'attest_jwt_client_auth',
+                    par_request: true
+                }
+            });
+            
+            // Prepare PAR request parameters
+            const parParams = new URLSearchParams({
                 response_type: 'code',
                 client_id: this.config.clientId,
                 redirect_uri: this.config.redirectUri,
@@ -260,30 +287,102 @@ class OAuth2Client {
                 issuer_state: `demo-issuer-state-${Date.now()}`,
                 state: this.state,
                 code_challenge: codeChallenge,
-                code_challenge_method: 'S256'
+                code_challenge_method: 'S256',
+                client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+                client_assertion: attestationToken
+            });
+            
+            console.log('📤 Sending PAR request to:', this.endpoints.pushed_authorization_request_endpoint);
+            
+            // Send PAR request
+            const parResponse = await fetch(this.endpoints.pushed_authorization_request_endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: parParams.toString()
+            });
+            
+            if (!parResponse.ok) {
+                const errorText = await parResponse.text();
+                this.log(`PAR request failed: ${parResponse.status} ${errorText}`, 'error');
+                throw new Error(`PAR request failed: ${parResponse.status} ${parResponse.statusText} - ${errorText}`);
+            }
+            
+            const parResult = await parResponse.json();
+            console.log('✅ PAR Response:', parResult);
+            
+            if (!parResult.request_uri) {
+                throw new Error('PAR response missing request_uri');
+            }
+            
+            this.log('PAR request successful, received request_uri', 'success');
+            
+            // Build authorization URL with request_uri from PAR response
+            const authParams = new URLSearchParams({
+                client_id: this.config.clientId,
+                request_uri: parResult.request_uri
             });
             
             const authUrl = `${this.endpoints.authorization_endpoint}?${authParams.toString()}`;
             
-            this.log('Authorization URL generated', 'success');
+            this.log('Authorization URL generated with PAR request_uri', 'success');
             
             this.notifyEvent('authorizationStarted', {
                 authUrl: authUrl,
                 state: this.state,
-                issuer_state: authParams.get('issuer_state'),
-                codeChallenge: codeChallenge
+                requestUri: parResult.request_uri,
+                expiresIn: parResult.expires_in,
+                codeChallenge: codeChallenge,
+                usedPAR: true
             });
             
             return {
                 authUrl: authUrl,
                 state: this.state,
-                codeVerifier: codeVerifier
+                codeVerifier: codeVerifier,
+                requestUri: parResult.request_uri
             };
             
         } catch (error) {
             this.log(`Authorization flow start failed: ${error.message}`, 'error');
             throw error;
         }
+    }
+
+    /**
+     * Fallback to direct authorization flow (without PAR)
+     */
+    async startDirectAuthorizationFlow(codeChallenge) {
+        this.log('Using direct authorization flow (no PAR)');
+        
+        const authParams = new URLSearchParams({
+            response_type: 'code',
+            client_id: this.config.clientId,
+            redirect_uri: this.config.redirectUri,
+            scope: this.config.scope,
+            issuer_state: `demo-issuer-state-${Date.now()}`,
+            state: this.state,
+            code_challenge: codeChallenge,
+            code_challenge_method: 'S256'
+        });
+        
+        const authUrl = `${this.endpoints.authorization_endpoint}?${authParams.toString()}`;
+        
+        this.log('Authorization URL generated (direct)', 'success');
+        
+        this.notifyEvent('authorizationStarted', {
+            authUrl: authUrl,
+            state: this.state,
+            issuer_state: authParams.get('issuer_state'),
+            codeChallenge: codeChallenge,
+            usedPAR: false
+        });
+        
+        return {
+            authUrl: authUrl,
+            state: this.state
+        };
     }
 
     /**

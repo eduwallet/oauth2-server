@@ -221,7 +221,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 
 		// Resolve trust anchor names to file paths
 		h.log.Printf("🔍 [REGISTRATION] Resolving trust anchors: %v", metadata.AttestationConfig.TrustAnchors)
-		if err := h.resolveTrustAnchors(metadata.AttestationConfig); err != nil {
+		if err := h.resolveTrustAnchors(r.Context(), metadata.AttestationConfig); err != nil {
 			h.log.Errorf("❌ [REGISTRATION] Failed to resolve trust anchors: %v", err)
 			http.Error(w, "Failed to resolve trust anchors: "+err.Error(), http.StatusBadRequest)
 			return
@@ -476,13 +476,13 @@ func contains(slice []string, item string) bool {
 }
 
 // resolveTrustAnchors validates that trust anchor names can be resolved to existing files
-func (h *RegistrationHandler) resolveTrustAnchors(attestationConfig *config.ClientAttestationConfig) error {
+func (h *RegistrationHandler) resolveTrustAnchors(ctx context.Context, attestationConfig *config.ClientAttestationConfig) error {
 	if h.trustAnchorHandler == nil {
 		return fmt.Errorf("trust anchor handler not available")
 	}
 
 	for _, name := range attestationConfig.TrustAnchors {
-		_, err := h.trustAnchorHandler.ResolvePath(name)
+		_, err := h.trustAnchorHandler.ResolvePath(ctx, name)
 		if err != nil {
 			return fmt.Errorf("trust anchor not found: %s", name)
 		}
@@ -493,8 +493,8 @@ func (h *RegistrationHandler) resolveTrustAnchors(attestationConfig *config.Clie
 }
 
 // GetClientSecret retrieves the original unhashed client secret for a given client ID
-func GetClientSecret(clientID string, storage store.Storage, secretManager *store.SecretManager) (string, bool) {
-	encryptedSecret, err := storage.GetClientSecret(context.Background(), clientID)
+func GetClientSecret(ctx context.Context, clientID string, storage store.Storage, secretManager *store.SecretManager) (string, bool) {
+	encryptedSecret, err := storage.GetClientSecret(ctx, clientID)
 	if err != nil {
 		return "", false
 	}
@@ -508,8 +508,8 @@ func GetClientSecret(clientID string, storage store.Storage, secretManager *stor
 }
 
 // GetClientAttestationConfig retrieves the attestation config for a given client ID
-func GetClientAttestationConfig(clientID string, storage store.Storage) (*config.ClientAttestationConfig, bool) {
-	config, err := storage.GetAttestationConfig(context.Background(), clientID)
+func GetClientAttestationConfig(ctx context.Context, clientID string, storage store.Storage) (*config.ClientAttestationConfig, bool) {
+	config, err := storage.GetAttestationConfig(ctx, clientID)
 	if err != nil {
 		return nil, false
 	}

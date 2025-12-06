@@ -142,14 +142,14 @@ func (h *RegistrationHandler) handleGetClients(w http.ResponseWriter, r *http.Re
 		// Get client secret if available
 		var clientSecret string
 		if !client.IsPublic() {
-			if secret, ok := GetClientSecret(clientID, h.storage, h.secretManager); ok {
+			if secret, ok := GetClientSecret(r.Context(), clientID, h.storage, h.secretManager); ok {
 				clientSecret = secret
 			}
 		}
 
 		// Get attestation config if available
 		var attestationConfig *config.ClientAttestationConfig
-		if config, ok := GetClientAttestationConfig(clientID, h.storage); ok {
+		if config, ok := GetClientAttestationConfig(r.Context(), clientID, h.storage); ok {
 			attestationConfig = config
 		}
 

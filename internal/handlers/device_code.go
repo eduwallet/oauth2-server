@@ -365,7 +365,7 @@ func (h *DeviceCodeHandler) HandleVerification(w http.ResponseWriter, r *http.Re
 	h.Logger.Infof("🔍 Processing verification for user code: %s, username: %s", userCode, username)
 
 	// First, validate that the user code exists and is still pending
-	_, deviceAuthKey, err := h.findDeviceAuthorization(userCode)
+	_, deviceAuthKey, err := h.findDeviceAuthorization(r.Context(), userCode)
 	if err != nil {
 		h.Logger.WithError(err).Warnf("⚠️ Invalid or expired user code: %s", userCode)
 		h.showInvalidUserCodePage(w, r, userCode)
@@ -453,7 +453,7 @@ func (h *DeviceCodeHandler) HandleConsent(w http.ResponseWriter, r *http.Request
 	h.Logger.Infof("🔍 Processing consent for user code: %s, username: %s, action: %s", userCode, username, action)
 
 	// First, validate that the user code still exists and is pending
-	_, _, err := h.findDeviceAuthorization(userCode)
+	_, _, err := h.findDeviceAuthorization(r.Context(), userCode)
 	if err != nil {
 		h.Logger.WithError(err).Warnf("⚠️ Invalid or expired user code during consent: %s", userCode)
 		h.showInvalidUserCodePage(w, r, userCode)
@@ -573,7 +573,7 @@ func (h *DeviceCodeHandler) completeDeviceAuthorization(ctx context.Context, use
 	h.Logger.Infof("🔄 Starting completeDeviceAuthorization for user code: %s", userCode)
 
 	// Find the specific device authorization for this user code
-	deviceAuth, deviceAuthKey, err := h.findDeviceAuthorization(userCode)
+	deviceAuth, deviceAuthKey, err := h.findDeviceAuthorization(ctx, userCode)
 	if err != nil {
 		h.Logger.WithError(err).Errorf("❌ Failed to find device authorization for user code %s", userCode)
 		return fmt.Errorf("failed to find device authorization for user code %s: %w", userCode, err)
@@ -637,7 +637,7 @@ func (h *DeviceCodeHandler) completeDeviceAuthorization(ctx context.Context, use
 
 	// Store the updated device authorization back
 	h.Logger.Infof("🔍 Storing updated device authorization back to storage")
-	if err := h.Storage.UpdateDeviceCodeSession(context.Background(), deviceAuthKey, deviceAuth); err != nil {
+	if err := h.Storage.UpdateDeviceCodeSession(ctx, deviceAuthKey, deviceAuth); err != nil {
 		h.Logger.WithError(err).Error("❌ Failed to update device code session")
 		return err
 	}
@@ -648,10 +648,10 @@ func (h *DeviceCodeHandler) completeDeviceAuthorization(ctx context.Context, use
 }
 
 // findDeviceAuthorization finds a device authorization by user code
-func (h *DeviceCodeHandler) findDeviceAuthorization(userCode string) (fosite.DeviceRequester, string, error) {
+func (h *DeviceCodeHandler) findDeviceAuthorization(ctx context.Context, userCode string) (fosite.DeviceRequester, string, error) {
 	h.Logger.Infof("🔍 Looking for device authorization with user code: %s", userCode)
 
-	deviceReq, deviceCode, err := h.Storage.GetDeviceAuthByUserCode(context.Background(), userCode)
+	deviceReq, deviceCode, err := h.Storage.GetDeviceAuthByUserCode(ctx, userCode)
 	if err != nil {
 		h.Logger.WithError(err).Errorf("❌ Failed to find device authorization for user code %s", userCode)
 		return nil, "", fmt.Errorf("failed to find device authorization for user code %s: %w", userCode, err)

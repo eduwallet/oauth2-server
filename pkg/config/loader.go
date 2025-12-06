@@ -16,11 +16,6 @@ func (c *Config) NormalizeAllClientRedirectURIs() {
 	}
 }
 
-// LoadConfig loads configuration from environment variables and config file
-func Load() (*Config, error) {
-	return LoadFromPath("config.yaml")
-}
-
 // LoadFromPath loads configuration from a specific config file path
 func LoadFromPath(configPath string) (*Config, error) {
 	cfg := &Config{}
@@ -61,12 +56,4 @@ func LoadFromFile(path string, cfg *Config) error {
 	}
 
 	return nil
-}
-
-// Helper functions
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

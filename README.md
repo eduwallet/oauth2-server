@@ -157,6 +157,8 @@ The OAuth2 server supports several command line options for configuration and in
 
 ### Environment Variables
 
+See the [Environment Variables](#environment-variables-reference) section below for a complete list of supported environment variables.
+
 - `CONFIG_FILE`: Path to configuration file (overrides `--config`/`-c`)
 
 ### Examples
@@ -256,6 +258,151 @@ Testing test_validation.sh                       ... ✅ PASSED
 ## Configuration
 
 For detailed configuration options including environment variables, configuration files, and proxy mode setup, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+## Environment Variables Reference
+
+The OAuth2 server supports comprehensive configuration through environment variables. These override values from `config.yaml`.
+
+### Server Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `PUBLIC_BASE_URL` | string | - | Public base URL for the OAuth2 server (used in tokens and discovery endpoints) |
+| `PORT` | int | 8080 | Server port |
+| `CONFIG_FILE` | string | config.yaml | Path to configuration file |
+
+### Logging Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `LOG_LEVEL` | string | info | Logging level (`debug`, `info`, `warn`, `error`) |
+| `LOG_FORMAT` | string | json | Log format (`json` or `text`) |
+| `ENABLE_AUDIT_LOGGING` | bool | false | Enable audit logging for security events |
+
+### Database Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `DATABASE_TYPE` | string | sqlite | Database type (`sqlite`, `postgres`, `mysql`, `memory`) |
+| `DATABASE_PATH` | string | ./oauth2.db | Database file path (for sqlite) or connection string |
+
+### Proxy/Network Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TRUST_PROXY_HEADERS` | bool | true | Trust proxy headers (X-Forwarded-*, etc.) when behind reverse proxy |
+| `FORCE_HTTPS` | bool | false | Force HTTPS redirects |
+| `TRUSTED_PROXIES` | string | - | Comma-separated list of trusted proxy IP addresses or CIDR ranges |
+
+### Upstream Provider Configuration (Proxy Mode)
+
+**Security Note**: When these are set, the server runs in proxy mode. Store these securely (e.g., Kubernetes secrets).
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `UPSTREAM_PROVIDER_URL` | string | - | Upstream OAuth2 provider URL (e.g., `https://accounts.google.com`) |
+| `UPSTREAM_CLIENT_ID` | string | - | Client ID for the upstream provider |
+| `UPSTREAM_CLIENT_SECRET` | string | - | Client secret for the upstream provider |
+| `UPSTREAM_CALLBACK_URL` | string | - | Callback URL for the upstream provider (should point to this server) |
+
+### Security Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `JWT_SIGNING_KEY` | string | - | JWT signing key (use a strong, random key in production) |
+| `TOKEN_EXPIRY_SECONDS` | int | 3600 | Access token expiry time in seconds (default: 1 hour) |
+| `REFRESH_TOKEN_EXPIRY_SECONDS` | int | 86400 | Refresh token expiry time in seconds (default: 24 hours) |
+| `REQUIRE_HTTPS` | bool | false | Require HTTPS for all OAuth2 endpoints |
+| `ENABLE_PKCE` | bool | true | Enable PKCE (Proof Key for Code Exchange) support |
+| `API_KEY` | string | - | API key for protected endpoints (registration, trust anchor management) |
+| `ENABLE_REGISTRATION_API` | bool | false | Enable dynamic client registration API |
+| `ENABLE_TRUST_ANCHOR_API` | bool | false | Enable trust anchor management API for attestation |
+
+### Dynamic Client Configuration
+
+Clients can be configured via environment variables using the following pattern:
+
+| Pattern | Description | Example |
+|---------|-------------|---------|
+| `CLIENT_<ID>_SECRET` | Client secret (required) | `CLIENT_WEBAPP_SECRET=my-secret` |
+| `CLIENT_<ID>_NAME` | Client display name | `CLIENT_WEBAPP_NAME="My Web App"` |
+| `CLIENT_<ID>_REDIRECT_URIS` | Comma-separated redirect URIs | `CLIENT_WEBAPP_REDIRECT_URIS=https://app.example.com/callback,http://localhost:3000/callback` |
+| `CLIENT_<ID>_GRANT_TYPES` | Comma-separated grant types | `CLIENT_WEBAPP_GRANT_TYPES=authorization_code,refresh_token` |
+| `CLIENT_<ID>_RESPONSE_TYPES` | Comma-separated response types | `CLIENT_WEBAPP_RESPONSE_TYPES=code` |
+| `CLIENT_<ID>_SCOPES` | Comma-separated scopes | `CLIENT_WEBAPP_SCOPES=openid,profile,email` |
+
+**Example:**
+```bash
+CLIENT_WEBAPP_SECRET=super-secret-key
+CLIENT_WEBAPP_NAME="My Web Application"
+CLIENT_WEBAPP_REDIRECT_URIS=https://app.example.com/callback
+CLIENT_WEBAPP_GRANT_TYPES=authorization_code,refresh_token
+CLIENT_WEBAPP_SCOPES=openid,profile,email
+```
+
+### Dynamic User Configuration
+
+Users can be configured via environment variables using the following pattern:
+
+| Pattern | Description | Example |
+|---------|-------------|---------|
+| `USER_<ID>_USERNAME` | Username (required) | `USER_ADMIN_USERNAME=admin` |
+| `USER_<ID>_PASSWORD` | User password | `USER_ADMIN_PASSWORD=secure-password` |
+| `USER_<ID>_EMAIL` | User email | `USER_ADMIN_EMAIL=admin@example.com` |
+| `USER_<ID>_NAME` | User display name | `USER_ADMIN_NAME="Administrator"` |
+
+**Example:**
+```bash
+USER_ADMIN_USERNAME=admin
+USER_ADMIN_PASSWORD=secure-password-123
+USER_ADMIN_EMAIL=admin@example.com
+USER_ADMIN_NAME="System Administrator"
+```
+
+### Environment Variable Precedence
+
+1. **Environment variables** (highest priority)
+2. Configuration file specified by `CONFIG_FILE` or `--config`
+3. Default `config.yaml` in current directory
+4. Built-in defaults (lowest priority)
+
+### Configuration Examples
+
+#### Minimal Production Setup
+```bash
+PUBLIC_BASE_URL=https://auth.example.com
+JWT_SIGNING_KEY=your-256-bit-secret-key
+DATABASE_TYPE=postgres
+DATABASE_PATH=postgres://user:pass@localhost/oauth2db
+API_KEY=your-api-key-for-management-endpoints
+ENABLE_REGISTRATION_API=true
+LOG_LEVEL=info
+LOG_FORMAT=json
+```
+
+#### Proxy Mode Setup
+```bash
+PUBLIC_BASE_URL=https://oauth-proxy.example.com
+UPSTREAM_PROVIDER_URL=https://accounts.google.com
+UPSTREAM_CLIENT_ID=your-client-id.apps.googleusercontent.com
+UPSTREAM_CLIENT_SECRET=your-client-secret
+UPSTREAM_CALLBACK_URL=https://oauth-proxy.example.com/callback
+JWT_SIGNING_KEY=your-jwt-signing-key
+API_KEY=your-api-key
+```
+
+#### Development Setup
+```bash
+PORT=8080
+DATABASE_TYPE=memory
+LOG_LEVEL=debug
+LOG_FORMAT=text
+ENABLE_AUDIT_LOGGING=true
+REQUIRE_HTTPS=false
+ENABLE_REGISTRATION_API=true
+ENABLE_TRUST_ANCHOR_API=true
+API_KEY=dev-api-key-change-me
+```
 
 ## OAuth 2.0 Attestation-Based Client Authentication
 

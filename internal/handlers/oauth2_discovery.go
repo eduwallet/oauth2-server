@@ -21,8 +21,6 @@ func NewOAuth2DiscoveryHandler(configuration *config.Config, attestationManager 
 	}
 }
 
-// TODO: More granular merging of upstream and local metadata if needed
-
 // ServeHTTP handles OAuth2 Authorization Server Metadata requests (/.well-known/oauth-authorization-server)
 func (h *OAuth2DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

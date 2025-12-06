@@ -231,6 +231,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("JWT secret is required")
 	}
 
+	if len(c.Security.JWTSecret) < 32 {
+		return fmt.Errorf("JWT secret must be at least 32 characters for security (current length: %d)", len(c.Security.JWTSecret))
+	}
+
 	if c.Security.EncryptionKey == "" {
 		return fmt.Errorf("encryption key is required")
 	}
