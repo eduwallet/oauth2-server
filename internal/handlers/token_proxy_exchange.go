@@ -121,7 +121,15 @@ func (h *TokenHandler) handleProxyTokenExchange(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	// Return upstream response directly for error cases
+	// If upstream token exchange failed, attempt local proxy handling
+	clientID := r.Form.Get("client_id")
+	if fallbackTokens := h.recoverUpstreamTokensForProxySubject(r.Context(), subjectToken, subjectTokenType); fallbackTokens != nil {
+		h.Log.Infof("ℹ️ [PROXY-TOKEN-EXCHANGE] Upstream exchange failed (status %d); issuing proxy tokens locally using mapped upstream tokens", resp.StatusCode)
+		h.createProxyTokensForTokenExchange(w, r, fallbackTokens, clientID)
+		return
+	}
+
+	// Return upstream response directly for error cases when no fallback is possible
 	h.Log.Debugf("ℹ️ [PROXY-TOKEN-EXCHANGE] Returning upstream error response directly")
 	// Copy response headers and status (excluding Content-Length to avoid mismatch)
 	for k, vv := range resp.Header {
@@ -138,6 +146,110 @@ func (h *TokenHandler) handleProxyTokenExchange(w http.ResponseWriter, r *http.R
 	if _, err := w.Write(respBody); err != nil {
 		h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to write response body to client: %v", err)
 	}
+}
+
+// recoverUpstreamTokensForProxySubject attempts to reconstruct upstream tokens for a proxy-issued subject token
+// so that we can issue new proxy tokens locally when the upstream provider does not support token exchange.
+func (h *TokenHandler) recoverUpstreamTokensForProxySubject(ctx context.Context, proxyToken string, subjectTokenType string) map[string]interface{} {
+	if proxyToken == "" {
+		return nil
+	}
+
+	// Derive signature and signature-part keys for lookups
+	sigPart := ""
+	if lastDot := strings.LastIndex(proxyToken, "."); lastDot != -1 && lastDot+1 < len(proxyToken) {
+		sigPart = proxyToken[lastDot+1:]
+	}
+
+	computeSig := func(token string) string {
+		switch subjectTokenType {
+		case "urn:ietf:params:oauth:token-type:refresh_token":
+			if strat, ok := h.RefreshTokenStrategy.(interface {
+				RefreshTokenSignature(context.Context, string) string
+			}); ok {
+				return strat.RefreshTokenSignature(ctx, token)
+			}
+		case "urn:ietf:params:oauth:token-type:access_token", "":
+			if strat, ok := h.AccessTokenStrategy.(interface {
+				AccessTokenSignature(context.Context, string) string
+			}); ok {
+				return strat.AccessTokenSignature(ctx, token)
+			}
+		}
+		return ""
+	}
+
+	sig := computeSig(proxyToken)
+
+	extractFromJSON := func(raw string) map[string]interface{} {
+		var mapping map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &mapping); err == nil {
+			if ut, ok := mapping["upstream_tokens"].(map[string]interface{}); ok {
+				return ut
+			}
+		}
+		return nil
+	}
+
+	// In-memory map lookups
+	if h.AccessTokenToIssuerStateMap != nil {
+		if ut := extractFromJSON((*h.AccessTokenToIssuerStateMap)[proxyToken]); ut != nil {
+			h.Log.Debugf("🔍 [PROXY-TOKEN-EXCHANGE] Recovered upstream tokens from in-memory map using full token")
+			return ut
+		}
+		if sig != "" {
+			if ut := extractFromJSON((*h.AccessTokenToIssuerStateMap)[sig]); ut != nil {
+				h.Log.Debugf("🔍 [PROXY-TOKEN-EXCHANGE] Recovered upstream tokens from in-memory map using signature")
+				return ut
+			}
+		}
+		if sigPart != "" {
+			if ut := extractFromJSON((*h.AccessTokenToIssuerStateMap)[sigPart]); ut != nil {
+				h.Log.Debugf("🔍 [PROXY-TOKEN-EXCHANGE] Recovered upstream tokens from in-memory map using signature part")
+				return ut
+			}
+		}
+	}
+
+	// Persistent storage lookups
+	lookupStorage := func(key string, label string) map[string]interface{} {
+		if key == "" {
+			return nil
+		}
+		upAccess, upRefresh, upType, upExp, err := h.Storage.GetUpstreamTokenMapping(ctx, key)
+		if err != nil {
+			h.Log.Debugf("ℹ️ [PROXY-TOKEN-EXCHANGE] Persistent mapping lookup failed for %s: %v", label, err)
+			return nil
+		}
+		h.Log.Debugf("ℹ️ [PROXY-TOKEN-EXCHANGE] Persistent mapping (%s) returned access=%q refresh=%q type=%q exp=%d", label, upAccess, upRefresh, upType, upExp)
+		if upAccess == "" && upRefresh == "" {
+			return nil
+		}
+		if upType == "" {
+			upType = "Bearer"
+		}
+		if upExp == 0 {
+			upExp = 3600
+		}
+		return map[string]interface{}{
+			"access_token":  upAccess,
+			"refresh_token": upRefresh,
+			"token_type":    upType,
+			"expires_in":    upExp,
+		}
+	}
+
+	if ut := lookupStorage(proxyToken, "full token"); ut != nil {
+		return ut
+	}
+	if ut := lookupStorage(sig, "signature"); ut != nil {
+		return ut
+	}
+	if ut := lookupStorage(sigPart, "signature part"); ut != nil {
+		return ut
+	}
+
+	return nil
 }
 
 // createProxyTokensForTokenExchange creates proxy tokens for token exchange flow
@@ -372,12 +484,37 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 			(*h.AccessTokenToIssuerStateMap)[refreshTokenKey] = string(mappingJSON)
 			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy refresh token mapping: %s -> upstream tokens", refreshTokenKey[:20])
 
-			// Also store in persistent storage
+			// Also store in persistent storage (full token, signature, and signature-part)
 			err = h.Storage.StoreUpstreamTokenMapping(ctx, refreshTokenKey, upstreamAccessToken, upstreamRefreshTokenForMapping, upstreamTokenType, int64(upstreamExpiresIn))
 			if err != nil {
 				h.Log.Warnf("⚠️ [PROXY-TOKEN-EXCHANGE] Failed to store upstream refresh token mapping in persistent storage: %v", err)
 			} else {
 				h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored upstream refresh token mapping in persistent storage for proxy token %s", refreshTokenKey[:20])
+			}
+
+			var refreshSignature string
+			if refreshStrategy, ok := h.RefreshTokenStrategy.(interface {
+				RefreshTokenSignature(context.Context, string) string
+			}); ok {
+				refreshSignature = refreshStrategy.RefreshTokenSignature(ctx, refreshTokenKey)
+				if err := h.Storage.StoreUpstreamTokenMapping(ctx, refreshSignature, upstreamAccessToken, upstreamRefreshTokenForMapping, upstreamTokenType, int64(upstreamExpiresIn)); err != nil {
+					h.Log.Warnf("⚠️ [PROXY-TOKEN-EXCHANGE] Failed to store upstream refresh token mapping (signature) in persistent storage: %v", err)
+				} else {
+					h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored upstream refresh token mapping in persistent storage for signature %s", refreshSignature[:20])
+				}
+			}
+
+			if lastDot := strings.LastIndex(refreshTokenKey, "."); lastDot != -1 && lastDot+1 < len(refreshTokenKey) {
+				sigPart := refreshTokenKey[lastDot+1:]
+				if err := h.Storage.StoreUpstreamTokenMapping(ctx, sigPart, upstreamAccessToken, upstreamRefreshTokenForMapping, upstreamTokenType, int64(upstreamExpiresIn)); err != nil {
+					h.Log.Warnf("⚠️ [PROXY-TOKEN-EXCHANGE] Failed to store upstream refresh token mapping (sig part) in persistent storage: %v", err)
+				} else {
+					h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored upstream refresh token mapping in persistent storage for sig part %s", sigPart[:20])
+				}
+
+				// Also keep in-memory mapping under sig part for quick lookup
+				(*h.AccessTokenToIssuerStateMap)[sigPart] = string(mappingJSON)
+				h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Stored proxy refresh token mapping under sig part: %s -> upstream tokens", sigPart[:20])
 			}
 		}
 	}

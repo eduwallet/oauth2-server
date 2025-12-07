@@ -6,9 +6,11 @@ import (
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/store"
 	"oauth2-server/pkg/config"
+	"time"
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/openid"
+	"github.com/ory/fosite/handler/rfc8693"
 	"github.com/ory/fosite/token/jwt"
 	"github.com/sirupsen/logrus"
 )
@@ -116,8 +118,9 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	h.Log.Infof("🔍 [TOKEN] HandleTokenRequest: grantType='%s', clientID='%s', IsProxyMode=%t", grantType, clientID, h.Configuration.IsProxyMode())
 
 	// Check if proxy mode is enabled and if we should proxy this request
+	// Token exchange is handled by our proxy path so we can fall back when the upstream does not support RFC 8693.
 	h.Log.Debugf("🔍 Token: Checking proxy mode: IsProxyMode=%t, grantType='%s'", h.Configuration.IsProxyMode(), grantType)
-	if h.Configuration.IsProxyMode() && (grantType == "authorization_code" || grantType == "urn:ietf:params:oauth:grant-type:device_code" || grantType == "urn:ietf:params:oauth:grant-type:token-exchange" || grantType == "refresh_token") {
+	if h.Configuration.IsProxyMode() && (grantType == "authorization_code" || grantType == "urn:ietf:params:oauth:grant-type:device_code" || grantType == "refresh_token" || grantType == "urn:ietf:params:oauth:grant-type:token-exchange") {
 		h.Log.Infof("🔄 [TOKEN] Entering proxy mode for grant_type: %s", grantType)
 		if grantType == "authorization_code" {
 			h.handleProxyAuthorizationCode(w, r)
@@ -125,11 +128,11 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		} else if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
 			h.handleProxyDeviceCode(w, r)
 			return
-		} else if grantType == "urn:ietf:params:oauth:grant-type:token-exchange" {
-			h.handleProxyTokenExchange(w, r)
-			return
 		} else if grantType == "refresh_token" {
 			h.handleProxyRefreshToken(w, r)
+			return
+		} else if grantType == "urn:ietf:params:oauth:grant-type:token-exchange" {
+			h.handleProxyTokenExchange(w, r)
 			return
 		}
 	}
@@ -150,32 +153,45 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 
 	// Let fosite handle ALL token requests natively, including device code flow and refresh tokens
-	// Use a consistent session for all requests - fosite will manage session retrieval for refresh tokens
-	session := &openid.DefaultSession{}
+	// Choose session type per grant to satisfy handler expectations (token exchange requires its own session type)
+	var session fosite.Session
+	var oidcSession *openid.DefaultSession
 	h.Log.Debugf("🔍 Token: Grant type check - grantType='%s', is_auth_code=%t, is_device_code=%t", grantType, grantType == "authorization_code", grantType == "urn:ietf:params:oauth:grant-type:device_code")
-	if grantType == "refresh_token" {
-		session.Subject = clientID
-		session.Username = clientID
-		h.Log.Debugf("🔍 Token: Set session to client_id for grant type: %s", grantType)
+	if grantType == "urn:ietf:params:oauth:grant-type:token-exchange" {
+		// RFC 8693 handler sets the concrete session later; initialize maps to avoid nil deref inside handler
+		session = &rfc8693.TokenExchangeSession{
+			ExpiresAt: make(map[fosite.TokenType]time.Time),
+			Extra:     make(map[string]interface{}),
+		}
+		h.Log.Debugf("🔍 Token: Using TokenExchangeSession for token exchange grant")
 	} else {
-		h.Log.Debugf("🔍 Token: Left session empty for grant type: %s", grantType)
-	}
-	// Initialize session claims to prevent nil pointer issues
-	if session.Claims == nil {
-		session.Claims = &jwt.IDTokenClaims{}
-	}
-	if session.Claims.Extra == nil {
-		session.Claims.Extra = make(map[string]interface{})
-	}
-	h.Log.Debugf("🔍 Token: Created empty session at address: %p", session)
-	h.Log.Debugf("🔍 Token: Session before NewAccessRequest - Subject: '%s'", session.GetSubject())
+		oidcSession = &openid.DefaultSession{}
+		if grantType == "refresh_token" {
+			oidcSession.Subject = clientID
+			oidcSession.Username = clientID
+			h.Log.Debugf("🔍 Token: Set session to client_id for grant type: %s", grantType)
+		} else {
+			h.Log.Debugf("🔍 Token: Left session empty for grant type: %s", grantType)
+		}
+		// Initialize session claims to prevent nil pointer issues
+		if oidcSession.Claims == nil {
+			oidcSession.Claims = &jwt.IDTokenClaims{}
+		}
+		if oidcSession.Claims.Extra == nil {
+			oidcSession.Claims.Extra = make(map[string]interface{})
+		}
+		h.Log.Debugf("🔍 Token: Created empty session at address: %p", oidcSession)
+		h.Log.Debugf("🔍 Token: Session before NewAccessRequest - Subject: '%s'", oidcSession.GetSubject())
 
-	// Store attestation information in session claims if attestation was performed
-	// Our AuthenticateClient strategy handles this automatically during authentication
-	h.storeAttestationInSession(ctx, session)
+		// Store attestation information in session claims if attestation was performed
+		// Our AuthenticateClient strategy handles this automatically during authentication
+		h.storeAttestationInSession(ctx, oidcSession)
 
-	// Store issuer_state in session claims if available (for authorization code flow)
-	h.storeIssuerStateInSession(r, session)
+		// Store issuer_state in session claims if available (for authorization code flow)
+		h.storeIssuerStateInSession(r, oidcSession)
+
+		session = oidcSession
+	}
 
 	// Debug: Log request details before NewAccessRequest
 	h.Log.Debugf("🔍 [DEBUG] Request details before NewAccessRequest:")
@@ -215,15 +231,17 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 						}
 						h.Log.Debugf("✅ Granted scopes for authorization_code from session: %v", scopeStrings)
 
-						// Store granted scopes in the session for persistence
-						if session.Claims == nil {
-							session.Claims = &jwt.IDTokenClaims{}
+						// Store granted scopes in the session for persistence (only for OIDC sessions)
+						if oidcSession != nil {
+							if oidcSession.Claims == nil {
+								oidcSession.Claims = &jwt.IDTokenClaims{}
+							}
+							if oidcSession.Claims.Extra == nil {
+								oidcSession.Claims.Extra = make(map[string]interface{})
+							}
+							oidcSession.Claims.Extra["granted_scopes"] = scopeStrings
+							h.Log.Debugf("✅ Stored granted scopes in session: %v", scopeStrings)
 						}
-						if session.Claims.Extra == nil {
-							session.Claims.Extra = make(map[string]interface{})
-						}
-						session.Claims.Extra["granted_scopes"] = scopeStrings
-						h.Log.Debugf("✅ Stored granted scopes in session: %v", scopeStrings)
 					}
 				}
 			}
@@ -233,9 +251,9 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	// Debug: Check what session data we got back
 	h.Log.Debugf("🔍 Token: Session after NewAccessRequest - Subject: '%s', Username: '%s'",
 		session.GetSubject(), session.GetUsername())
-	if session.Claims != nil {
+	if ds, ok := session.(*openid.DefaultSession); ok && ds.Claims != nil {
 		h.Log.Debugf("🔍 Token: Session Claims - Subject: '%s', Issuer: '%s'",
-			session.Claims.Subject, session.Claims.Issuer)
+			ds.Claims.Subject, ds.Claims.Issuer)
 	}
 
 	// For authorization_code flow, grant scopes that were stored in the session during authorization
@@ -264,14 +282,16 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 							h.Log.Debugf("✅ Granted scopes for authorization_code: %v", grantedScopes)
 
 							// Store granted scopes in the session for persistence
-							if session.Claims == nil {
-								session.Claims = &jwt.IDTokenClaims{}
+							if oidcSession != nil {
+								if oidcSession.Claims == nil {
+									oidcSession.Claims = &jwt.IDTokenClaims{}
+								}
+								if oidcSession.Claims.Extra == nil {
+									oidcSession.Claims.Extra = make(map[string]interface{})
+								}
+								oidcSession.Claims.Extra["granted_scopes"] = grantedScopes
+								h.Log.Debugf("✅ Stored granted scopes in session: %v", grantedScopes)
 							}
-							if session.Claims.Extra == nil {
-								session.Claims.Extra = make(map[string]interface{})
-							}
-							session.Claims.Extra["granted_scopes"] = grantedScopes
-							h.Log.Debugf("✅ Stored granted scopes in session: %v", grantedScopes)
 						}
 					}
 				}
@@ -344,14 +364,16 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		h.Log.Debugf("✅ Set granted audiences for client_credentials: %v", grantedAudiences)
 
 		// Store granted scopes in the session for persistence
-		if session.Claims == nil {
-			session.Claims = &jwt.IDTokenClaims{}
+		if oidcSession != nil {
+			if oidcSession.Claims == nil {
+				oidcSession.Claims = &jwt.IDTokenClaims{}
+			}
+			if oidcSession.Claims.Extra == nil {
+				oidcSession.Claims.Extra = make(map[string]interface{})
+			}
+			oidcSession.Claims.Extra["granted_scopes"] = grantedScopes
+			h.Log.Debugf("✅ Stored granted scopes in session for client_credentials: %v", grantedScopes)
 		}
-		if session.Claims.Extra == nil {
-			session.Claims.Extra = make(map[string]interface{})
-		}
-		session.Claims.Extra["granted_scopes"] = grantedScopes
-		h.Log.Debugf("✅ Stored granted scopes in session for client_credentials: %v", grantedScopes)
 	}
 
 	// Let fosite create the access response

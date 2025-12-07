@@ -49,83 +49,89 @@ func (c *CustomClient) SetClaims(claims []string) {
 func getRequestFields(request fosite.Requester) map[string]interface{} {
 	fields := make(map[string]interface{})
 
-	v := reflect.ValueOf(request)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	if !v.IsValid() {
-		return fields
-	}
-
-	t := v.Type()
-	for i := 0; i < v.NumField(); i++ {
-		field := v.Field(i)
-		fieldName := t.Field(i).Name
-
-		// Skip unexported fields
-		if !field.CanInterface() {
-			continue
+	var collect func(reflect.Value)
+	collect = func(v reflect.Value) {
+		if v.Kind() == reflect.Ptr {
+			v = v.Elem()
+		}
+		if !v.IsValid() {
+			return
 		}
 
-		switch fieldName {
-		case "ID":
-			if field.Kind() == reflect.String {
-				fields["id"] = field.String()
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			fieldName := t.Field(i).Name
+
+			// Skip unexported fields
+			if !field.CanInterface() {
+				continue
 			}
-		case "RequestedAt":
-			if field.Type() == reflect.TypeOf(time.Time{}) {
-				fields["requested_at"] = field.Interface()
-			}
-		case "GrantedScopes":
-			if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
-				fields["granted_scopes"] = field.Interface()
-			}
-		case "RequestedScopes":
-			if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
-				fields["requested_scopes"] = field.Interface()
-			}
-		case "GrantedAudience":
-			if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
-				fields["granted_audience"] = field.Interface()
-			}
-		case "RequestedAudience":
-			if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
-				fields["requested_audience"] = field.Interface()
-			}
-		case "Form":
-			if field.Type() == reflect.TypeOf(url.Values{}) {
-				fields["form"] = field.Interface()
-			}
-		case "Session":
-			if !field.IsNil() {
-				sessionData, err := json.Marshal(field.Interface())
-				if err == nil {
-					var sessionMap map[string]interface{}
-					if json.Unmarshal(sessionData, &sessionMap) == nil {
-						fields["session"] = sessionMap
+
+			switch fieldName {
+			case "ID":
+				if field.Kind() == reflect.String {
+					fields["id"] = field.String()
+				}
+			case "RequestedAt":
+				if field.Type() == reflect.TypeOf(time.Time{}) {
+					fields["requested_at"] = field.Interface()
+				}
+			case "GrantedScope", "GrantedScopes":
+				if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
+					fields["granted_scopes"] = field.Interface()
+				}
+			case "RequestedScope", "RequestedScopes":
+				if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
+					fields["requested_scopes"] = field.Interface()
+				}
+			case "GrantedAudience":
+				if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
+					fields["granted_audience"] = field.Interface()
+				}
+			case "RequestedAudience":
+				if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String {
+					fields["requested_audience"] = field.Interface()
+				}
+			case "Form":
+				if field.Type() == reflect.TypeOf(url.Values{}) {
+					fields["form"] = field.Interface()
+				}
+			case "Session":
+				if !field.IsNil() {
+					sessionData, err := json.Marshal(field.Interface())
+					if err == nil {
+						var sessionMap map[string]interface{}
+						if json.Unmarshal(sessionData, &sessionMap) == nil {
+							fields["session"] = sessionMap
+						}
 					}
 				}
-			}
-		case "Client":
-			if !field.IsNil() {
-				client := field.Interface().(fosite.Client)
-				fields["_client_id"] = client.GetID()
-				clientData := map[string]interface{}{
-					"type":           "DefaultClient",
-					"id":             client.GetID(),
-					"hashed_secret":  string(client.GetHashedSecret()),
-					"redirect_uris":  client.GetRedirectURIs(),
-					"grant_types":    client.GetGrantTypes(),
-					"response_types": client.GetResponseTypes(),
-					"scopes":         client.GetScopes(),
-					"audience":       client.GetAudience(),
-					"public":         client.IsPublic(),
+			case "Client":
+				if !field.IsNil() {
+					client := field.Interface().(fosite.Client)
+					fields["_client_id"] = client.GetID()
+					clientData := map[string]interface{}{
+						"type":           "DefaultClient",
+						"id":             client.GetID(),
+						"hashed_secret":  string(client.GetHashedSecret()),
+						"redirect_uris":  client.GetRedirectURIs(),
+						"grant_types":    client.GetGrantTypes(),
+						"response_types": client.GetResponseTypes(),
+						"scopes":         client.GetScopes(),
+						"audience":       client.GetAudience(),
+						"public":         client.IsPublic(),
+					}
+					fields["client"] = clientData
 				}
-				fields["client"] = clientData
+			case "Request":
+				// Recurse into embedded Request to capture requested/granted scopes/audience
+				collect(field)
 			}
 		}
 	}
 
+	collect(reflect.ValueOf(request))
 	return fields
 }
 
@@ -982,6 +988,75 @@ func (s *SQLiteStore) UnmarshalRequestWithClientID(data []byte) (fosite.Requeste
 		log.Printf("✅ UnmarshalRequestWithClientID: set client %s on request", wrapper.ClientID)
 	}
 
+	// Ensure granted scopes/audience are populated for requests that may have persisted without grants
+	getScopesFromSession := func(req fosite.Requester) []string {
+		if req == nil {
+			return nil
+		}
+		sess := req.GetSession()
+		ds, ok := sess.(*openid.DefaultSession)
+		if !ok || ds == nil || ds.Claims == nil || ds.Claims.Extra == nil {
+			return nil
+		}
+		if raw, ok := ds.Claims.Extra["granted_scopes"]; ok {
+			switch v := raw.(type) {
+			case []string:
+				return append([]string{}, v...)
+			case []interface{}:
+				var scopes []string
+				for _, item := range v {
+					if s, ok := item.(string); ok {
+						scopes = append(scopes, s)
+					}
+				}
+				return scopes
+			}
+		}
+		return nil
+	}
+
+	if ar, ok := request.(*fosite.AccessRequest); ok {
+		if len(ar.GrantedScope) == 0 && len(ar.Request.RequestedScope) > 0 {
+			ar.GrantedScope = append(fosite.Arguments{}, ar.Request.RequestedScope...)
+			log.Printf("🔧 UnmarshalRequestWithClientID: backfilled GrantedScope from RequestedScope for client %s", wrapper.ClientID)
+		}
+		if len(ar.GrantedAudience) == 0 && len(ar.Request.RequestedAudience) > 0 {
+			ar.GrantedAudience = append(fosite.Arguments{}, ar.Request.RequestedAudience...)
+			log.Printf("🔧 UnmarshalRequestWithClientID: backfilled GrantedAudience from RequestedAudience for client %s", wrapper.ClientID)
+		}
+		if len(ar.GrantedScope) == 0 && len(ar.Request.RequestedScope) == 0 {
+			scopes := getScopesFromSession(ar)
+			if len(scopes) == 0 && ar.Client != nil {
+				scopes = append([]string{}, ar.Client.GetScopes()...)
+			}
+			if len(scopes) > 0 {
+				ar.Request.RequestedScope = append(fosite.Arguments{}, scopes...)
+				ar.GrantedScope = append(fosite.Arguments{}, scopes...)
+				log.Printf("🔧 UnmarshalRequestWithClientID: backfilled GrantedScope from session/client scopes for client %s", wrapper.ClientID)
+			}
+		}
+	} else if req, ok := request.(*fosite.Request); ok {
+		if len(req.GrantedScope) == 0 && len(req.RequestedScope) > 0 {
+			req.GrantedScope = append(fosite.Arguments{}, req.RequestedScope...)
+			log.Printf("🔧 UnmarshalRequestWithClientID: backfilled GrantedScope from RequestedScope for client %s", wrapper.ClientID)
+		}
+		if len(req.GrantedAudience) == 0 && len(req.RequestedAudience) > 0 {
+			req.GrantedAudience = append(fosite.Arguments{}, req.RequestedAudience...)
+			log.Printf("🔧 UnmarshalRequestWithClientID: backfilled GrantedAudience from RequestedAudience for client %s", wrapper.ClientID)
+		}
+		if len(req.GrantedScope) == 0 && len(req.RequestedScope) == 0 {
+			scopes := getScopesFromSession(req)
+			if len(scopes) == 0 && req.Client != nil {
+				scopes = append([]string{}, req.Client.GetScopes()...)
+			}
+			if len(scopes) > 0 {
+				req.RequestedScope = append(fosite.Arguments{}, scopes...)
+				req.GrantedScope = append(fosite.Arguments{}, scopes...)
+				log.Printf("🔧 UnmarshalRequestWithClientID: backfilled GrantedScope from session/client scopes for client %s", wrapper.ClientID)
+			}
+		}
+	}
+
 	log.Printf("✅ UnmarshalRequestWithClientID: successfully unmarshaled request")
 	return request, nil
 }
@@ -1608,7 +1683,29 @@ func (s *SQLiteStore) GetAccessTokenSession(ctx context.Context, signature strin
 		return nil, err
 	}
 
-	return s.UnmarshalRequestWithClientID([]byte(data))
+	request, err := s.UnmarshalRequestWithClientID([]byte(data))
+	if err != nil {
+		return nil, err
+	}
+
+	// Ensure session is never nil to avoid downstream panics
+	if request != nil && request.GetSession() == nil {
+		switch r := request.(type) {
+		case *fosite.AccessRequest:
+			r.Session = &openid.DefaultSession{}
+		case *fosite.Request:
+			r.Session = &openid.DefaultSession{}
+		}
+	}
+
+	// Ensure access token expiry is set; some stored sessions may have zero-value expiry
+	if sess := request.GetSession(); sess != nil {
+		if sess.GetExpiresAt(fosite.AccessToken).IsZero() {
+			sess.SetExpiresAt(fosite.AccessToken, time.Now().UTC().Add(1*time.Hour))
+		}
+	}
+
+	return request, nil
 }
 
 func (s *SQLiteStore) DeleteAccessTokenSession(ctx context.Context, signature string) error {
@@ -1639,7 +1736,29 @@ func (s *SQLiteStore) GetRefreshTokenSession(ctx context.Context, signature stri
 		return nil, err
 	}
 
-	return s.UnmarshalRequestWithClientID([]byte(data))
+	request, err := s.UnmarshalRequestWithClientID([]byte(data))
+	if err != nil {
+		return nil, err
+	}
+
+	// Ensure session is never nil to avoid downstream panics
+	if request != nil && request.GetSession() == nil {
+		switch r := request.(type) {
+		case *fosite.AccessRequest:
+			r.Session = &openid.DefaultSession{}
+		case *fosite.Request:
+			r.Session = &openid.DefaultSession{}
+		}
+	}
+
+	// Ensure refresh token expiry is set; some stored sessions may have zero-value expiry
+	if sess := request.GetSession(); sess != nil {
+		if sess.GetExpiresAt(fosite.RefreshToken).IsZero() {
+			sess.SetExpiresAt(fosite.RefreshToken, time.Now().UTC().Add(24*time.Hour))
+		}
+	}
+
+	return request, nil
 }
 
 func (s *SQLiteStore) DeleteRefreshTokenSession(ctx context.Context, signature string) error {

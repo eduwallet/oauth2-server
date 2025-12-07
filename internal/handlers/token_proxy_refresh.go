@@ -57,6 +57,13 @@ func (h *TokenHandler) handleProxyRefreshToken(w http.ResponseWriter, r *http.Re
 	h.Log.Debugf("🔍 [PROXY-REFRESH] Computed refresh signature: %s", refreshSignature)
 	h.Log.Debugf("🔍 [PROXY-REFRESH] Full refresh token: %s", proxyRefreshToken)
 
+	// Derive additional lookup keys for robustness (some tokens encode signature as last segment)
+	lastDot := strings.LastIndex(proxyRefreshToken, ".")
+	proxyRefreshTokenSigPart := ""
+	if lastDot != -1 && lastDot+1 < len(proxyRefreshToken) {
+		proxyRefreshTokenSigPart = proxyRefreshToken[lastDot+1:]
+	}
+
 	// Get the refresh token session
 	h.Log.Debugf("🔍 [PROXY-REFRESH] Attempting to get refresh token session for signature: %s", refreshSignature)
 	refreshSession, err := h.Storage.GetRefreshTokenSession(ctx, refreshSignature, nil)
@@ -74,6 +81,18 @@ func (h *TokenHandler) handleProxyRefreshToken(w http.ResponseWriter, r *http.Re
 
 	h.Log.Debugf("✅ [PROXY-REFRESH] Found refresh token session")
 
+	// Inspect session extras to understand availability of upstream_tokens
+	if sess := refreshSession.GetSession(); sess != nil {
+		h.Log.Debugf("ℹ️ [PROXY-REFRESH] Refresh session type: %T", sess)
+		if ds, ok := sess.(*openid.DefaultSession); ok && ds != nil && ds.Claims != nil && ds.Claims.Extra != nil {
+			keys := make([]string, 0, len(ds.Claims.Extra))
+			for k := range ds.Claims.Extra {
+				keys = append(keys, k)
+			}
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Refresh session Claims.Extra keys: %v", keys)
+		}
+	}
+
 	// Extract upstream tokens from refresh session claims
 	var upstreamTokens map[string]interface{}
 	if session := refreshSession.GetSession(); session != nil {
@@ -86,16 +105,138 @@ func (h *TokenHandler) handleProxyRefreshToken(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// Fallback: if session did not contain upstream_tokens, try in-memory proxy mapping
+	if upstreamTokens == nil && h.AccessTokenToIssuerStateMap != nil {
+		if mappingJSON, ok := (*h.AccessTokenToIssuerStateMap)[proxyRefreshToken]; ok {
+			var mapping map[string]interface{}
+			if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil {
+				if ut, ok := mapping["upstream_tokens"].(map[string]interface{}); ok {
+					upstreamTokens = ut
+					h.Log.Debugf("🔍 [PROXY-REFRESH] Recovered upstream tokens from proxy mapping")
+				}
+			}
+		}
+		if upstreamTokens == nil {
+			if mappingJSON, ok := (*h.AccessTokenToIssuerStateMap)[refreshSignature]; ok {
+				var mapping map[string]interface{}
+				if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil {
+					if ut, ok := mapping["upstream_tokens"].(map[string]interface{}); ok {
+						upstreamTokens = ut
+						h.Log.Debugf("🔍 [PROXY-REFRESH] Recovered upstream tokens from proxy mapping using signature")
+					}
+				}
+			}
+		}
+		if upstreamTokens == nil && proxyRefreshTokenSigPart != "" {
+			if mappingJSON, ok := (*h.AccessTokenToIssuerStateMap)[proxyRefreshTokenSigPart]; ok {
+				var mapping map[string]interface{}
+				if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil {
+					if ut, ok := mapping["upstream_tokens"].(map[string]interface{}); ok {
+						upstreamTokens = ut
+						h.Log.Debugf("🔍 [PROXY-REFRESH] Recovered upstream tokens from proxy mapping using token signature part")
+					}
+				}
+			}
+		}
+		if upstreamTokens == nil {
+			mapSize := 0
+			if h.AccessTokenToIssuerStateMap != nil {
+				mapSize = len(*h.AccessTokenToIssuerStateMap)
+			}
+			if mapSize > 0 && h.AccessTokenToIssuerStateMap != nil {
+				keys := make([]string, 0, mapSize)
+				for k := range *h.AccessTokenToIssuerStateMap {
+					keys = append(keys, k)
+				}
+				h.Log.Debugf("ℹ️ [PROXY-REFRESH] Proxy mapping keys: %v", keys)
+			}
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Proxy mapping present (size %d) but no entry for refresh token", mapSize)
+		}
+	}
+
+	// Fallback: look up persistent mapping if still missing
 	if upstreamTokens == nil {
-		h.Log.Errorf("❌ [PROXY-REFRESH] No upstream tokens in session")
+		if upstreamAccess, upstreamRefresh, upstreamType, upstreamExpiresIn, storageErr := h.Storage.GetUpstreamTokenMapping(ctx, proxyRefreshToken); storageErr == nil {
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent lookup (full token) returned access=%q refresh=%q type=%q exp=%d", upstreamAccess, upstreamRefresh, upstreamType, upstreamExpiresIn)
+			if upstreamAccess != "" || upstreamRefresh != "" {
+				upstreamTokens = map[string]interface{}{
+					"access_token":  upstreamAccess,
+					"refresh_token": upstreamRefresh,
+					"token_type":    upstreamType,
+					"expires_in":    upstreamExpiresIn,
+				}
+				h.Log.Debugf("🔍 [PROXY-REFRESH] Recovered upstream tokens from persistent mapping using full token")
+			} else {
+				h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent mapping returned empty values for full token key")
+			}
+		} else {
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent mapping lookup with full token failed: %v", storageErr)
+		}
+	}
+
+	if upstreamTokens == nil {
+		if upstreamAccess, upstreamRefresh, upstreamType, upstreamExpiresIn, storageErr := h.Storage.GetUpstreamTokenMapping(ctx, refreshSignature); storageErr == nil {
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent lookup (signature) returned access=%q refresh=%q type=%q exp=%d", upstreamAccess, upstreamRefresh, upstreamType, upstreamExpiresIn)
+			if upstreamAccess != "" || upstreamRefresh != "" {
+				upstreamTokens = map[string]interface{}{
+					"access_token":  upstreamAccess,
+					"refresh_token": upstreamRefresh,
+					"token_type":    upstreamType,
+					"expires_in":    upstreamExpiresIn,
+				}
+				h.Log.Debugf("🔍 [PROXY-REFRESH] Recovered upstream tokens from persistent mapping using signature")
+			} else {
+				h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent mapping returned empty values for signature key")
+			}
+		} else {
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent mapping lookup with signature failed: %v", storageErr)
+		}
+	}
+
+	if upstreamTokens == nil && proxyRefreshTokenSigPart != "" {
+		if upstreamAccess, upstreamRefresh, upstreamType, upstreamExpiresIn, storageErr := h.Storage.GetUpstreamTokenMapping(ctx, proxyRefreshTokenSigPart); storageErr == nil {
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent lookup (sig part) returned access=%q refresh=%q type=%q exp=%d", upstreamAccess, upstreamRefresh, upstreamType, upstreamExpiresIn)
+			if upstreamAccess != "" || upstreamRefresh != "" {
+				upstreamTokens = map[string]interface{}{
+					"access_token":  upstreamAccess,
+					"refresh_token": upstreamRefresh,
+					"token_type":    upstreamType,
+					"expires_in":    upstreamExpiresIn,
+				}
+				h.Log.Debugf("🔍 [PROXY-REFRESH] Recovered upstream tokens from persistent mapping using token signature part")
+			} else {
+				h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent mapping returned empty values for token signature part key")
+			}
+		} else if storageErr != nil {
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Persistent mapping lookup with token signature part failed: %v", storageErr)
+		}
+	}
+
+	if upstreamTokens == nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] No upstream tokens in session; token=%s signature=%s map_size=%d", proxyRefreshToken, refreshSignature, lenValue(h.AccessTokenToIssuerStateMap))
 		http.Error(w, "invalid refresh token", http.StatusBadRequest)
+		return
+	}
+
+	if upstreamTokens == nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] No upstream tokens in session; token=%s signature=%s map_size=%d", proxyRefreshToken, refreshSignature, lenValue(h.AccessTokenToIssuerStateMap))
+		http.Error(w, "invalid refresh token", http.StatusBadRequest)
+		return
+	}
+
+	// Get client early for both upstream and local-only paths
+	clientID := r.Form.Get("client_id")
+	fositeClient, err := h.Storage.GetClient(ctx, clientID)
+	if err != nil {
+		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to get client %s: %v", clientID, err)
+		http.Error(w, "client not found", http.StatusBadRequest)
 		return
 	}
 
 	upstreamRefreshToken, _ := upstreamTokens["refresh_token"].(string)
 	if upstreamRefreshToken == "" {
-		h.Log.Errorf("❌ [PROXY-REFRESH] No upstream refresh token in session")
-		http.Error(w, "invalid refresh token", http.StatusBadRequest)
+		h.Log.Infof("ℹ️ [PROXY-REFRESH] No upstream refresh token; performing local proxy refresh without upstream call")
+		h.createProxyTokensForRefresh(w, r, upstreamTokens, clientID, fositeClient)
 		return
 	}
 
@@ -160,19 +301,26 @@ func (h *TokenHandler) handleProxyRefreshToken(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	h.Log.Debugf("📄 [PROXY-REFRESH] Upstream refresh response: %s", string(respBody))
-
-	// Get client
-	clientID := r.Form.Get("client_id")
-	fositeClient, err := h.Storage.GetClient(ctx, clientID)
-	if err != nil {
-		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to get client %s: %v", clientID, err)
-		http.Error(w, "client not found", http.StatusBadRequest)
-		return
+	// Some upstream providers do not return a new refresh_token on refresh. Preserve the existing one so we can map/proxy it.
+	if rt, _ := upstreamTokenResp["refresh_token"].(string); rt == "" {
+		upstreamTokenResp["refresh_token"] = upstreamRefreshToken
+		if upstreamRefreshToken != "" {
+			h.Log.Debugf("ℹ️ [PROXY-REFRESH] Upstream response missing refresh_token; reusing existing upstream refresh token")
+		}
 	}
+
+	h.Log.Debugf("📄 [PROXY-REFRESH] Upstream refresh response: %s", string(respBody))
 
 	// Create new proxy tokens from upstream response
 	h.createProxyTokensForRefresh(w, r, upstreamTokenResp, clientID, fositeClient)
+}
+
+// lenValue safely returns the length of a pointer-to-map, treating nil as zero.
+func lenValue(m *map[string]string) int {
+	if m == nil {
+		return 0
+	}
+	return len(*m)
 }
 
 // createProxyTokensForRefresh creates proxy tokens for refresh token flow
@@ -347,6 +495,68 @@ func (h *TokenHandler) createProxyTokensForRefresh(w http.ResponseWriter, r *htt
 
 	if err := json.NewEncoder(w).Encode(proxyResponse); err != nil {
 		h.Log.Errorf("❌ [PROXY-REFRESH] Failed to encode proxy response: %v", err)
+	}
+
+	// Persist mapping for recovery (both full tokens and signatures)
+	upstreamAccessToken = ""
+	if v, ok := upstreamTokens["access_token"].(string); ok {
+		upstreamAccessToken = v
+	}
+	upstreamRefreshToken := ""
+	if v, ok := upstreamTokens["refresh_token"].(string); ok {
+		upstreamRefreshToken = v
+	}
+	upstreamTokenType := ""
+	if v, ok := upstreamTokens["token_type"].(string); ok {
+		upstreamTokenType = v
+	}
+	var upstreamExpiresIn int64
+	switch v := upstreamTokens["expires_in"].(type) {
+	case float64:
+		upstreamExpiresIn = int64(v)
+	case int64:
+		upstreamExpiresIn = v
+	case int:
+		upstreamExpiresIn = int64(v)
+	}
+
+	storeMapping := func(key string, label string) {
+		if key == "" {
+			return
+		}
+		if err := h.Storage.StoreUpstreamTokenMapping(ctx, key, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn); err != nil {
+			h.Log.Warnf("⚠️ [PROXY-REFRESH] Failed to store upstream token mapping for %s: %v", label, err)
+		} else {
+			h.Log.Debugf("✅ [PROXY-REFRESH] Stored upstream token mapping for %s", label)
+		}
+	}
+
+	storeMapping(accessToken, "proxy access token")
+
+	if refreshToken != "" {
+		storeMapping(refreshToken, "proxy refresh token")
+		if refreshStrategy, ok := h.RefreshTokenStrategy.(interface {
+			RefreshTokenSignature(context.Context, string) string
+		}); ok {
+			refreshSignature := refreshStrategy.RefreshTokenSignature(ctx, refreshToken)
+			storeMapping(refreshSignature, "proxy refresh token signature")
+		}
+
+		if lastDot := strings.LastIndex(refreshToken, "."); lastDot != -1 && lastDot+1 < len(refreshToken) {
+			refreshSigPart := refreshToken[lastDot+1:]
+			storeMapping(refreshSigPart, "proxy refresh token signature part")
+			if h.AccessTokenToIssuerStateMap != nil {
+				(*h.AccessTokenToIssuerStateMap)[refreshSigPart] = string(mappingJSON)
+				h.Log.Debugf("✅ [PROXY-REFRESH] Stored proxy refresh token mapping under signature part: %s", refreshSigPart[:20])
+			}
+		}
+	}
+
+	if accessStrategy, ok := h.AccessTokenStrategy.(interface {
+		AccessTokenSignature(context.Context, string) string
+	}); ok {
+		accessSignature := accessStrategy.AccessTokenSignature(ctx, accessToken)
+		storeMapping(accessSignature, "proxy access token signature")
 	}
 
 	h.Log.Infof("✅ [PROXY-REFRESH] Successfully created proxy tokens for client %s", clientID)
