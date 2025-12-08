@@ -33,6 +33,9 @@ jobs:
         with:
           go-version: '1.25'
 
+      - name: Set build time
+        run: echo "BUILD_TIME=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_ENV
+
       - name: Run tests
         run: go test -v ./...
 
@@ -122,7 +125,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.changelog.outputs.current_tag }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_TIME=${{ github.run_id }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
 
       - name: Create GitHub Release
         run: |
@@ -146,12 +149,15 @@ jobs:
 
       - name: Upload release assets
         run: |
+          BUILD_TIME="${BUILD_TIME:-$(date -u +'%Y-%m-%d %H:%M:%S UTC')}"
+          GIT_COMMIT_SHORT=$(echo "${{ github.sha }}" | cut -c1-8)
           # Build binary for release
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=${{ steps.changelog.outputs.current_tag }}" -o oauth2-server-linux-amd64 ./cmd/server
-          GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=${{ steps.changelog.outputs.current_tag }}" -o oauth2-server-linux-arm64 ./cmd/server
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=${{ steps.changelog.outputs.current_tag }}" -o oauth2-server-darwin-amd64 ./cmd/server
-          GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=${{ steps.changelog.outputs.current_tag }}" -o oauth2-server-darwin-arm64 ./cmd/server
-          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=${{ steps.changelog.outputs.current_tag }}" -o oauth2-server-windows-amd64.exe ./cmd/server
+          LD_FLAGS="-X main.Version=${{ steps.changelog.outputs.current_tag }} -X main.GitCommit=${GIT_COMMIT_SHORT} -X main.BuildTime=${BUILD_TIME}"
+          GOOS=linux GOARCH=amd64 go build -ldflags "${LD_FLAGS}" -o oauth2-server-linux-amd64 ./cmd/server
+          GOOS=linux GOARCH=arm64 go build -ldflags "${LD_FLAGS}" -o oauth2-server-linux-arm64 ./cmd/server
+          GOOS=darwin GOARCH=amd64 go build -ldflags "${LD_FLAGS}" -o oauth2-server-darwin-amd64 ./cmd/server
+          GOOS=darwin GOARCH=arm64 go build -ldflags "${LD_FLAGS}" -o oauth2-server-darwin-arm64 ./cmd/server
+          GOOS=windows GOARCH=amd64 go build -ldflags "${LD_FLAGS}" -o oauth2-server-windows-amd64.exe ./cmd/server
           
           # Create checksums
           sha256sum oauth2-server-* > checksums.txt

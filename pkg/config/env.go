@@ -57,6 +57,10 @@ func (c *Config) LoadFromEnv() {
 	c.loadUpstreamProviderFromEnv()
 
 	// Security configuration overrides
+	if encryptionKey := os.Getenv("ENCRYPTION_KEY"); encryptionKey != "" {
+		c.Security.EncryptionKey = encryptionKey
+	}
+
 	if jwtKey := os.Getenv("JWT_SIGNING_KEY"); jwtKey != "" {
 		c.Security.JWTSecret = jwtKey
 	}
@@ -70,6 +74,18 @@ func (c *Config) LoadFromEnv() {
 	if refreshExpiry := os.Getenv("REFRESH_TOKEN_EXPIRY_SECONDS"); refreshExpiry != "" {
 		if expiry := GetEnvInt("REFRESH_TOKEN_EXPIRY_SECONDS", 86400); expiry > 0 {
 			c.Security.RefreshTokenExpirySeconds = expiry
+		}
+	}
+
+	if deviceExpiry := os.Getenv("DEVICE_CODE_EXPIRY_SECONDS"); deviceExpiry != "" {
+		if expiry := GetEnvInt("DEVICE_CODE_EXPIRY_SECONDS", 600); expiry > 0 {
+			c.Security.DeviceCodeExpirySeconds = expiry
+		}
+	}
+
+	if authzExpiry := os.Getenv("AUTHORIZATION_CODE_EXPIRY_SECONDS"); authzExpiry != "" {
+		if expiry := GetEnvInt("AUTHORIZATION_CODE_EXPIRY_SECONDS", 600); expiry > 0 {
+			c.Security.AuthorizationCodeExpirySeconds = expiry
 		}
 	}
 
@@ -92,6 +108,10 @@ func (c *Config) LoadFromEnv() {
 
 	if enableTrustAnchorAPI := os.Getenv("ENABLE_TRUST_ANCHOR_API"); enableTrustAnchorAPI != "" {
 		c.Security.EnableTrustAnchorAPI = GetEnvBool("ENABLE_TRUST_ANCHOR_API", false)
+	}
+
+	if privilegedClientID := os.Getenv("PRIVILEGED_CLIENT_ID"); privilegedClientID != "" {
+		c.Security.PrivilegedClientID = privilegedClientID
 	}
 
 	// Add support for dynamic client configuration via environment variables

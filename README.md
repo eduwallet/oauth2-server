@@ -269,7 +269,6 @@ The OAuth2 server supports comprehensive configuration through environment varia
 |----------|------|---------|-------------|
 | `PUBLIC_BASE_URL` | string | - | Public base URL for the OAuth2 server (used in tokens and discovery endpoints) |
 | `PORT` | int | 8080 | Server port |
-| `CONFIG_FILE` | string | config.yaml | Path to configuration file |
 
 ### Logging Configuration
 
@@ -310,13 +309,17 @@ The OAuth2 server supports comprehensive configuration through environment varia
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `JWT_SIGNING_KEY` | string | - | JWT signing key (use a strong, random key in production) |
+| `ENCRYPTION_KEY` | string | - | 32-byte key for encrypting sensitive data (required; must be 32 chars) |
 | `TOKEN_EXPIRY_SECONDS` | int | 3600 | Access token expiry time in seconds (default: 1 hour) |
 | `REFRESH_TOKEN_EXPIRY_SECONDS` | int | 86400 | Refresh token expiry time in seconds (default: 24 hours) |
+| `DEVICE_CODE_EXPIRY_SECONDS` | int | 600 | Device code lifetime in seconds |
+| `AUTHORIZATION_CODE_EXPIRY_SECONDS` | int | 600 | Authorization code lifetime in seconds |
 | `REQUIRE_HTTPS` | bool | false | Require HTTPS for all OAuth2 endpoints |
 | `ENABLE_PKCE` | bool | true | Enable PKCE (Proof Key for Code Exchange) support |
 | `API_KEY` | string | - | API key for protected endpoints (registration, trust anchor management) |
 | `ENABLE_REGISTRATION_API` | bool | false | Enable dynamic client registration API |
 | `ENABLE_TRUST_ANCHOR_API` | bool | false | Enable trust anchor management API for attestation |
+| `PRIVILEGED_CLIENT_ID` | string | - | Client ID used for privileged server operations |
 
 ### Dynamic Client Configuration
 

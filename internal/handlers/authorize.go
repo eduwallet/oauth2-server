@@ -481,9 +481,10 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	redirectURI := q.Get("redirect_uri")
 	h.Log.Printf("🔍 [PROXY-AUTH] ClientID: %s, RedirectURI: %s", clientID, redirectURI)
 
-	// Validate client exists in our storage
+	// Validate client exists in our storage and keep reference for scope checks
 	h.Log.Printf("🔍 [PROXY-AUTH] Validating client exists: %s", clientID)
-	if _, err := h.Storage.GetClient(r.Context(), clientID); err != nil {
+	client, err := h.Storage.GetClient(r.Context(), clientID)
+	if err != nil {
 		h.Log.Errorf("❌ [PROXY-AUTH] Client validation failed: %v", err)
 		http.Error(w, "unknown or unregistered client_id", http.StatusBadRequest)
 		return
@@ -551,28 +552,56 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 		vals.Set("claims", upstreamClaims)
 	}
 
-	// Handle scope parameter - use client's registered scopes if none provided
-	scopeParam := q.Get("scope")
-	if scopeParam == "" {
+	// Handle scope parameter - clamp to client's registered scopes
+	requestedScopesRaw := q.Get("scope")
+	allowedScopes := client.GetScopes()
+
+	if requestedScopesRaw == "" {
 		// No scope provided, use client's registered scopes
-		if client, err := h.Storage.GetClient(r.Context(), clientID); err == nil {
-			clientScopes := client.GetScopes()
-			if len(clientScopes) > 0 {
-				scopeParam = strings.Join(clientScopes, " ")
-				h.Log.Printf("🔍 [PROXY-AUTH] No scope provided, using client's registered scopes: %s", scopeParam)
-			} else {
-				// Fallback to openid if client has no scopes
-				scopeParam = "openid"
-				h.Log.Printf("🔍 [PROXY-AUTH] No scope provided and client has no registered scopes, using default: %s", scopeParam)
-			}
+		if len(allowedScopes) > 0 {
+			requestedScopesRaw = strings.Join(allowedScopes, " ")
+			h.Log.Printf("🔍 [PROXY-AUTH] No scope provided, using client's registered scopes: %s", requestedScopesRaw)
 		} else {
-			// Fallback to openid if we can't get client
-			scopeParam = "openid"
-			h.Log.Printf("🔍 [PROXY-AUTH] No scope provided and failed to get client, using default: %s", scopeParam)
+			requestedScopesRaw = "openid"
+			h.Log.Printf("🔍 [PROXY-AUTH] No scope provided and client has no registered scopes, using default: %s", requestedScopesRaw)
 		}
 	}
 
-	vals.Set("scope", scopeParam)
+	requestedScopes := strings.Fields(requestedScopesRaw)
+
+	if len(allowedScopes) > 0 {
+		allowedSet := make(map[string]struct{}, len(allowedScopes))
+		for _, s := range allowedScopes {
+			allowedSet[s] = struct{}{}
+		}
+
+		filtered := make([]string, 0, len(requestedScopes))
+		removed := make([]string, 0)
+		for _, s := range requestedScopes {
+			if _, ok := allowedSet[s]; ok {
+				filtered = append(filtered, s)
+			} else {
+				removed = append(removed, s)
+			}
+		}
+
+		if len(removed) > 0 {
+			h.Log.Infof("ℹ️ [PROXY-AUTH] Removing scopes not registered for client %s: %v", clientID, removed)
+		}
+
+		if len(filtered) == 0 {
+			// If everything was removed, fall back to all allowed scopes to keep request valid
+			filtered = allowedScopes
+			h.Log.Infof("ℹ️ [PROXY-AUTH] All requested scopes filtered out; defaulting to client's registered scopes: %v", filtered)
+		}
+
+		scopeParam := strings.Join(filtered, " ")
+		vals.Set("scope", scopeParam)
+	} else {
+		// No allowed scopes registered; pass through requested scopes as-is
+		vals.Set("scope", strings.Join(requestedScopes, " "))
+	}
+
 	vals.Set("state", proxyState)
 	vals.Set("nonce", proxyNonce)
 	if originalCodeChallenge != "" {

@@ -25,8 +25,7 @@ ARG BUILD_TIME
 RUN VERSION=${VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)} && \
     GIT_COMMIT_FULL=${GIT_COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)} && \
     GIT_COMMIT_SHORT=$(echo $GIT_COMMIT_FULL | cut -c1-8) && \
-    BUILD_TIME_RAW=${BUILD_TIME:-$(date +%s)} && \
-    BUILD_TIME_FORMATTED=$(date -u -d "@$BUILD_TIME_RAW" +"%Y-%m-%d %H:%M:%S UTC" 2>/dev/null || date -u +"%Y-%m-%d %H:%M:%S UTC") && \
+    BUILD_TIME_FORMATTED=${BUILD_TIME:-$(date -u +"%Y-%m-%d %H:%M:%S UTC")} && \
     CGO_ENABLED=1 GOOS=linux go build \
         -ldflags="-s -w \
                   -X 'main.Version=${VERSION}' \
