@@ -21,7 +21,7 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 CLIENT_NAME="Refresh Token Exchange Client"
 
 # Function to generate PKCE code verifier and challenge
@@ -60,7 +60,7 @@ register_client() {
         "response_types": ["code"],
         "token_endpoint_auth_method": "client_secret_basic",
         "scope": "'$TEST_SCOPE'",
-        "redirect_uris": ["http://localhost:8080/callback"]
+        "redirect_uris": ["'${BASE_URL}'/callback"]
     }'
 
     REGISTRATION_RESPONSE=$(curl -s -X POST "$BASE_URL/register" \
@@ -102,7 +102,7 @@ perform_auth_flow() {
     generate_state >&2
 
     # Build authorization URL
-    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=http://localhost:8080/callback&state=$STATE"
+    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=${BASE_URL}/callback&state=$STATE"
     auth_url="$auth_url&scope=$(echo "$TEST_SCOPE" | sed 's/ /%20/g')"
     auth_url="$auth_url&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
 
@@ -145,10 +145,10 @@ perform_auth_flow() {
 
             # Exchange code for token
             echo "🔄 Exchanging code for token..." >&2
-            local token_response=$(curl -s -X POST "$BASE_URL/token" \
+                local token_response=$(curl -s -X POST "$BASE_URL/token" \
                 -u "$client_id:$client_secret" \
                 -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "grant_type=authorization_code&code=$auth_code&redirect_uri=http://localhost:8080/callback&code_verifier=$CODE_VERIFIER")
+                -d "grant_type=authorization_code&code=$auth_code&redirect_uri=${BASE_URL}/callback&code_verifier=$CODE_VERIFIER")
 
             echo "Token response: $token_response" >&2
 

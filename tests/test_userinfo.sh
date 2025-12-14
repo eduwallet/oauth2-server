@@ -10,7 +10,7 @@ echo "========================="
 echo "Testing OpenID Connect UserInfo endpoint"
 echo "Using client credentials flow to obtain test token"
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 
 # Get an access token using client credentials flow
 echo "🎫 Getting access token using client credentials..."

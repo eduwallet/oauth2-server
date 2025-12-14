@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	gjwt "github.com/golang-jwt/jwt/v5"
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/handler/oauth2"
 	"github.com/ory/fosite/handler/openid"
@@ -130,12 +132,13 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 	if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
 		upstreamRefreshToken = rt
 	}
+	upstreamIDToken, _ := upstreamTokenResp["id_token"].(string)
 
 	// Store upstream tokens for later use (refresh, etc.)
 	upstreamTokens := map[string]interface{}{
 		"access_token":  upstreamAccessToken,
 		"refresh_token": upstreamRefreshToken,
-		"id_token":      upstreamTokenResp["id_token"],
+		"id_token":      upstreamIDToken,
 		"token_type":    upstreamTokenResp["token_type"],
 		"expires_in":    upstreamTokenResp["expires_in"],
 		"scope":         upstreamTokenResp["scope"],
@@ -302,6 +305,31 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 		}
 	}
 
+	// If fosite did not generate an ID token but upstream returned one, forward it
+	if idToken == "" && upstreamIDToken != "" {
+		idToken = upstreamIDToken
+		h.Log.Printf("ℹ️ [PROXY-AUTH-CODE] Forwarding upstream ID token as proxy id_token")
+	}
+
+	// If OpenID was requested but we still have no ID token, return an error
+	wantsIDToken := accessRequest.GetGrantedScopes().Has("openid")
+	if wantsIDToken && idToken == "" {
+		if h.Configuration.Security.AllowSyntheticIDToken {
+			synth, err := h.buildSyntheticIDToken(ctx, accessRequest, upstreamAccessToken)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to build synthetic id_token: %v", err)
+				http.Error(w, "failed to build id_token", http.StatusBadGateway)
+				return
+			}
+			idToken = synth
+			h.Log.Printf("ℹ️ [PROXY-AUTH-CODE] Issued synthetic id_token because upstream omitted it")
+		} else {
+			h.Log.Errorf("❌ [PROXY-AUTH-CODE] Upstream did not return id_token while openid was requested")
+			http.Error(w, "upstream did not return id_token", http.StatusBadGateway)
+			return
+		}
+	}
+
 	// If we need a refresh token but Fosite didn't generate one, generate it manually
 	if refreshToken == "" && issueRefreshToken {
 		// Generate a proper Fosite refresh token
@@ -395,4 +423,83 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 	}
 
 	h.Log.Infof("✅ [PROXY-AUTH-CODE] Successfully created proxy tokens for client %s", clientID)
+}
+
+// buildSyntheticIDToken constructs and signs an ID token when upstream omitted it.
+// It fetches user info from the upstream userinfo endpoint to anchor the subject.
+func (h *TokenHandler) buildSyntheticIDToken(ctx context.Context, accessRequest fosite.AccessRequester, upstreamAccessToken string) (string, error) {
+	if h.Configuration.UpstreamProvider.Metadata == nil {
+		return "", fmt.Errorf("no upstream metadata available for synthetic id_token")
+	}
+
+	userinfoEndpoint, _ := h.Configuration.UpstreamProvider.Metadata["userinfo_endpoint"].(string)
+	if userinfoEndpoint == "" {
+		return "", fmt.Errorf("no upstream userinfo_endpoint available for synthetic id_token")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userinfoEndpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create userinfo request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+upstreamAccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("userinfo request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("userinfo request returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var ui map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&ui); err != nil {
+		return "", fmt.Errorf("failed to decode userinfo: %w", err)
+	}
+
+	sub, _ := ui["sub"].(string)
+	if sub == "" {
+		return "", fmt.Errorf("userinfo missing sub")
+	}
+
+	now := time.Now().UTC()
+	expSeconds := h.Configuration.Security.TokenExpirySeconds
+	if expSeconds <= 0 {
+		expSeconds = 3600
+	}
+
+	claims := gjwt.MapClaims{
+		"iss":       h.Configuration.PublicBaseURL,
+		"sub":       sub,
+		"aud":       accessRequest.GetClient().GetID(),
+		"iat":       now.Unix(),
+		"exp":       now.Add(time.Duration(expSeconds) * time.Second).Unix(),
+		"auth_time": now.Unix(),
+	}
+
+	// Propagate nonce if present in session claims
+	if sess, ok := accessRequest.GetSession().(*openid.DefaultSession); ok {
+		if sess != nil && sess.Claims != nil && sess.Claims.Extra != nil {
+			if nonce, ok := sess.Claims.Extra["nonce"].(string); ok && nonce != "" {
+				claims["nonce"] = nonce
+			}
+		}
+	}
+
+	// Include common profile/email hints if available
+	if email, ok := ui["email"].(string); ok && email != "" {
+		claims["email"] = email
+	}
+	if name, ok := ui["name"].(string); ok && name != "" {
+		claims["name"] = name
+	}
+
+	token := gjwt.NewWithClaims(gjwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(h.Configuration.Security.JWTSecret))
+	if err != nil {
+		return "", fmt.Errorf("failed to sign synthetic id_token: %w", err)
+	}
+
+	return signed, nil
 }

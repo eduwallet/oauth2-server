@@ -10,7 +10,7 @@ echo "=========================="
 echo "Testing RFC 7662 token introspection endpoint"
 echo "Using client credentials flow to obtain test token"
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 
 # Use smart-tv-app for device flow (public client, gets auto-completed)
 CLIENT_ID="smart-tv-app"

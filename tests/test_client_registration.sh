@@ -18,7 +18,7 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 
 # Initialize test results
 STEP1_PASS=false
@@ -40,7 +40,7 @@ register_confidential_client() {
         \"response_types\": [\"code\"],
         \"token_endpoint_auth_method\": \"client_secret_basic\",
         \"scope\": \"$scopes\",
-        \"redirect_uris\": [\"http://localhost:8080/callback\"]
+           \"redirect_uris\": [\"${BASE_URL}/callback\"]
     }"
 
     local registration_response=$(curl -s -X POST "$BASE_URL/register" \
@@ -90,7 +90,7 @@ register_public_client() {
         \"response_types\": [\"code\"],
         \"token_endpoint_auth_method\": \"none\",
         \"scope\": \"$scopes\",
-        \"redirect_uris\": [\"http://localhost:8080/callback\"]
+           \"redirect_uris\": [\"${BASE_URL}/callback\"]
     }"
 
     local registration_response=$(curl -s -X POST "$BASE_URL/register" \
@@ -173,7 +173,7 @@ test_auth_code_flow() {
     local encoded_scope=$(url_encode "$scope")
 
     # Build authorization URL
-    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=http://localhost:8080/callback&state=$state&scope=$encoded_scope&code_challenge=$code_challenge&code_challenge_method=S256"
+    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=${BASE_URL}/callback&state=$state&scope=$encoded_scope&code_challenge=$code_challenge&code_challenge_method=S256"
 
     echo "🔗 Authorization URL: $auth_url" >&2
 
@@ -228,13 +228,13 @@ test_auth_code_flow() {
                 # Public client - no client secret
                 token_response=$(curl -s -X POST "$BASE_URL/token" \
                     -H "Content-Type: application/x-www-form-urlencoded" \
-                    -d "grant_type=authorization_code&code=$auth_code&client_id=$client_id&redirect_uri=http://localhost:8080/callback&code_verifier=$code_verifier")
+                    -d "grant_type=authorization_code&code=$auth_code&client_id=$client_id&redirect_uri=${BASE_URL}/callback&code_verifier=$code_verifier")
             else
                 # Confidential client - use basic auth
                 token_response=$(curl -s -X POST "$BASE_URL/token" \
                     -u "$client_id:$client_secret" \
                     -H "Content-Type: application/x-www-form-urlencoded" \
-                    -d "grant_type=authorization_code&code=$auth_code&redirect_uri=http://localhost:8080/callback&code_verifier=$code_verifier")
+                    -d "grant_type=authorization_code&code=$auth_code&redirect_uri=${BASE_URL}/callback&code_verifier=$code_verifier")
             fi
 
             echo "Token response: $token_response" >&2

@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"oauth2-server/internal/attestation"
+    "oauth2-server/internal/cimd"
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/store"
 	"oauth2-server/pkg/config"
@@ -101,6 +102,32 @@ func (h *TokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	h.Log.Debugf("🔍 [TOKEN] Form parsed successfully, form values: %v", r.Form)
+
+	// CIMD: if enabled, auto-register client metadata documents referenced as client_id
+	if h.Configuration.CIMD.Enabled {
+		cid := r.FormValue("client_id")
+		if cid != "" && cimd.IsCIMDClientID(cid, h.Configuration) {
+			h.Log.Printf("🔍 CIMD: Detected CIMD client_id on token endpoint: %s", cid)
+			// AlwaysRetrieved: try to re-retrieve metadata on initiating token requests if configured
+			if h.Configuration.CIMD.AlwaysRetrieved {
+				h.Log.Printf("🔄 CIMD: AlwaysRetrieved enabled, attempting to re-fetch and register metadata for %s", cid)
+				if _, err := cimd.RegisterClientFromMetadata(r.Context(), h.Configuration, h.Storage, cid); err != nil {
+					h.Log.Warnf("⚠️ CIMD: Failed to re-retrieve metadata for %s: %v", cid, err)
+					// Continue - do not fail token request on metadata refresh errors
+				} else {
+					h.Log.Printf("✅ CIMD: Re-retrieved and updated metadata for %s", cid)
+				}
+			} else if _, err := h.Storage.GetClient(r.Context(), cid); err != nil {
+				h.Log.Printf("🔄 CIMD: Client %s not found, attempting to fetch and register metadata", cid)
+				if _, err := cimd.RegisterClientFromMetadata(r.Context(), h.Configuration, h.Storage, cid); err != nil {
+					h.Log.Printf("❌ CIMD: Failed to register client from metadata %s: %v", cid, err)
+					h.OAuth2Provider.WriteAccessError(r.Context(), w, nil, fosite.ErrInvalidClient.WithHint("Failed to register client metadata"))
+					return
+				}
+				h.Log.Printf("✅ CIMD: Registered client %s from metadata", cid)
+			}
+		}
+	}
 
 	grantType := r.FormValue("grant_type")
 	h.Log.Infof("🔍 [TOKEN] Extracted grant_type: '%s'", grantType)

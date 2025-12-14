@@ -14,10 +14,10 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 CLIENT_ID="web-app-client"
 CLIENT_SECRET="web-app-secret"
-REDIRECT_URI="http://localhost:8080/callback"
+REDIRECT_URI="$BASE_URL/callback"
 
 # Function to generate PKCE code verifier and challenge
 generate_pkce() {

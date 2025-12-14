@@ -125,7 +125,13 @@ if echo "$SCRIPT" | grep -q "proxy"; then
     exit $result
 else
     log "🚀 Starting OAuth2 server in background..."
-    DATABASE_TYPE="$TEST_DATABASE_TYPE" UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$API_KEY" ./bin/oauth2-server > server-test.log 2>&1 &
+    # If running the CIMD integration test, enable CIMD and permit HTTP for local mock metadata
+    if [ "$(basename "$SCRIPT")" = "test_cimd_registration.sh" ]; then
+        log "🔧 Enabling CIMD for test script"
+        DATABASE_TYPE="$TEST_DATABASE_TYPE" UPSTREAM_PROVIDER_URL="" CIMD_ENABLED=true CIMD_HTTP_PERMITTED=true ENABLE_TRUST_ANCHOR_API=true API_KEY="$API_KEY" ./bin/oauth2-server > server-test.log 2>&1 &
+    else
+        DATABASE_TYPE="$TEST_DATABASE_TYPE" UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$API_KEY" ./bin/oauth2-server > server-test.log 2>&1 &
+    fi
     echo $! > server.pid
 
     log "⏳ Waiting for server to start..."

@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 MOCK_PROVIDER_PORT=9999
 MOCK_PROVIDER_URL="http://localhost:$MOCK_PROVIDER_PORT"
 TEST_USERNAME="john.doe"
@@ -101,7 +101,7 @@ CODE_CHALLENGE=$(echo -n "$CODE_VERIFIER" | openssl dgst -sha256 -binary | opens
 STATE=$(openssl rand -hex 16)
 
 # Build authorization URL
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$FRONTEND_CLIENT_ID&redirect_uri=http://localhost:8080/callback&scope=openid%20profile%20email%20offline_access&state=$STATE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$FRONTEND_CLIENT_ID&redirect_uri=$SERVER_URL/callback&scope=openid%20profile%20email%20offline_access&state=$STATE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
 
 echo "🔗 Authorization URL: $AUTH_URL"
 
@@ -142,7 +142,7 @@ print_status "success" "Authorization code obtained: $AUTH_CODE"
 TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -u "$FRONTEND_CLIENT_ID:$FRONTEND_CLIENT_SECRET" \
-  -d "grant_type=authorization_code&code=$AUTH_CODE&redirect_uri=http://localhost:8080/callback&code_verifier=$CODE_VERIFIER")
+    -d "grant_type=authorization_code&code=$AUTH_CODE&redirect_uri=$SERVER_URL/callback&code_verifier=$CODE_VERIFIER")
 
 echo "Full initial token response: $TOKEN_RESPONSE"
 

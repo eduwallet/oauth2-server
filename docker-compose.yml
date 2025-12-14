@@ -33,7 +33,7 @@ services:
       - UPSTREAM_PROVIDER_URL=${UPSTREAM_PROVIDER_URL}
       - UPSTREAM_CLIENT_ID=${UPSTREAM_CLIENT_ID}
       - UPSTREAM_CLIENT_SECRET=${UPSTREAM_CLIENT_SECRET}
-      - UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
+      - UPSTREAM_CALLBACK_URL=${OAUTH2_SERVER_URL:-http://localhost:8080}/callback
 
       - DATABASE_TYPE=sqlite
       - DATABASE_PATH=/app/oauth2.db

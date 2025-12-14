@@ -94,13 +94,13 @@ print_status "info" "Step 1: Registering test client..."
 CLIENT_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
     -H "Content-Type: application/json" \
     -H "X-API-Key: $API_KEY" \
-    -d '{
-        "client_name": "Proxy PAR Test Client",
-        "grant_types": ["authorization_code"],
-        "response_types": ["code"],
-        "redirect_uris": ["http://localhost:8080/callback"],
-        "scope": "openid profile email"
-    }')
+    -d "{
+        \"client_name\": \"Proxy PAR Test Client\",
+        \"grant_types\": [\"authorization_code\"],
+        \"response_types\": [\"code\"],
+        \"redirect_uris\": [\"${SERVER_URL}/callback\"],
+        \"scope\": \"openid profile email\"
+    }")
 
 echo "$CLIENT_RESPONSE" | grep -o '"client_id":"[^"]*"' | cut -d'"' -f4 > /dev/null
 if [ $? -ne 0 ]; then
@@ -116,7 +116,7 @@ print_status "success" "Client registered with ID: $CLIENT_ID"
 print_status "info" "Step 2: Testing PAR request in proxy mode..."
 PAR_RESPONSE=$(curl -s -X POST "$SERVER_URL/authorize" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "client_id=$CLIENT_ID&response_type=code&scope=openid%20profile&redirect_uri=http://localhost:8080/callback&state=test-state")
+    -d "client_id=$CLIENT_ID&response_type=code&scope=openid%20profile&redirect_uri=${SERVER_URL}/callback&state=test-state")
 
 echo "$PAR_RESPONSE" | grep -o '"request_uri":"[^"]*"' | cut -d'"' -f4 > /dev/null
 if [ $? -ne 0 ]; then
@@ -143,7 +143,7 @@ if [ $? -ne 0 ]; then
 fi
 
 PAR_ENDPOINT=$(echo "$DISCOVERY_RESPONSE" | grep -o '"pushed_authorization_request_endpoint":"[^"]*"' | cut -d'"' -f4)
-if [ "$PAR_ENDPOINT" != "http://localhost:8080/authorize" ]; then
+if [ "$PAR_ENDPOINT" != "$SERVER_URL/authorize" ]; then
     print_status "error" "PAR endpoint URL is incorrect: $PAR_ENDPOINT"
     exit 1
 fi

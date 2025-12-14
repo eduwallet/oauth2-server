@@ -9,8 +9,8 @@ echo "=== Testing Complete OAuth2 Flow ==="
 echo "1. Testing server availability..."
 
 # Test server is running
-if curl -s http://localhost:8080 > /dev/null; then
-    echo "✓ Server is running on http://localhost:8080"
+if curl -s ${OAUTH2_SERVER_URL:-http://localhost:8080} > /dev/null; then
+    echo "✓ Server is running on ${OAUTH2_SERVER_URL:-http://localhost:8080}"
 else
     echo "✗ Server not responding"
     exit 1
@@ -20,12 +20,12 @@ echo ""
 echo "2. Testing Client1 Authorization Flow..."
 
 # Step 1: Get authorization URL for Client1
-AUTH_URL="http://localhost:8080/auth?client_id=frontend-app&redirect_uri=http%3A//localhost%3A8080/callback&response_type=code&scope=openid%20profile%20email%20api%3Aread&state=test123"
+AUTH_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}/auth?client_id=frontend-app&redirect_uri=$(printf '%s' "$${OAUTH2_SERVER_URL:-http://localhost:8080}" | sed 's/:/%3A/g; s/\//%2F/g')/callback&response_type=code&scope=openid%20profile%20email%20api%3Aread&state=test123"
 
 echo "Authorization URL: $AUTH_URL"
 echo ""
 echo "Manual Test Steps for Client1:"
-echo "1. Open: http://localhost:8080"
+echo "1. Open: ${OAUTH2_SERVER_URL:-http://localhost:8080}"
 echo "2. Click 'Start Authorization' for Client1"
 echo "3. Login with: username=$TEST_USERNAME, password=$TEST_PASSWORD"
 echo "4. You should get redirected with an authorization code"
@@ -40,7 +40,7 @@ echo "4. Testing token endpoint with client credentials (Client2)..."
 
 # Test Client2 - Client Credentials Flow
 BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
-TOKEN_RESPONSE=$(curl -s -X POST http://localhost:8080/token \
+TOKEN_RESPONSE=$(curl -s -X POST ${OAUTH2_SERVER_URL:-http://localhost:8080}/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -H "Authorization: Basic $BASIC_AUTH" \
   -d "grant_type=client_credentials&scope=api:read api:write offline_access")
@@ -58,7 +58,7 @@ echo "5. Testing Token Refresh (Long-running Process Support)..."
 # Test Refresh Token Flow
 BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
 if [ "$REFRESH_TOKEN" != "null" ] && [ "$REFRESH_TOKEN" != "" ]; then
-    REFRESH_RESPONSE=$(curl -s -X POST http://localhost:8080/token \
+        REFRESH_RESPONSE=$(curl -s -X POST ${OAUTH2_SERVER_URL:-http://localhost:8080}/token \
       -H "Content-Type: application/x-www-form-urlencoded" \
       -H "Authorization: Basic $BASIC_AUTH" \
       -d "grant_type=refresh_token&refresh_token=$REFRESH_TOKEN&scope=api:read")
@@ -85,7 +85,7 @@ echo ""
 echo "6. Testing Device Code Flow (RFC 8628)..."
 
 # Step 1: Get device authorization
-DEVICE_AUTH_RESPONSE=$(curl -s -X POST http://localhost:8080/device_authorization \
+DEVICE_AUTH_RESPONSE=$(curl -s -X POST ${OAUTH2_SERVER_URL:-http://localhost:8080}/device_authorization \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "client_id=frontend-client&scope=openid%20profile%20email%20api:read")
 
@@ -101,8 +101,8 @@ if [ "$DEVICE_CODE" != "null" ] && [ "$DEVICE_CODE" != "" ]; then
     echo "📱 Device Code Flow Instructions:"
     echo "1. Device Code: $DEVICE_CODE"
     echo "2. User Code: $USER_CODE"
-    echo "3. Verification URL: http://localhost:8080/device"
-    echo "4. Complete URL: http://localhost:8080/device?user_code=$USER_CODE"
+    echo "3. Verification URL: ${OAUTH2_SERVER_URL:-http://localhost:8080}/device"
+    echo "4. Complete URL: ${OAUTH2_SERVER_URL:-http://localhost:8080}/device?user_code=$USER_CODE"
     echo ""
     echo "For manual testing:"
     echo "1. Open: http://localhost:8080/device?user_code=$USER_CODE"
@@ -112,7 +112,7 @@ if [ "$DEVICE_CODE" != "null" ] && [ "$DEVICE_CODE" != "" ]; then
     echo "Simulating user authorization..."
     
     # Simulate user authorization by posting to device endpoint
-    AUTH_RESPONSE=$(curl -s -X POST http://localhost:8080/device \
+        AUTH_RESPONSE=$(curl -s -X POST ${OAUTH2_SERVER_URL:-http://localhost:8080}/device \
       -H "Content-Type: application/x-www-form-urlencoded" \
       -d "user_code=$USER_CODE&username=$TEST_USERNAME&password=$TEST_PASSWORD")
     
@@ -122,7 +122,7 @@ if [ "$DEVICE_CODE" != "null" ] && [ "$DEVICE_CODE" != "" ]; then
         # Now try to get tokens with device code
         echo ""
         echo "Testing device token request..."
-        DEVICE_TOKEN_RESPONSE=$(curl -s -X POST http://localhost:8080/token \
+                DEVICE_TOKEN_RESPONSE=$(curl -s -X POST ${OAUTH2_SERVER_URL:-http://localhost:8080}/token \
           -H "Content-Type: application/x-www-form-urlencoded" \
           -d "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id=frontend-client&device_code=$DEVICE_CODE")
         
@@ -156,10 +156,10 @@ echo "7. Testing Token Exchange (RFC 8693)..."
 
 # Test Token Exchange with a sample token
 BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
-EXCHANGE_RESPONSE=$(curl -s -X POST http://localhost:8080/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -H "Authorization: Basic $BASIC_AUTH" \
-  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$ACCESS_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:access_token&audience=api-service&scope=api:read")
+EXCHANGE_RESPONSE=$(curl -s -X POST ${OAUTH2_SERVER_URL:-http://localhost:8080}/token \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Authorization: Basic $BASIC_AUTH" \
+    -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=$ACCESS_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:access_token&audience=api-service&scope=api:read")
 
 echo "Token Exchange Response:"
 echo "$EXCHANGE_RESPONSE" | jq . 2>/dev/null || echo "$EXCHANGE_RESPONSE"
@@ -168,7 +168,7 @@ if [ "$ACCESS_TOKEN" != "null" ] && [ "$ACCESS_TOKEN" != "" ]; then
     echo ""
     echo "8. Testing UserInfo endpoint with Client2 token..."
     
-    USERINFO_RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/userinfo)
+    USERINFO_RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" ${OAUTH2_SERVER_URL:-http://localhost:8080}/userinfo)
     echo "UserInfo Response:"
     echo "$USERINFO_RESPONSE" | jq . 2>/dev/null || echo "$USERINFO_RESPONSE"
 else
@@ -177,7 +177,7 @@ fi
 
 echo ""
 echo "9. Testing OpenID Configuration..."
-curl -s http://localhost:8080/.well-known/openid_configuration | jq . 2>/dev/null || curl -s http://localhost:8080/.well-known/openid_configuration
+curl -s ${OAUTH2_SERVER_URL:-http://localhost:8080}/.well-known/openid_configuration | jq . 2>/dev/null || curl -s ${OAUTH2_SERVER_URL:-http://localhost:8080}/.well-known/openid_configuration
 
 echo ""
 echo "10. Testing Dynamic Client Registration..."
@@ -191,7 +191,7 @@ NEW_CLIENT_PAYLOAD='{  "client_id": "dynamic-client",
   "scope": "openid profile email"
 }'
 
-REGISTER_RESPONSE=$(curl -s -X POST http://localhost:8080/register \
+REGISTER_RESPONSE=$(curl -s -X POST ${OAUTH2_SERVER_URL:-http://localhost:8080}/register \
   -H "Content-Type: application/json" \
   -d "$NEW_CLIENT_PAYLOAD")
 
@@ -208,7 +208,7 @@ else
 fi
 
 # Optionally, test authorization flow for the new client
-DYNAMIC_AUTH_URL="http://localhost:8080/auth?client_id=dynamic-client&redirect_uri=http%3A//localhost%3A8080/dynamic/callback&response_type=code&scope=openid%20profile%20email&state=dynamic123"
+DYNAMIC_AUTH_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}/auth?client_id=dynamic-client&redirect_uri=$(printf '%s' "${OAUTH2_SERVER_URL:-http://localhost:8080}" | sed 's/:/%3A/g; s/\//%2F/g')/dynamic/callback&response_type=code&scope=openid%20profile%20email&state=dynamic123"
 
 echo ""
 echo "Authorization URL for Dynamic Client: $DYNAMIC_AUTH_URL"
@@ -223,7 +223,7 @@ echo "11. Testing Token Statistics API..."
 
 # Use the backend-client credentials for the stats endpoint
 BASIC_AUTH=$(echo -n "backend-client:backend-client-secret" | base64)
-STATS_RESPONSE=$(curl -s -X GET http://localhost:8080/token/stats \
+STATS_RESPONSE=$(curl -s -X GET ${OAUTH2_SERVER_URL:-http://localhost:8080}/token/stats \
   -H "Authorization: Basic $BASIC_AUTH")
 
 echo "Token Statistics Response:"

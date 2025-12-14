@@ -17,8 +17,9 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 CLIENT_ID="mobile-app"  # Public client from config that supports authorization code flow
+REDIRECT_URI="$BASE_URL/oauth/callback"
 
 # Initialize test results
 STEP1_PASS=false
@@ -45,7 +46,7 @@ test_public_auth_code_flow() {
     echo "🎲 State: ${state:0:20}..." >&2
 
     # Build authorization URL
-    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=http://localhost:8080/oauth/callback&state=$state&scope=openid&code_challenge=$code_challenge&code_challenge_method=S256"
+    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=$REDIRECT_URI&state=$state&scope=openid&code_challenge=$code_challenge&code_challenge_method=S256"
 
     echo "🔗 Authorization URL: $auth_url" >&2
 
@@ -88,7 +89,7 @@ test_public_auth_code_flow() {
             echo "🔄 Exchanging code for token (public client)..." >&2
             local token_response=$(curl -s -X POST "$BASE_URL/token" \
                 -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "grant_type=authorization_code&code=$auth_code&client_id=$client_id&redirect_uri=http://localhost:8080/oauth/callback&code_verifier=$code_verifier")
+                -d "grant_type=authorization_code&code=$auth_code&client_id=$client_id&redirect_uri=$REDIRECT_URI&code_verifier=$code_verifier")
 
             echo "Token response: $token_response" >&2
 

@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 TEST_CLIENT_ID="test-attestation-integration-client"
 TEST_SCOPE="openid profile"
 

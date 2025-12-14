@@ -19,7 +19,7 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 
 # Initialize test results
 STEP1_PASS=false
@@ -41,7 +41,7 @@ register_attestation_client() {
         \"response_types\": [\"code\"],
         \"token_endpoint_auth_method\": \"attest_jwt_client_auth\",
         \"scope\": \"$TEST_SCOPE\",
-        \"redirect_uris\": [\"http://localhost:8080/callback\"],
+        \"redirect_uris\": [\"${BASE_URL}/callback\"],
         \"attestation_config\": {
             \"client_id\": \"\",
             \"allowed_methods\": [\"attest_jwt_client_auth\"],

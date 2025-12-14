@@ -19,7 +19,7 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 MOCK_PROVIDER_URL="http://localhost:9999"
 API_KEY="test-api-key"
 
@@ -221,7 +221,7 @@ echo "🎲 Issuer State: ${ISSUER_STATE:0:20}..."
 # Build authorization URL for proxy
 ENCODED_SCOPE=$(url_encode "$TEST_SCOPE")
 CLAIMS_PARAM="edumember_is_member_of"
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=http://localhost:8080/oauth/callback&state=$STATE&scope=$ENCODED_SCOPE&claims=$CLAIMS_PARAM&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256&issuer_state=$ISSUER_STATE"
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$TEST_CLIENT_ID&redirect_uri=$SERVER_URL/oauth/callback&state=$STATE&scope=$ENCODED_SCOPE&claims=$CLAIMS_PARAM&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256&issuer_state=$ISSUER_STATE"
 
 echo "🔗 Proxy Authorization URL: $AUTH_URL"
 
@@ -315,7 +315,7 @@ echo "🧪 Step 5: Exchanging authorization code for access token..."
 # Exchange authorization code for token at proxy server
 TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=authorization_code&client_id=$TEST_CLIENT_ID&code=$AUTH_CODE&redirect_uri=http://localhost:8080/oauth/callback&code_verifier=$CODE_VERIFIER")
+    -d "grant_type=authorization_code&client_id=$TEST_CLIENT_ID&code=$AUTH_CODE&redirect_uri=$SERVER_URL/oauth/callback&code_verifier=$CODE_VERIFIER")
 
 echo "Token Response: $TOKEN_RESPONSE"
 

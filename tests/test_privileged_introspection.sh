@@ -10,7 +10,7 @@ echo "================================="
 echo "Testing privileged client token acquisition"
 echo "Privileged clients can request admin scope for elevated permissions"
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 
 # Step 1: Get a token for a regular client using client credentials
 echo "📋 Getting access token for regular client..."

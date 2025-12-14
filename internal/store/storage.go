@@ -25,6 +25,11 @@ import (
 type CustomClient struct {
 	*fosite.DefaultClient
 	Claims []string `json:"claims,omitempty"`
+	// CIMD fields
+	MetadataDocumentLocation    string `json:"metadata_document_location,omitempty"`
+	MetadataDocumentExpiresAt   int64  `json:"metadata_document_expires_at,omitempty"`
+	MetadataDocumentUpdatedAt   int64  `json:"metadata_document_updated_at,omitempty"`
+	DiscoveredByMetadataDocument bool   `json:"discovered_by_metadata_document,omitempty"`
 }
 
 // PARRequest represents a pushed authorization request
@@ -1563,6 +1568,21 @@ func (s *SQLiteStore) GetClient(ctx context.Context, id string) (fosite.Client, 
 		return nil, err
 	}
 
+	// Try to unmarshal into CustomClient first to preserve CIMD fields if present
+	var customClient CustomClient
+	if err := json.Unmarshal([]byte(data), &customClient); err == nil {
+		if customClient.DefaultClient == nil {
+			// If DefaultClient wasn't embedded properly, fall back
+			var dc fosite.DefaultClient
+			if err := json.Unmarshal([]byte(data), &dc); err != nil {
+				return nil, err
+			}
+			return &dc, nil
+		}
+		return &customClient, nil
+	}
+
+	// Fallback to default client
 	var client fosite.DefaultClient
 	if err := json.Unmarshal([]byte(data), &client); err != nil {
 		return nil, err
@@ -1583,6 +1603,15 @@ func (s *SQLiteStore) GetAllClients(ctx context.Context) ([]fosite.Client, error
 		var data string
 		if err := rows.Scan(&data); err != nil {
 			return nil, err
+		}
+
+		// Try custom client first
+		var customClient CustomClient
+		if err := json.Unmarshal([]byte(data), &customClient); err == nil {
+			if customClient.DefaultClient != nil {
+				clients = append(clients, &customClient)
+				continue
+			}
 		}
 
 		var client fosite.DefaultClient

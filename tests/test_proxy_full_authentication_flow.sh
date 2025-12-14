@@ -12,7 +12,7 @@ echo "🧪 Complete User Authentication Flow Test (Proxy Mode)"
 echo "======================================================"
 
 # Configuration
-OAUTH2_SERVER_URL="http://localhost:8080"
+OAUTH2_SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 MOCK_PROVIDER_URL="http://localhost:9999"
 TEST_CLIENT_ID="test-client-$(date +%s)"
 TEST_CLIENT_SECRET="test-secret-$(date +%s)"

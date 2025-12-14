@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"oauth2-server/internal/metrics"
+	"oauth2-server/internal/cimd"
 	"oauth2-server/internal/store"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
@@ -90,6 +91,32 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Parse form data before creating authorize request
 	r.ParseForm()
+
+	// CIMD: If enabled and client_id looks like a CIMD URL, attempt to auto-register
+	if h.Configuration.CIMD.Enabled {
+		clientID := r.Form.Get("client_id")
+		if clientID != "" && cimd.IsCIMDClientID(clientID, h.Configuration) {
+			h.Log.Printf("🔍 CIMD: Detected CIMD client_id: %s", clientID)
+			// AlwaysRetrieved: try to re-retrieve metadata even if client exists
+			if h.Configuration.CIMD.AlwaysRetrieved {
+				h.Log.Printf("🔄 CIMD: AlwaysRetrieved enabled, attempting to re-fetch and register metadata for %s", clientID)
+				if _, err := cimd.RegisterClientFromMetadata(ctx, h.Configuration, h.Storage, clientID); err != nil {
+					h.Log.Warnf("⚠️ CIMD: Failed to re-retrieve metadata for %s: %v", clientID, err)
+					// Continue - do not fail authorization request on metadata refresh errors
+				} else {
+					h.Log.Printf("✅ CIMD: Re-retrieved and updated metadata for %s", clientID)
+				}
+			} else if _, err := h.Storage.GetClient(ctx, clientID); err != nil {
+				h.Log.Printf("🔄 CIMD: Client %s not found, attempting to fetch and register metadata", clientID)
+				if _, err := cimd.RegisterClientFromMetadata(ctx, h.Configuration, h.Storage, clientID); err != nil {
+					h.Log.Errorf("❌ CIMD: Failed to register client from metadata %s: %v", clientID, err)
+					h.OAuth2Provider.WriteAuthorizeError(ctx, w, nil, fosite.ErrInvalidClient.WithHint("Failed to register client metadata"))
+					return
+				}
+				h.Log.Printf("✅ CIMD: Registered client %s from metadata", clientID)
+			}
+		}
+	}
 
 	// For GET requests, also populate form with query parameters since Fosite expects them in r.Form
 	if r.Method == "GET" {

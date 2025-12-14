@@ -17,7 +17,7 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE (device flow uses: openid profile api:read)"
 echo ""
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 DEVICE_CLIENT_ID="smart-tv-app"
 
 # Initialize test results
@@ -51,7 +51,7 @@ perform_device_authorization() {
 
     local device_response=$(curl -s -X POST "$BASE_URL/device/authorize" \
         -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "client_id=$client_id&scope=$scope&redirect_uri=http://localhost:8080/device/callback")
+        -d "client_id=$client_id&scope=$scope&redirect_uri=${BASE_URL}/device/callback")
 
     echo "Device authorization response: $device_response" >&2
 

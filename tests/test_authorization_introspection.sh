@@ -10,7 +10,7 @@
 set -e
 
 # Configuration
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 TOKEN_CLIENT_ID="web-app-client"
 TOKEN_CLIENT_SECRET="web-app-secret"
 INTROSPECTION_CLIENT_ID="backend-client"

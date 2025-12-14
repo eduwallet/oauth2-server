@@ -8,11 +8,11 @@ echo "- Use refresh token to obtain new access token"
 echo ""
 
 # Configuration
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 USERNAME="${TEST_USERNAME:-john.doe}"
 PASSWORD="${TEST_PASSWORD:-password123}"
 SCOPE="${TEST_SCOPE:-openid profile email offline_access}"
-REDIRECT_URI="http://localhost:8080/callback"
+REDIRECT_URI="${SERVER_URL}/callback"
 API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 # Colors for output
@@ -99,10 +99,10 @@ print_status "Authorization URL (without PKCE): $AUTH_URL"
 # Get login form
 print_status "Making GET request to authorization endpoint..."
 print_status "Checking if server is still running..."
-curl -s http://localhost:8080/health && print_status "Server is still running" || print_error "Server is not responding to health check"
+curl -s ${OAUTH2_SERVER_URL:-http://localhost:8080}/health && print_status "Server is still running" || print_error "Server is not responding to health check"
 
 print_status "Testing simple authorize endpoint access..."
-SIMPLE_AUTH_RESPONSE=$(curl -s -i "http://localhost:8080/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&scope=openid&state=teststate123")
+SIMPLE_AUTH_RESPONSE=$(curl -s -i "${SERVER_URL}/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&scope=openid&state=teststate123")
 print_status "Simple auth response:"
 echo "$SIMPLE_AUTH_RESPONSE" | head -10
 

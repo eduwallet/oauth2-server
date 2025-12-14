@@ -176,6 +176,11 @@ func (h *DiscoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"op_tos_uri":    baseURL + "/terms",
 	}
 
+	// Advertise CIMD support if enabled
+	if h.Configuration.CIMD.Enabled {
+		wellKnown["client_id_metadata_document_supported"] = true
+	}
+
 	if upstream != nil {
 		// scopes_supported
 		if upstreamScopes, ok := upstream["scopes_supported"]; ok {

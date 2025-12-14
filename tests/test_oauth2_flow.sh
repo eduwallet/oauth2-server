@@ -6,11 +6,11 @@ echo "Assumes the OAuth2 server is already running on localhost:8080."
 echo ""
 
 # Configuration
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 USERNAME="${TEST_USERNAME:-john.doe}"
 PASSWORD="${TEST_PASSWORD:-password123}"
 SCOPE="${TEST_SCOPE:-openid profile email}"
-REDIRECT_URI="http://localhost:8080/callback"
+REDIRECT_URI="${SERVER_URL}/callback"
 API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
 # Colors for output

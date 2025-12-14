@@ -19,7 +19,7 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 MOCK_PROVIDER_URL="http://localhost:9999"
 API_KEY="${API_KEY:-super-secure-random-api-key-change-in-production-32-chars-minimum}"
 
@@ -57,15 +57,15 @@ STEP1_PASS=true
 # Step 2: Register a client for testing
 print_status "info" "Registering test client..."
 REGISTER_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{
-    "client_name": "Proxy Test Client",
-    "redirect_uris": ["http://localhost:8080/callback"],
-    "grant_types": ["authorization_code"],
-    "response_types": ["code"],
-    "scope": "openid profile email"
-  }')
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: $API_KEY" \
+    -d "{
+        \"client_name\": \"Proxy Test Client\",
+        \"redirect_uris\": [\"${SERVER_URL}/callback\"],
+        \"grant_types\": [\"authorization_code\"],
+        \"response_types\": [\"code\"],
+        \"scope\": \"openid profile email\"
+    }")
 
 echo "Registration response: $REGISTER_RESPONSE"
 
@@ -84,7 +84,7 @@ STEP2_PASS=true
 print_status "info" "Performing authorization code flow..."
 
 # Get authorization code - handle proxy flow
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=http://localhost:8080/callback&scope=openid%20profile%20email&state=test_state"
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=${SERVER_URL}/callback&scope=openid%20profile%20email&state=test_state"
 
 echo "Making authorization request..."
 # First, make the auth request (will redirect to upstream)
@@ -123,9 +123,9 @@ echo "Got authorization code: $AUTH_CODE"
 
 # Exchange code for token
 TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -u "$CLIENT_ID:$CLIENT_SECRET" \
-  -d "grant_type=authorization_code&code=$AUTH_CODE&redirect_uri=http://localhost:8080/callback")
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -u "$CLIENT_ID:$CLIENT_SECRET" \
+    -d "grant_type=authorization_code&code=$AUTH_CODE&redirect_uri=${SERVER_URL}/callback")
 
 echo "Token response: $TOKEN_RESPONSE"
 

@@ -7,7 +7,7 @@
 set -e
 
 # Configuration
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 MOCK_PROVIDER_PORT=9999
 MOCK_PROVIDER_URL="http://localhost:$MOCK_PROVIDER_PORT"
 TEST_USERNAME="john.doe"

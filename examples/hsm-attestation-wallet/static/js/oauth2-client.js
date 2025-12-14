@@ -171,8 +171,7 @@ class OAuth2Client {
                 client_uri: window.location.origin,
 
                 redirect_uris: [
-                    this.config.redirectUri,
-                    "http://localhost:8080/callback"
+                    this.config.redirectUri
                 ],
 
                 grant_types: [

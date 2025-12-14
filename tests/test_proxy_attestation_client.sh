@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-SERVER_URL="http://localhost:8080"
+SERVER_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 MOCK_PROVIDER_PORT=9999
 MOCK_PROVIDER_URL="http://localhost:$MOCK_PROVIDER_PORT"
 TEST_USERNAME="john.doe"
@@ -108,7 +108,7 @@ REGISTRATION_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
     "response_types": ["code"],
     "token_endpoint_auth_method": "none",
     "scope": "openid profile email",
-    "redirect_uris": ["http://localhost:8080/test-callback"],
+    "redirect_uris": ["${SERVER_URL}/test-callback"],
     "public": true,
     "attestation_config": {
       "client_id": "test-proxy-client",
@@ -149,7 +149,7 @@ CODE_CHALLENGE=$(echo -n "$CODE_VERIFIER" | openssl dgst -sha256 -binary | opens
 STATE=$(openssl rand -hex 16)
 
 # Build authorization URL
-AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=http://localhost:8080/test-callback&scope=openid%20profile%20email&state=$STATE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
+AUTH_URL="$SERVER_URL/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=${SERVER_URL}/test-callback&scope=openid%20profile%20email&state=$STATE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256"
 
 echo "🔗 Authorization URL: $AUTH_URL"
 
@@ -198,7 +198,7 @@ echo "🧪 Step 4: Exchanging authorization code for tokens..."
 # Exchange authorization code for tokens
 TOKEN_RESPONSE=$(curl -s -X POST "$SERVER_URL/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=authorization_code&client_id=$CLIENT_ID&code=$AUTH_CODE&redirect_uri=http://localhost:8080/test-callback&code_verifier=$CODE_VERIFIER")
+    -d "grant_type=authorization_code&client_id=$CLIENT_ID&code=$AUTH_CODE&redirect_uri=${SERVER_URL}/test-callback&code_verifier=$CODE_VERIFIER")
 
 echo "Token response: $TOKEN_RESPONSE"
 

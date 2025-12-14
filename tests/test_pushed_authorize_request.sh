@@ -64,13 +64,13 @@ echo "🧪 Step 1: Registering test client..."
 CLIENT_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \
     -H "Content-Type: application/json" \
     -H "X-API-Key: $API_KEY" \
-    -d '{
-        "client_name": "PAR Test Client",
-        "grant_types": ["authorization_code"],
-        "response_types": ["code"],
-        "redirect_uris": ["http://localhost:8080/callback"],
-        "scope": "openid profile email"
-    }')
+    -d "{
+        \"client_name\": \"PAR Test Client\",
+        \"grant_types\": [\"authorization_code\"],
+        \"response_types\": [\"code\"],
+        \"redirect_uris\": [\"${SERVER_URL}/callback\"],
+        \"scope\": \"openid profile email\"
+    }")
 
 echo "Client registration response: $CLIENT_RESPONSE"
 
@@ -88,7 +88,7 @@ echo ""
 echo "🧪 Step 2: Testing PAR request..."
 PAR_RESPONSE=$(curl -s -X POST "$SERVER_URL/authorize" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "client_id=$CLIENT_ID&response_type=code&scope=openid%20profile&redirect_uri=http://localhost:8080/callback&state=test-state")
+    -d "client_id=$CLIENT_ID&response_type=code&scope=openid%20profile&redirect_uri=${SERVER_URL}/callback&state=test-state")
 
 echo "PAR Response: $PAR_RESPONSE"
 

@@ -14,7 +14,7 @@ echo "  TEST_PASSWORD: $TEST_PASSWORD"
 echo "  TEST_SCOPE: $TEST_SCOPE"
 echo ""
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 FRONTEND_ID="web-app-client"
 FRONTEND_SECRET="web-app-secret"
 BACKEND_ID="backend-client"
@@ -58,7 +58,7 @@ perform_auth_flow() {
     generate_state >&2
 
     # Build authorization URL
-    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=http://localhost:8080/callback&state=$STATE"
+    local auth_url="$BASE_URL/authorize?response_type=code&client_id=$client_id&redirect_uri=${OAUTH2_SERVER_URL:-http://localhost:8080}/callback&state=$STATE"
     if [ -n "$scope" ]; then
         auth_url="$auth_url&scope=$(echo "$scope" | sed 's/ /%20/g')"
     fi
@@ -106,7 +106,7 @@ perform_auth_flow() {
             local token_response=$(curl -s -X POST "$BASE_URL/token" \
                 -u "$client_id:$client_secret" \
                 -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "grant_type=authorization_code&code=$auth_code&redirect_uri=http://localhost:8080/callback&code_verifier=$CODE_VERIFIER")
+                -d "grant_type=authorization_code&code=$auth_code&redirect_uri=${OAUTH2_SERVER_URL:-http://localhost:8080}/callback&code_verifier=$CODE_VERIFIER")
 
             echo "Token response: $token_response" >&2
 

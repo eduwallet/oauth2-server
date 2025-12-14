@@ -13,7 +13,7 @@ When these environment variables are set, the server runs in proxy mode and igno
 UPSTREAM_PROVIDER_URL=https://accounts.google.com
 UPSTREAM_CLIENT_ID=your-client-id
 UPSTREAM_CLIENT_SECRET=your-client-secret
-UPSTREAM_CALLBACK_URL=http://localhost:8080/callback
+UPSTREAM_CALLBACK_URL=${OAUTH2_SERVER_URL:-http://localhost:8080}/callback
 ```
 
 **Security Note**: Upstream provider configuration has been moved from `config.yaml` to environment variables only to prevent storing sensitive credentials in configuration files.

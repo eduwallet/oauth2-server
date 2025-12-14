@@ -8,10 +8,10 @@ TEST_SCOPE="${TEST_SCOPE:-openid profile email}"
 echo "🧪 Authorization Code Flow with PKCE Test"
 echo "=========================================="
 
-BASE_URL="http://localhost:8080"
+BASE_URL="${OAUTH2_SERVER_URL:-http://localhost:8080}"
 CLIENT_ID="web-app-client"
 CLIENT_SECRET="web-app-secret"
-REDIRECT_URI="http://localhost:8080/callback"
+REDIRECT_URI="${BASE_URL}/callback"
 SCOPE="$TEST_SCOPE"
 
 echo "🧪 Testing Authorization Code Flow with PKCE"
