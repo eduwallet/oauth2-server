@@ -128,7 +128,7 @@ else
     # If running the CIMD integration tests, enable CIMD and permit HTTP for local mock metadata
     if [ "$(basename "$SCRIPT")" = "test_cimd_registration.sh" ] || [ "$(basename "$SCRIPT")" = "test_cimd_example.sh" ]; then
         log "🔧 Enabling CIMD for test script"
-        DATABASE_TYPE="$TEST_DATABASE_TYPE" UPSTREAM_PROVIDER_URL="" CIMD_ENABLED=true CIMD_HTTP_PERMITTED=true ENABLE_TRUST_ANCHOR_API=true API_KEY="$API_KEY" ./bin/oauth2-server > server-test.log 2>&1 &
+        DATABASE_TYPE="$TEST_DATABASE_TYPE" UPSTREAM_PROVIDER_URL="" CIMD_ENABLED=true CIMD_HTTP_PERMITTED=true ENABLE_TRUST_ANCHOR_API=true ENABLE_REGISTRATION_API=true API_KEY="$API_KEY" ./bin/oauth2-server > server-test.log 2>&1 &
     else
         DATABASE_TYPE="$TEST_DATABASE_TYPE" UPSTREAM_PROVIDER_URL="" ENABLE_TRUST_ANCHOR_API=true API_KEY="$API_KEY" ./bin/oauth2-server > server-test.log 2>&1 &
     fi

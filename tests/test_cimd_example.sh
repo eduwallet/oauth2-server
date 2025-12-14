@@ -84,6 +84,56 @@ fi
 
 echo "✅ CIMD example registration flow appears to work (authorization login form returned)."
 
+# Submit the login form (perform user authentication)
+echo "🔐 Submitting login form to authenticate user $TEST_USERNAME..."
+POST_RESP=$(curl -s -i -X POST "$SERVER_URL/authorize" \
+    -d "client_id=$METADATA_URL" \
+    -d "redirect_uri=${METADATA_BASE}/callback" \
+    -d "response_type=code" \
+    -d "scope=openid" \
+    -d "state=teststate" \
+    -d "username=$TEST_USERNAME" \
+    -H "Accept: text/html")
+
+if echo "$POST_RESP" | grep -qi "Location:"; then
+    LOC=$(echo "$POST_RESP" | grep -i "^Location:" | sed -E 's/Location:[[:space:]]*//I' | tr -d '\r')
+    echo "✅ Received redirect Location: $LOC"
+    # Extract code
+    CODE=$(echo "$LOC" | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p')
+    if [ -z "$CODE" ]; then
+        echo "❌ Authorization did not return a code in redirect"
+        echo "Full response:"; echo "$POST_RESP"; exit 1
+    fi
+    echo "✅ Authorization code received: $CODE"
+
+    # Exchange authorization code for tokens
+    echo "🔁 Exchanging code for tokens at $SERVER_URL/token"
+    TOKEN_RESP=$(curl -s -X POST "$SERVER_URL/token" \
+        -d "grant_type=authorization_code" \
+        -d "code=$CODE" \
+        -d "redirect_uri=${METADATA_BASE}/callback" \
+        -d "client_id=$METADATA_URL")
+
+    if echo "$TOKEN_RESP" | grep -qi "access_token"; then
+        echo "✅ Token endpoint returned tokens for CIMD-created client"
+    else
+        echo "❌ Token endpoint did not return tokens"
+        echo "Token response:"; echo "$TOKEN_RESP"; exit 1
+    fi
+else
+    echo "❌ Login submission did not produce a redirect Location"
+    echo "Full response:"; echo "$POST_RESP"; exit 1
+fi
+
+# Verify the client exists in the server's client store via admin API
+echo "🔍 Verifying client stored in server via /clients API"
+CLIENTS_JSON=$(curl -s -L -H "X-API-Key: $API_KEY" "$SERVER_URL/clients/")
+if echo "$CLIENTS_JSON" | grep -F "$METADATA_URL" >/dev/null; then
+    echo "✅ Client appears in the server client list"
+else
+    echo "❌ Client not found in server client list"
+    echo "Clients response:"; echo "$CLIENTS_JSON"; exit 1
+fi
 # Cleanup
 echo "🛑 Cleaning up..."
 kill $SERVER_PID 2>/dev/null || true
