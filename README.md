@@ -183,6 +183,8 @@ See the [Environment Variables](#environment-variables-reference) section below 
 CONFIG_FILE=/path/to/config.yaml ./bin/oauth2-server
 ```
 
+CIMD (Client-Initiated Metadata Discovery): see [docs/CIMD.md](docs/CIMD.md) for details and a runnable example in `examples/cimd` (run `examples/cimd/serve.sh` and enable `CIMD_ENABLED=true` to test local registration).
+
 ## Deployment
 
 For detailed deployment instructions including Kubernetes Helm charts and configuration options, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
@@ -316,6 +318,7 @@ The OAuth2 server supports comprehensive configuration through environment varia
 | `AUTHORIZATION_CODE_EXPIRY_SECONDS` | int | 600 | Authorization code lifetime in seconds |
 | `REQUIRE_HTTPS` | bool | false | Require HTTPS for all OAuth2 endpoints |
 | `ENABLE_PKCE` | bool | true | Enable PKCE (Proof Key for Code Exchange) support |
+| `ALLOW_SYNTHETIC_ID_TOKEN` | bool | false | If upstream omits `id_token`, allow proxy to mint one (use with caution) |
 | `API_KEY` | string | - | API key for protected endpoints (registration, trust anchor management) |
 | `ENABLE_REGISTRATION_API` | bool | false | Enable dynamic client registration API |
 | `ENABLE_TRUST_ANCHOR_API` | bool | false | Enable trust anchor management API for attestation |
