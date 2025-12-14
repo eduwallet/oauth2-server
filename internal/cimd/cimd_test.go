@@ -201,4 +201,3 @@ func TestRateLimitingConfig(t *testing.T) {
 		t.Fatalf("expected third fetch to be rate-limited, but it succeeded")
 	}
 }
-

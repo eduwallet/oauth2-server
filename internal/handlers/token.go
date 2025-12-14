@@ -3,7 +3,7 @@ package handlers
 import (
 	"net/http"
 	"oauth2-server/internal/attestation"
-    "oauth2-server/internal/cimd"
+	"oauth2-server/internal/cimd"
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/store"
 	"oauth2-server/pkg/config"

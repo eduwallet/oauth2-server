@@ -26,9 +26,9 @@ type CustomClient struct {
 	*fosite.DefaultClient
 	Claims []string `json:"claims,omitempty"`
 	// CIMD fields
-	MetadataDocumentLocation    string `json:"metadata_document_location,omitempty"`
-	MetadataDocumentExpiresAt   int64  `json:"metadata_document_expires_at,omitempty"`
-	MetadataDocumentUpdatedAt   int64  `json:"metadata_document_updated_at,omitempty"`
+	MetadataDocumentLocation     string `json:"metadata_document_location,omitempty"`
+	MetadataDocumentExpiresAt    int64  `json:"metadata_document_expires_at,omitempty"`
+	MetadataDocumentUpdatedAt    int64  `json:"metadata_document_updated_at,omitempty"`
 	DiscoveredByMetadataDocument bool   `json:"discovered_by_metadata_document,omitempty"`
 }
 
