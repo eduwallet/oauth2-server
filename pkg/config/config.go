@@ -116,11 +116,30 @@ type Config struct {
 	// Attestation configuration
 	Attestation *AttestationConfig `yaml:"attestation,omitempty"`
 
+	// CIMD / Client-Initiated Metadata Discovery configuration
+	CIMD *CIMDConfig `yaml:"cimd,omitempty"`
+
 	// Reverse Proxy Configuration (can be overridden by YAML)
 	TrustProxyHeaders bool
 	// PublicBaseURL     string
 	ForceHTTPS     bool
 	TrustedProxies string
+}
+
+// CIMDConfig holds configuration options for Client-Initiated Metadata Discovery
+type CIMDConfig struct {
+	Enabled               bool     `yaml:"enabled"`
+	HttpPermitted         bool     `yaml:"http_permitted"`
+	QueryPermitted        bool     `yaml:"query_permitted"`
+	AllowlistEnabled      bool     `yaml:"allowlist_enabled"`
+	Allowlist             []string `yaml:"allowlist"`
+	MetadataPolicyEnabled bool     `yaml:"metadata_policy_enabled"`
+	MetadataPolicy        string   `yaml:"metadata_policy"`
+	CacheMaxSeconds       int      `yaml:"cache_max_seconds"`
+	AlwaysRetrieved       bool     `yaml:"always_retrieved"`
+	// Fetch rate limiting (per-host)
+	FetchLimit         int `yaml:"fetch_limit"`
+	FetchWindowSeconds int `yaml:"fetch_window_seconds"`
 }
 
 // ServerConfig holds server-specific configuration
@@ -140,6 +159,7 @@ type SecurityConfig struct {
 	AuthorizationCodeExpirySeconds int    `yaml:"authorization_code_expiry_seconds"`
 	EnablePKCE                     bool   `yaml:"enable_pkce"`
 	RequireHTTPS                   bool   `yaml:"require_https"`
+	AllowSyntheticIDToken          bool   `yaml:"allow_synthetic_id_token"`
 
 	// API protection settings
 	APIKey                string `yaml:"api_key,omitempty" env:"API_KEY"`
@@ -468,6 +488,20 @@ func (c *Config) SetDefaults() {
 	if !c.Security.EnableTrustAnchorAPI && os.Getenv("ENABLE_TRUST_ANCHOR_API") == "" {
 		// Default is false - trust anchor API is disabled
 		c.Security.EnableTrustAnchorAPI = false
+	}
+
+	// Set default CIMD configuration
+	if c.CIMD == nil {
+		c.CIMD = &CIMDConfig{}
+	}
+	if c.CIMD.CacheMaxSeconds == 0 {
+		c.CIMD.CacheMaxSeconds = 86400 // 1 day
+	}
+	if c.CIMD.FetchLimit == 0 {
+		c.CIMD.FetchLimit = 60 // default requests per window
+	}
+	if c.CIMD.FetchWindowSeconds == 0 {
+		c.CIMD.FetchWindowSeconds = 60 // default window in seconds
 	}
 }
 

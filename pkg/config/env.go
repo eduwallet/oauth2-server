@@ -56,6 +56,52 @@ func (c *Config) LoadFromEnv() {
 	// Upstream provider configuration (moved from config.yaml for security)
 	c.loadUpstreamProviderFromEnv()
 
+	// CIMD (Client-Initiated Metadata Discovery) configuration
+	// Environment variables:
+	// CIMD_ENABLED, CIMD_HTTP_PERMITTED, CIMD_QUERY_PERMITTED, CIMD_ALLOWLIST (comma separated)
+	// CIMD_METADATA_POLICY_ENABLED, CIMD_METADATA_POLICY, CIMD_CACHE_MAX_SECONDS, CIMD_ALWAYS_RETRIEVED
+	if c.CIMD == nil {
+		c.CIMD = &CIMDConfig{}
+	}
+	if v := os.Getenv("CIMD_ENABLED"); v != "" {
+		c.CIMD.Enabled = GetEnvBool("CIMD_ENABLED", false)
+	}
+	if v := os.Getenv("CIMD_HTTP_PERMITTED"); v != "" {
+		c.CIMD.HttpPermitted = GetEnvBool("CIMD_HTTP_PERMITTED", false)
+	}
+	if v := os.Getenv("CIMD_QUERY_PERMITTED"); v != "" {
+		c.CIMD.QueryPermitted = GetEnvBool("CIMD_QUERY_PERMITTED", false)
+	}
+	if v := os.Getenv("CIMD_ALLOWLIST"); v != "" {
+		c.CIMD.Allowlist = filterEmpty(strings.Split(v, ","))
+		c.CIMD.AllowlistEnabled = true
+	}
+	if v := os.Getenv("CIMD_METADATA_POLICY_ENABLED"); v != "" {
+		c.CIMD.MetadataPolicyEnabled = GetEnvBool("CIMD_METADATA_POLICY_ENABLED", false)
+	}
+	if v := os.Getenv("CIMD_METADATA_POLICY"); v != "" {
+		c.CIMD.MetadataPolicy = v
+	}
+	if v := os.Getenv("CIMD_CACHE_MAX_SECONDS"); v != "" {
+		if i := GetEnvInt("CIMD_CACHE_MAX_SECONDS", 0); i > 0 {
+			c.CIMD.CacheMaxSeconds = i
+		}
+	}
+	if v := os.Getenv("CIMD_ALWAYS_RETRIEVED"); v != "" {
+		c.CIMD.AlwaysRetrieved = GetEnvBool("CIMD_ALWAYS_RETRIEVED", false)
+	}
+
+	if v := os.Getenv("CIMD_FETCH_LIMIT"); v != "" {
+		if i := GetEnvInt("CIMD_FETCH_LIMIT", 0); i > 0 {
+			c.CIMD.FetchLimit = i
+		}
+	}
+	if v := os.Getenv("CIMD_FETCH_WINDOW_SECONDS"); v != "" {
+		if i := GetEnvInt("CIMD_FETCH_WINDOW_SECONDS", 0); i > 0 {
+			c.CIMD.FetchWindowSeconds = i
+		}
+	}
+
 	// Security configuration overrides
 	if encryptionKey := os.Getenv("ENCRYPTION_KEY"); encryptionKey != "" {
 		c.Security.EncryptionKey = encryptionKey
@@ -95,6 +141,10 @@ func (c *Config) LoadFromEnv() {
 
 	if enablePKCE := os.Getenv("ENABLE_PKCE"); enablePKCE != "" {
 		c.Security.EnablePKCE = GetEnvBool("ENABLE_PKCE", true)
+	}
+
+	if allowSynthetic := os.Getenv("ALLOW_SYNTHETIC_ID_TOKEN"); allowSynthetic != "" {
+		c.Security.AllowSyntheticIDToken = GetEnvBool("ALLOW_SYNTHETIC_ID_TOKEN", false)
 	}
 
 	// API protection configuration

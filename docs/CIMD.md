@@ -18,6 +18,8 @@ Environment variables (also supported through YAML `pkg/config`):
 - `CIMD_METADATA_POLICY` (string) — simple semicolon-separated policy (examples below).
 - `CIMD_CACHE_MAX_SECONDS` (int) — max TTL for cached metadata documents.
 - `CIMD_ALWAYS_RETRIEVED` (bool) — when true always fetch the metadata instead of using cache.
+- `CIMD_FETCH_LIMIT` (int) — maximum number of metadata fetches allowed per host in the configured window (default: 60).
+- `CIMD_FETCH_WINDOW_SECONDS` (int) — window in seconds for the fetch limit (default: 60).
 
 Security notes:
 - By default only `https` metadata URLs are allowed. Use `CIMD_HTTP_PERMITTED=true` only for local testing.
