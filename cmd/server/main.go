@@ -400,9 +400,11 @@ func main() {
 		log.Fatalf("❌ Failed to initialize OAuth2 provider: %v", err)
 	}
 
-	// Load templates
-	if err := loadTemplates(); err != nil {
-		log.Fatalf("❌ Failed to load templates: %v", err)
+	if configuration.IsLocalMode() {
+		// Load templates
+		if err := loadTemplates(); err != nil {
+			log.Fatalf("❌ Failed to load templates: %v", err)
+		}
 	}
 
 	// Initialize flows
@@ -650,7 +652,7 @@ func initializeHandlers() {
 
 	// Initialize OAuth2 flow handlers
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap, &deviceCodeToUpstreamMap, &accessTokenToIssuerStateMap, AccessTokenStrategy, RefreshTokenStrategy)
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap, &deviceCodeToUpstreamMap, &accessTokenToIssuerStateMap, AccessTokenStrategy, RefreshTokenStrategy, &jwt.DefaultSigner{GetPrivateKey: keyGetter})
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)

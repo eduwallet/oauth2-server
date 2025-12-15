@@ -36,6 +36,8 @@ type TokenHandler struct {
 	AccessTokenToIssuerStateMap *map[string]string
 	AccessTokenStrategy         interface{} // Will be oauth2.AccessTokenStrategy
 	RefreshTokenStrategy        interface{} // Will be oauth2.RefreshTokenStrategy
+	// Signer is used to sign ID tokens (RS256) when proxying upstream id_tokens
+	Signer *jwt.DefaultSigner
 }
 
 // NewTokenHandler creates a new TokenHandler
@@ -52,6 +54,7 @@ func NewTokenHandler(
 	accessTokenToIssuerStateMap *map[string]string,
 	accessTokenStrategy interface{},
 	refreshTokenStrategy interface{},
+	signer *jwt.DefaultSigner,
 ) *TokenHandler {
 	return &TokenHandler{
 		OAuth2Provider:              provider,
@@ -66,6 +69,7 @@ func NewTokenHandler(
 		AccessTokenToIssuerStateMap: accessTokenToIssuerStateMap,
 		AccessTokenStrategy:         accessTokenStrategy,
 		RefreshTokenStrategy:        refreshTokenStrategy,
+		Signer:                      signer,
 	}
 }
 

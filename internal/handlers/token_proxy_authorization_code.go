@@ -495,8 +495,16 @@ func (h *TokenHandler) buildSyntheticIDToken(ctx context.Context, accessRequest 
 		claims["name"] = name
 	}
 
-	token := gjwt.NewWithClaims(gjwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(h.Configuration.Security.JWTSecret))
+	// Sign ID token using RS256 and the server's RSA private key (more secure than HS256)
+	token := gjwt.NewWithClaims(gjwt.SigningMethodRS256, claims)
+	if h.Signer == nil || h.Signer.GetPrivateKey == nil {
+		return "", fmt.Errorf("no signer available to sign id_token with RS256")
+	}
+	priv, err := h.Signer.GetPrivateKey(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("failed to get private key for signing id_token: %w", err)
+	}
+	signed, err := token.SignedString(priv)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign synthetic id_token: %w", err)
 	}
