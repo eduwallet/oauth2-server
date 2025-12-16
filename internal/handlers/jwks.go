@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"math/big"
 	"net/http"
 )
@@ -30,6 +31,9 @@ func encodeBigIntToBase64URL(n *big.Int) string {
 
 // ServeHTTP handles JWKS requests (/.well-known/jwks.json)
 func (h *JWKSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Debug: log whether a key getter is configured
+	log.Printf("🔍 JWKS: GetPrivateKey configured: %t", h.GetPrivateKey != nil)
+
 	// If no key getter is configured, return a conservative placeholder
 	if h.GetPrivateKey == nil {
 		jwks := map[string]interface{}{
@@ -54,6 +58,7 @@ func (h *JWKSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Obtain private key and derive public key
 	privKeyIface, err := h.GetPrivateKey(context.Background())
 	if err != nil || privKeyIface == nil {
+		log.Printf("❌ JWKS: failed to get private key: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`{"error":"failed to retrieve key"}`))
 		return

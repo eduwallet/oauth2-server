@@ -665,7 +665,14 @@ func initializeHandlers() {
 
 	// Initialize discovery and utility handlers
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
-	jwksHandler = handlers.NewJWKSHandler(jwtSigner.GetPrivateKey)
+	// Debug: check jwtSigner before wiring into JWKSHandler
+	if jwtSigner == nil {
+		log.Printf("⚠️ JWKS: jwtSigner is nil when initializing handlers - JWKS will serve placeholder key")
+		jwksHandler = handlers.NewJWKSHandler(nil)
+	} else {
+		log.Printf("🔍 JWKS: jwtSigner present, wiring key getter into JWKS handler")
+		jwksHandler = handlers.NewJWKSHandler(jwtSigner.GetPrivateKey)
+	}
 	statusHandler = handlers.NewStatusHandler(configuration, Version, GitCommit, BuildTime)
 	versionHandler = handlers.NewVersionHandler()
 	claimsHandler = handlers.NewClaimsHandler(configuration, log)
