@@ -504,6 +504,12 @@ func (h *TokenHandler) buildSyntheticIDToken(ctx context.Context, accessRequest 
 	if err != nil {
 		return "", fmt.Errorf("failed to get private key for signing id_token: %w", err)
 	}
+
+	// Compute kid using shared helper
+	if kid, err := utils.ComputeKIDFromKey(priv); err == nil && kid != "" {
+		token.Header["kid"] = kid
+	}
+
 	signed, err := token.SignedString(priv)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign synthetic id_token: %w", err)

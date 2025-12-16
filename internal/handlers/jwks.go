@@ -3,12 +3,11 @@ package handlers
 import (
 	"context"
 	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"log"
 	"math/big"
 	"net/http"
+	"oauth2-server/internal/utils"
 )
 
 // JWKSHandler manages JSON Web Key Set requests
@@ -21,12 +20,6 @@ type JWKSHandler struct {
 // NewJWKSHandler creates a new JWKS handler that can use an optional key getter
 func NewJWKSHandler(getter func(context.Context) (interface{}, error)) *JWKSHandler {
 	return &JWKSHandler{GetPrivateKey: getter}
-}
-
-// encodeBigIntToBase64URL encodes a big.Int to base64url without padding
-func encodeBigIntToBase64URL(n *big.Int) string {
-	b := n.Bytes()
-	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // ServeHTTP handles JWKS requests (/.well-known/jwks.json)
@@ -77,14 +70,12 @@ func (h *JWKSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Encode modulus and exponent
-	nBase64 := encodeBigIntToBase64URL(pub.N)
+	nBase64 := utils.EncodeBigIntToBase64URL(pub.N)
 	eBig := big.NewInt(int64(pub.E))
-	eBase64 := encodeBigIntToBase64URL(eBig)
+	eBase64 := utils.EncodeBigIntToBase64URL(eBig)
 
-	// Compute simple kid as sha256(n || e) base64url
-	thumbSrc := append(pub.N.Bytes(), eBig.Bytes()...)
-	thumb := sha256.Sum256(thumbSrc)
-	kid := base64.RawURLEncoding.EncodeToString(thumb[:])
+	// Compute kid using shared helper
+	kid := utils.ComputeKIDFromPublicKey(pub)
 
 	jwk := map[string]interface{}{
 		"kty": "RSA",
