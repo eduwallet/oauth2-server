@@ -665,7 +665,7 @@ func initializeHandlers() {
 
 	// Initialize discovery and utility handlers
 	discoveryHandler = handlers.NewDiscoveryHandler(configuration)
-	jwksHandler = handlers.NewJWKSHandler()
+	jwksHandler = handlers.NewJWKSHandler(jwtSigner.GetPrivateKey)
 	statusHandler = handlers.NewStatusHandler(configuration, Version, GitCommit, BuildTime)
 	versionHandler = handlers.NewVersionHandler()
 	claimsHandler = handlers.NewClaimsHandler(configuration, log)
