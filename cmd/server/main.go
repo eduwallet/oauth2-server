@@ -89,6 +89,9 @@ var (
 	// Attestation manager
 	attestationManager *attestation.VerifierManager
 
+	// Signer for JWT ID token signing (RS256)
+	jwtSigner *jwt.DefaultSigner
+
 	// Templates
 	templates *template.Template
 )
@@ -614,6 +617,8 @@ func initializeOAuth2Provider() error {
 	keyGetter := func(context.Context) (interface{}, error) {
 		return privateKey, nil
 	}
+	// Initialize package-level jwtSigner for reuse
+	jwtSigner = &jwt.DefaultSigner{GetPrivateKey: keyGetter}
 
 	oauth2Provider = compose.Compose(
 		config,
@@ -622,7 +627,7 @@ func initializeOAuth2Provider() error {
 			CoreStrategy:               compose.NewOAuth2HMACStrategy(config),
 			RFC8628CodeStrategy:        compose.NewDeviceStrategy(config),
 			OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(keyGetter, config),
-			Signer:                     &jwt.DefaultSigner{GetPrivateKey: keyGetter},
+			Signer:                     jwtSigner,
 		},
 		compose.OAuth2AuthorizeExplicitFactory,
 		compose.OAuth2ClientCredentialsGrantFactory,
@@ -652,7 +657,7 @@ func initializeHandlers() {
 
 	// Initialize OAuth2 flow handlers
 	authorizeHandler = handlers.NewAuthorizeHandler(oauth2Provider, configuration, log, metricsCollector, customStorage, &UpstreamSessionMap)
-	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap, &deviceCodeToUpstreamMap, &accessTokenToIssuerStateMap, AccessTokenStrategy, RefreshTokenStrategy, &jwt.DefaultSigner{GetPrivateKey: keyGetter})
+	tokenHandler = handlers.NewTokenHandler(oauth2Provider, configuration, log, metricsCollector, attestationManager, customStorage, secretManager, &authCodeToStateMap, &deviceCodeToUpstreamMap, &accessTokenToIssuerStateMap, AccessTokenStrategy, RefreshTokenStrategy, jwtSigner)
 	introspectionHandler = handlers.NewIntrospectionHandler(oauth2Provider, configuration, log, attestationManager, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	authorizationIntrospectionHandler = handlers.NewAuthorizationIntrospectionHandler(oauth2Provider, configuration, log, dataStore, secretManager, privilegedClientSecrets, &accessTokenToIssuerStateMap)
 	revokeHandler = handlers.NewRevokeHandler(oauth2Provider, log)
