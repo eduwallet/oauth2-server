@@ -33,6 +33,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 ### 🔧 Dynamic Client Registration (RFC 7591)
 - Programmatic client registration at runtime via API
 - Specify `audience` during registration
+- Control login UX with `force_authentication` and `force_consent` flags per client
 
 ### ♻️ Refresh Tokens
 - Configurable token lifespans per token type
@@ -121,7 +122,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - **Trust Anchor Management**: Dynamic upload and management of X.509 trust anchor certificates for attestation validation
 - **OpenID 4 Verifiable Credentials**: Full `issuer_state` parameter support for verifiable credential issuance flows
 - **Security**: JWT-based tokens, PKCE, HTTPS, proxy-aware, rate limiting, CORS
-- **Management**: Dynamic client registration via API (with audience support and attestation configuration)
+- **Management**: Dynamic client registration via API (with audience support, force authentication/consent flags, and attestation configuration)
 - **Token Introspection**: `/introspect` endpoint returns all standard fields, including `aud` as a JSON array and attestation metadata for attested clients
 - **Token Statistics**: `/token/stats` endpoint provides statistics about issued, active, revoked, and expired tokens
 
