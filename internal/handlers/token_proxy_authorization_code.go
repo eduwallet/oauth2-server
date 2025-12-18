@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -298,17 +300,20 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 
 	// Extract ID token if available
 	var idToken string
-	if it := accessResponse.GetExtra("id_token"); it != nil {
+	if upstreamIDToken != "" {
+		rewritten, err := h.rewriteUpstreamIDToken(ctx, upstreamIDToken, accessRequest, accessToken, r.FormValue("code"))
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-AUTH-CODE] Failed to rewrite upstream id_token: %v", err)
+			http.Error(w, "failed to rewrite upstream id_token", http.StatusBadGateway)
+			return
+		}
+		idToken = rewritten
+		h.Log.Printf("✅ [PROXY-AUTH-CODE] Reissued upstream ID token with local signer")
+	} else if it := accessResponse.GetExtra("id_token"); it != nil {
 		if itStr, ok := it.(string); ok {
 			idToken = itStr
 			h.Log.Printf("✅ [PROXY-AUTH-CODE] Generated proxy ID token")
 		}
-	}
-
-	// If fosite did not generate an ID token but upstream returned one, forward it
-	if idToken == "" && upstreamIDToken != "" {
-		idToken = upstreamIDToken
-		h.Log.Printf("ℹ️ [PROXY-AUTH-CODE] Forwarding upstream ID token as proxy id_token")
 	}
 
 	// If OpenID was requested but we still have no ID token, return an error
@@ -423,6 +428,118 @@ func (h *TokenHandler) handleProxyAuthorizationCode(w http.ResponseWriter, r *ht
 	}
 
 	h.Log.Infof("✅ [PROXY-AUTH-CODE] Successfully created proxy tokens for client %s", clientID)
+}
+
+func (h *TokenHandler) rewriteUpstreamIDToken(ctx context.Context, upstreamIDToken string, accessRequest fosite.AccessRequester, proxyAccessToken string, authCode string) (string, error) {
+	if upstreamIDToken == "" {
+		return "", nil
+	}
+
+	if h.Signer == nil || h.Signer.GetPrivateKey == nil {
+		return "", fmt.Errorf("no signer configured to reissue id_token")
+	}
+
+	claims := gjwt.MapClaims{}
+	parser := gjwt.NewParser()
+	if _, _, err := parser.ParseUnverified(upstreamIDToken, claims); err != nil {
+		return "", fmt.Errorf("failed to parse upstream id_token: %w", err)
+	}
+
+	clientID := accessRequest.GetClient().GetID()
+	claims["iss"] = h.Configuration.PublicBaseURL
+	claims["azp"] = clientID
+
+	switch claims["aud"].(type) {
+	case string:
+		claims["aud"] = clientID
+	case []interface{}:
+		claims["aud"] = []string{clientID}
+	case []string:
+		claims["aud"] = []string{clientID}
+	default:
+		claims["aud"] = clientID
+	}
+
+	now := time.Now().UTC()
+	claims["iat"] = float64(now.Unix())
+
+	expirySeconds := h.Configuration.Security.TokenExpirySeconds
+	if expirySeconds <= 0 {
+		expirySeconds = 3600
+	}
+	desiredExpiry := now.Add(time.Duration(expirySeconds) * time.Second).Unix()
+	upstreamExp := int64(0)
+	switch val := claims["exp"].(type) {
+	case float64:
+		upstreamExp = int64(val)
+	case int64:
+		upstreamExp = val
+	case json.Number:
+		if parsed, err := val.Int64(); err == nil {
+			upstreamExp = parsed
+		}
+	}
+	if upstreamExp > 0 && upstreamExp < desiredExpiry {
+		claims["exp"] = float64(upstreamExp)
+	} else {
+		claims["exp"] = float64(desiredExpiry)
+	}
+
+	if _, ok := claims["auth_time"]; !ok {
+		claims["auth_time"] = float64(now.Unix())
+	} else {
+		switch claims["auth_time"].(type) {
+		case float64, int64, json.Number:
+		default:
+			claims["auth_time"] = float64(now.Unix())
+		}
+	}
+
+	if sess, ok := accessRequest.GetSession().(*openid.DefaultSession); ok {
+		if sess != nil && sess.Claims != nil && sess.Claims.Extra != nil {
+			if nonce, ok := sess.Claims.Extra["nonce"].(string); ok && nonce != "" {
+				claims["nonce"] = nonce
+			}
+		}
+	}
+
+	if proxyAccessToken != "" {
+		claims["at_hash"] = computeOIDCHash(proxyAccessToken)
+	} else {
+		delete(claims, "at_hash")
+	}
+
+	if authCode != "" {
+		claims["c_hash"] = computeOIDCHash(authCode)
+	} else {
+		delete(claims, "c_hash")
+	}
+
+	priv, err := h.Signer.GetPrivateKey(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get private key for id_token: %w", err)
+	}
+
+	token := gjwt.NewWithClaims(gjwt.SigningMethodRS256, claims)
+	if kid, err := utils.ComputeKIDFromKey(priv); err == nil && kid != "" {
+		token.Header["kid"] = kid
+	}
+
+	signed, err := token.SignedString(priv)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign rewritten id_token: %w", err)
+	}
+
+	return signed, nil
+}
+
+func computeOIDCHash(value string) string {
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	half := sum[:len(sum)/2]
+	return base64.RawURLEncoding.EncodeToString(half)
 }
 
 // buildSyntheticIDToken constructs and signs an ID token when upstream omitted it.

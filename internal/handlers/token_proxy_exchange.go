@@ -451,6 +451,24 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 		}
 	}
 
+	// Prepare ID token if available
+	var idToken string
+	if upstreamIDToken != "" {
+		rewritten, err := h.rewriteUpstreamIDToken(ctx, upstreamIDToken, accessRequest, accessToken, "")
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-TOKEN-EXCHANGE] Failed to rewrite upstream id_token: %v", err)
+			http.Error(w, "failed to rewrite upstream id_token", http.StatusBadGateway)
+			return
+		}
+		idToken = rewritten
+		h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Reissued upstream ID token with local signer")
+	} else if it := accessResponse.GetExtra("id_token"); it != nil {
+		if itStr, ok := it.(string); ok {
+			idToken = itStr
+			h.Log.Printf("✅ [PROXY-TOKEN-EXCHANGE] Generated proxy ID token")
+		}
+	}
+
 	// Store mapping from proxy tokens to upstream tokens
 	if h.AccessTokenToIssuerStateMap == nil {
 		h.AccessTokenToIssuerStateMap = &map[string]string{}
@@ -547,6 +565,9 @@ func (h *TokenHandler) createProxyTokensForTokenExchange(w http.ResponseWriter, 
 		}
 		if refreshToken != "" {
 			proxyResponse["refresh_token"] = refreshToken
+		}
+		if idToken != "" {
+			proxyResponse["id_token"] = idToken
 		}
 	}
 

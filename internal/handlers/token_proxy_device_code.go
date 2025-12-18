@@ -148,8 +148,11 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 
 	h.Log.Infof("✅ [PROXY-DEVICE] Successfully received upstream access token (length: %d)", len(upstreamAccessToken))
 
+	upstreamRefreshToken, _ := upstreamTokenResp["refresh_token"].(string)
+	upstreamIDToken, _ := upstreamTokenResp["id_token"].(string)
+
 	// Determine if we should issue refresh token
-	issueRefreshToken := strings.Contains(scope, "offline_access")
+	issueRefreshToken := strings.Contains(scope, "offline_access") || upstreamRefreshToken != ""
 	h.Log.Infof("🔍 [PROXY-DEVICE] Scope: %s, issueRefreshToken: %t", scope, issueRefreshToken)
 
 	// Get client
@@ -173,14 +176,11 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 	// Store upstream token mapping in session
 	upstreamTokens := map[string]interface{}{
 		"access_token":  upstreamAccessToken,
-		"refresh_token": "", // Will be set if available from upstream
-		"id_token":      "",
-		"expires_in":    3600,
+		"refresh_token": upstreamRefreshToken,
+		"id_token":      upstreamIDToken,
+		"expires_in":    upstreamTokenResp["expires_in"],
 		"scope":         scope,
-		"token_type":    "Bearer",
-	}
-	if rt, ok := upstreamTokenResp["refresh_token"].(string); ok && rt != "" {
-		upstreamTokens["refresh_token"] = rt
+		"token_type":    upstreamTokenResp["token_type"],
 	}
 	proxySession.Claims.Extra["upstream_tokens"] = upstreamTokens
 
@@ -272,6 +272,42 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 		h.Log.Infof("ℹ️ [PROXY-DEVICE] Not issuing refresh token")
 	}
 
+	// Prepare ID token if available
+	var idToken string
+	if upstreamIDToken != "" {
+		rewritten, err := h.rewriteUpstreamIDToken(ctx, upstreamIDToken, accessRequest, accessToken, "")
+		if err != nil {
+			h.Log.Errorf("❌ [PROXY-DEVICE] Failed to rewrite upstream id_token: %v", err)
+			http.Error(w, "failed to rewrite upstream id_token", http.StatusBadGateway)
+			return
+		}
+		idToken = rewritten
+		h.Log.Printf("✅ [PROXY-DEVICE] Reissued upstream ID token with local signer")
+	} else if it := accessResponse.GetExtra("id_token"); it != nil {
+		if itStr, ok := it.(string); ok {
+			idToken = itStr
+			h.Log.Printf("✅ [PROXY-DEVICE] Generated proxy ID token")
+		}
+	}
+
+	wantsIDToken := accessRequest.GetGrantedScopes().Has("openid")
+	if wantsIDToken && idToken == "" {
+		if h.Configuration.Security.AllowSyntheticIDToken {
+			synth, err := h.buildSyntheticIDToken(ctx, accessRequest, upstreamAccessToken)
+			if err != nil {
+				h.Log.Errorf("❌ [PROXY-DEVICE] Failed to build synthetic id_token: %v", err)
+				http.Error(w, "failed to build id_token", http.StatusBadGateway)
+				return
+			}
+			idToken = synth
+			h.Log.Printf("ℹ️ [PROXY-DEVICE] Issued synthetic id_token because upstream omitted it")
+		} else {
+			h.Log.Errorf("❌ [PROXY-DEVICE] Upstream did not return id_token while openid was requested")
+			http.Error(w, "upstream did not return id_token", http.StatusBadGateway)
+			return
+		}
+	}
+
 	// Store mapping from proxy tokens to upstream tokens
 	if h.AccessTokenToIssuerStateMap == nil {
 		h.AccessTokenToIssuerStateMap = &map[string]string{}
@@ -306,6 +342,10 @@ func (h *TokenHandler) createProxyTokensForDeviceCode(w http.ResponseWriter, r *
 
 	if refreshToken != "" {
 		proxyResponse["refresh_token"] = refreshToken
+	}
+
+	if idToken != "" {
+		proxyResponse["id_token"] = idToken
 	}
 
 	w.Header().Set("Content-Type", "application/json")
