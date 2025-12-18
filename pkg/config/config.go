@@ -197,6 +197,8 @@ type ClientConfig struct {
 	ResponseTypes           []string                 `yaml:"response_types"`
 	Scopes                  []string                 `yaml:"scopes"`
 	Claims                  []string                 `yaml:"claims"`
+	ForceAuthentication     bool                     `yaml:"force_authentication" json:"force_authentication,omitempty"`
+	ForceConsent            bool                     `yaml:"force_consent" json:"force_consent,omitempty"`
 	Audience                []string                 `yaml:"audience"`
 	TokenEndpointAuthMethod string                   `yaml:"token_endpoint_auth_method"`
 	Public                  bool                     `yaml:"public"`

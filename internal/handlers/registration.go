@@ -323,7 +323,9 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 			Audience:      audience,
 			Public:        isPublic,
 		},
-		Claims: claims,
+		Claims:              claims,
+		ForceAuthentication: metadata.ForceAuthentication,
+		ForceConsent:        metadata.ForceConsent,
 	}
 	h.log.Printf("✅ [REGISTRATION] store.CustomClient created successfully")
 	h.log.Printf("🔍 [REGISTRATION] Client details: ID=%s, Public=%v, GrantTypes=%v, ResponseTypes=%v, Scopes=%v, Claims=%v, Audience=%v",
@@ -414,6 +416,8 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 		Jwks:                    metadata.Jwks,
 		SoftwareID:              metadata.SoftwareID,
 		SoftwareVersion:         metadata.SoftwareVersion,
+		ForceAuthentication:     metadata.ForceAuthentication,
+		ForceConsent:            metadata.ForceConsent,
 		Audience:                audience,
 		AttestationConfig:       finalAttestationConfig,
 		Public:                  isPublic,

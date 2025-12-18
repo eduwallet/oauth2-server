@@ -25,12 +25,16 @@ STEP1_PASS=false
 STEP2_PASS=false
 STEP3_PASS=false
 STEP4_PASS=false
+STEP5_PASS=false
+STEP6_PASS=false
 
 # Function to register a confidential client
 register_confidential_client() {
     local client_name="$1"
     local grant_types="$2"
     local scopes="$3"
+    local force_auth="${4:-false}"
+    local force_consent="${5:-false}"
 
     echo "📝 Registering confidential client: $client_name..." >&2
 
@@ -40,7 +44,9 @@ register_confidential_client() {
         \"response_types\": [\"code\"],
         \"token_endpoint_auth_method\": \"client_secret_basic\",
         \"scope\": \"$scopes\",
-           \"redirect_uris\": [\"${BASE_URL}/callback\"]
+        \"redirect_uris\": [\"${BASE_URL}/callback\"],
+        \"force_authentication\": $force_auth,
+        \"force_consent\": $force_consent
     }"
 
     local registration_response=$(curl -s -X POST "$BASE_URL/register" \
@@ -53,13 +59,21 @@ register_confidential_client() {
     # Extract client credentials
     local client_id=""
     local client_secret=""
+    local force_authentication="$force_auth"
+    local force_consent_flag="$force_consent"
 
     if command -v jq >/dev/null 2>&1; then
         client_id=$(echo "$registration_response" | jq -r '.client_id // empty')
         client_secret=$(echo "$registration_response" | jq -r '.client_secret // empty')
+        force_authentication=$(echo "$registration_response" | jq -r '.force_authentication // false')
+        force_consent_flag=$(echo "$registration_response" | jq -r '.force_consent // false')
     else
         client_id=$(echo "$registration_response" | grep -o '"client_id":"[^"]*"' | sed 's/"client_id":"\([^"]*\)"/\1/')
         client_secret=$(echo "$registration_response" | grep -o '"client_secret":"[^"]*"' | sed 's/"client_secret":"\([^"]*\)"/\1/')
+        force_authentication=$(echo "$registration_response" | grep -o '"force_authentication":[^,}]*' | head -1 | sed 's/.*:\(true\|false\).*/\1/')
+        force_consent_flag=$(echo "$registration_response" | grep -o '"force_consent":[^,}]*' | head -1 | sed 's/.*:\(true\|false\).*/\1/')
+        [ -z "$force_authentication" ] && force_authentication=false
+        [ -z "$force_consent_flag" ] && force_consent_flag=false
     fi
 
     if [ -z "$client_id" ] || [ "$client_id" = "null" ]; then
@@ -71,9 +85,11 @@ register_confidential_client() {
     echo "✅ Client registered successfully" >&2
     echo "   Client ID: ${client_id:0:20}..." >&2
     echo "   Client Secret: ${client_secret:0:10}..." >&2
+    echo "   Force Authentication: $force_authentication" >&2
+    echo "   Force Consent: $force_consent_flag" >&2
 
     # Return client credentials as JSON
-    echo "{\"client_id\":\"$client_id\",\"client_secret\":\"$client_secret\"}"
+    printf '{"client_id":"%s","client_secret":"%s","force_authentication":%s,"force_consent":%s}\n' "$client_id" "$client_secret" "$force_authentication" "$force_consent_flag"
 }
 
 # Function to register a public client
@@ -81,6 +97,8 @@ register_public_client() {
     local client_name="$1"
     local grant_types="$2"
     local scopes="$3"
+    local force_auth="${4:-false}"
+    local force_consent="${5:-false}"
 
     echo "📱 Registering public client: $client_name..." >&2
 
@@ -90,7 +108,9 @@ register_public_client() {
         \"response_types\": [\"code\"],
         \"token_endpoint_auth_method\": \"none\",
         \"scope\": \"$scopes\",
-           \"redirect_uris\": [\"${BASE_URL}/callback\"]
+        \"redirect_uris\": [\"${BASE_URL}/callback\"],
+        \"force_authentication\": $force_auth,
+        \"force_consent\": $force_consent
     }"
 
     local registration_response=$(curl -s -X POST "$BASE_URL/register" \
@@ -103,13 +123,21 @@ register_public_client() {
     # Extract client credentials
     local client_id=""
     local client_secret=""
+    local force_authentication="$force_auth"
+    local force_consent_flag="$force_consent"
 
     if command -v jq >/dev/null 2>&1; then
         client_id=$(echo "$registration_response" | jq -r '.client_id // empty')
         client_secret=$(echo "$registration_response" | jq -r '.client_secret // empty')
+        force_authentication=$(echo "$registration_response" | jq -r '.force_authentication // false')
+        force_consent_flag=$(echo "$registration_response" | jq -r '.force_consent // false')
     else
         client_id=$(echo "$registration_response" | grep -o '"client_id":"[^"]*"' | sed 's/"client_id":"\([^"]*\)"/\1/')
         client_secret=$(echo "$registration_response" | grep -o '"client_secret":"[^"]*"' | sed 's/"client_secret":"\([^"]*\)"/\1/')
+        force_authentication=$(echo "$registration_response" | grep -o '"force_authentication":[^,}]*' | head -1 | sed 's/.*:\(true\|false\).*/\1/')
+        force_consent_flag=$(echo "$registration_response" | grep -o '"force_consent":[^,}]*' | head -1 | sed 's/.*:\(true\|false\).*/\1/')
+        [ -z "$force_authentication" ] && force_authentication=false
+        [ -z "$force_consent_flag" ] && force_consent_flag=false
     fi
 
     if [ -z "$client_id" ] || [ "$client_id" = "null" ]; then
@@ -121,9 +149,11 @@ register_public_client() {
     echo "✅ Public client registered successfully" >&2
     echo "   Client ID: ${client_id:0:20}..." >&2
     echo "   Client Secret: (none - public client)" >&2
+    echo "   Force Authentication: $force_authentication" >&2
+    echo "   Force Consent: $force_consent_flag" >&2
 
     # Return client credentials as JSON
-    echo "{\"client_id\":\"$client_id\",\"client_secret\":\"$client_secret\"}"
+    printf '{"client_id":"%s","client_secret":"%s","force_authentication":%s,"force_consent":%s}\n' "$client_id" "$client_secret" "$force_authentication" "$force_consent_flag"
 }
 
 # Function to URL encode a string
@@ -302,7 +332,7 @@ test_client_credentials_flow() {
 
 # Step 1: Register a confidential client
 echo "🧪 Step 1: Registering confidential client"
-CONFIDENTIAL_CLIENT_DATA=$(register_confidential_client "Test Confidential Client" "[\"authorization_code\", \"refresh_token\"]" "$TEST_SCOPE")
+CONFIDENTIAL_CLIENT_DATA=$(register_confidential_client "Test Confidential Client" "[\"authorization_code\", \"refresh_token\"]" "$TEST_SCOPE" "false" "false")
 
 if [ $? -ne 0 ]; then
     echo "❌ Step 1 FAILED - Could not register confidential client"
@@ -332,7 +362,7 @@ STEP2_PASS=true
 # Step 3: Register a public client
 echo ""
 echo "🧪 Step 3: Registering public client"
-PUBLIC_CLIENT_DATA=$(register_public_client "Test Public Client" "[\"authorization_code\"]" "$TEST_SCOPE")
+PUBLIC_CLIENT_DATA=$(register_public_client "Test Public Client" "[\"authorization_code\"]" "$TEST_SCOPE" "false" "false")
 
 if [ $? -ne 0 ]; then
     echo "❌ Step 3 FAILED - Could not register public client"
@@ -359,6 +389,120 @@ else
     STEP4_PASS=true
 fi
 
+# Step 5: Register a confidential client with force authentication
+echo ""
+echo "🧪 Step 5: Registering client with force authentication"
+FORCED_AUTH_CLIENT_DATA=$(register_confidential_client "Forced Auth Client" "[\"authorization_code\"]" "$TEST_SCOPE" "true" "false")
+
+if [ $? -ne 0 ]; then
+    echo "❌ Step 5 FAILED - Could not register forced-auth client"
+    exit 1
+fi
+
+if command -v jq >/dev/null 2>&1; then
+    FORCED_AUTH_CLIENT_ID=$(echo "$FORCED_AUTH_CLIENT_DATA" | jq -r '.client_id // empty')
+    FORCED_AUTH_FLAG=$(echo "$FORCED_AUTH_CLIENT_DATA" | jq -r '.force_authentication // false')
+    FORCED_AUTH_CONSENT_FLAG=$(echo "$FORCED_AUTH_CLIENT_DATA" | jq -r '.force_consent // false')
+else
+    FORCED_AUTH_CLIENT_ID=$(echo "$FORCED_AUTH_CLIENT_DATA" | sed 's/.*"client_id":"\([^"\\]*\)".*/\1/')
+    FORCED_AUTH_FLAG=$(echo "$FORCED_AUTH_CLIENT_DATA" | sed 's/.*"force_authentication":\(true\|false\).*/\1/')
+    FORCED_AUTH_CONSENT_FLAG=$(echo "$FORCED_AUTH_CLIENT_DATA" | sed 's/.*"force_consent":\(true\|false\).*/\1/')
+    [ -z "$FORCED_AUTH_FLAG" ] && FORCED_AUTH_FLAG=false
+    [ -z "$FORCED_AUTH_CONSENT_FLAG" ] && FORCED_AUTH_CONSENT_FLAG=false
+fi
+
+if [ "$FORCED_AUTH_FLAG" != "true" ] || [ "$FORCED_AUTH_CONSENT_FLAG" != "false" ]; then
+    echo "❌ Step 5 FAILED - Registration response did not reflect force_authentication true / force_consent false"
+    exit 1
+fi
+
+if [ -z "$FORCED_AUTH_CLIENT_ID" ]; then
+    echo "❌ Step 5 FAILED - Missing client_id in registration response"
+    exit 1
+fi
+
+FORCED_AUTH_CLIENT_RESPONSE=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/clients/$FORCED_AUTH_CLIENT_ID")
+
+if ! echo "$FORCED_AUTH_CLIENT_RESPONSE" | grep -q '"client_id"'; then
+    echo "❌ Step 5 FAILED - Could not retrieve forced-auth client details"
+    exit 1
+fi
+
+if command -v jq >/dev/null 2>&1; then
+    FORCED_AUTH_STORED_FLAG=$(echo "$FORCED_AUTH_CLIENT_RESPONSE" | jq -r '.force_authentication // false')
+    FORCED_AUTH_STORED_CONSENT=$(echo "$FORCED_AUTH_CLIENT_RESPONSE" | jq -r '.force_consent // false')
+else
+    FORCED_AUTH_STORED_FLAG=$(echo "$FORCED_AUTH_CLIENT_RESPONSE" | sed 's/.*"force_authentication":\(true\|false\).*/\1/')
+    FORCED_AUTH_STORED_CONSENT=$(echo "$FORCED_AUTH_CLIENT_RESPONSE" | sed 's/.*"force_consent":\(true\|false\).*/\1/')
+    [ -z "$FORCED_AUTH_STORED_FLAG" ] && FORCED_AUTH_STORED_FLAG=false
+    [ -z "$FORCED_AUTH_STORED_CONSENT" ] && FORCED_AUTH_STORED_CONSENT=false
+fi
+
+if [ "$FORCED_AUTH_STORED_FLAG" != "true" ] || [ "$FORCED_AUTH_STORED_CONSENT" != "false" ]; then
+    echo "❌ Step 5 FAILED - Stored client flags incorrect"
+    exit 1
+fi
+
+echo "✅ Step 5 PASSED - Forced authentication flag persisted correctly"
+STEP5_PASS=true
+
+# Step 6: Register a public client with force consent
+echo ""
+echo "🧪 Step 6: Registering client with force consent"
+FORCED_CONSENT_CLIENT_DATA=$(register_public_client "Forced Consent Client" "[\"authorization_code\"]" "$TEST_SCOPE" "false" "true")
+
+if [ $? -ne 0 ]; then
+    echo "❌ Step 6 FAILED - Could not register forced-consent client"
+    exit 1
+fi
+
+if command -v jq >/dev/null 2>&1; then
+    FORCED_CONSENT_CLIENT_ID=$(echo "$FORCED_CONSENT_CLIENT_DATA" | jq -r '.client_id // empty')
+    FORCED_CONSENT_AUTH_FLAG=$(echo "$FORCED_CONSENT_CLIENT_DATA" | jq -r '.force_authentication // false')
+    FORCED_CONSENT_FLAG=$(echo "$FORCED_CONSENT_CLIENT_DATA" | jq -r '.force_consent // false')
+else
+    FORCED_CONSENT_CLIENT_ID=$(echo "$FORCED_CONSENT_CLIENT_DATA" | sed 's/.*"client_id":"\([^"\\]*\)".*/\1/')
+    FORCED_CONSENT_AUTH_FLAG=$(echo "$FORCED_CONSENT_CLIENT_DATA" | sed 's/.*"force_authentication":\(true\|false\).*/\1/')
+    FORCED_CONSENT_FLAG=$(echo "$FORCED_CONSENT_CLIENT_DATA" | sed 's/.*"force_consent":\(true\|false\).*/\1/')
+    [ -z "$FORCED_CONSENT_AUTH_FLAG" ] && FORCED_CONSENT_AUTH_FLAG=false
+    [ -z "$FORCED_CONSENT_FLAG" ] && FORCED_CONSENT_FLAG=false
+fi
+
+if [ "$FORCED_CONSENT_AUTH_FLAG" != "false" ] || [ "$FORCED_CONSENT_FLAG" != "true" ]; then
+    echo "❌ Step 6 FAILED - Registration response did not reflect force_consent true"
+    exit 1
+fi
+
+if [ -z "$FORCED_CONSENT_CLIENT_ID" ]; then
+    echo "❌ Step 6 FAILED - Missing client_id in registration response"
+    exit 1
+fi
+
+FORCED_CONSENT_CLIENT_RESPONSE=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/clients/$FORCED_CONSENT_CLIENT_ID")
+
+if ! echo "$FORCED_CONSENT_CLIENT_RESPONSE" | grep -q '"client_id"'; then
+    echo "❌ Step 6 FAILED - Could not retrieve forced-consent client details"
+    exit 1
+fi
+
+if command -v jq >/dev/null 2>&1; then
+    FORCED_CONSENT_STORED_AUTH=$(echo "$FORCED_CONSENT_CLIENT_RESPONSE" | jq -r '.force_authentication // false')
+    FORCED_CONSENT_STORED_FLAG=$(echo "$FORCED_CONSENT_CLIENT_RESPONSE" | jq -r '.force_consent // false')
+else
+    FORCED_CONSENT_STORED_AUTH=$(echo "$FORCED_CONSENT_CLIENT_RESPONSE" | sed 's/.*"force_authentication":\(true\|false\).*/\1/')
+    FORCED_CONSENT_STORED_FLAG=$(echo "$FORCED_CONSENT_CLIENT_RESPONSE" | sed 's/.*"force_consent":\(true\|false\).*/\1/')
+    [ -z "$FORCED_CONSENT_STORED_AUTH" ] && FORCED_CONSENT_STORED_AUTH=false
+    [ -z "$FORCED_CONSENT_STORED_FLAG" ] && FORCED_CONSENT_STORED_FLAG=false
+fi
+
+if [ "$FORCED_CONSENT_STORED_AUTH" != "false" ] || [ "$FORCED_CONSENT_STORED_FLAG" != "true" ]; then
+    echo "❌ Step 6 FAILED - Stored client consent flag incorrect"
+    exit 1
+fi
+
+echo "✅ Step 6 PASSED - Forced consent flag persisted correctly"
+STEP6_PASS=true
+
 # Summary
 echo ""
 echo "📊 Client Registration Test Results Summary"
@@ -367,9 +511,11 @@ echo "Step 1 (Confidential client registration): $([ "$STEP1_PASS" = true ] && e
 echo "Step 2 (Confidential client auth flow): $([ "$STEP2_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 echo "Step 3 (Public client registration): $([ "$STEP3_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 echo "Step 4 (Public client auth flow): $([ "$STEP4_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
+echo "Step 5 (Force authentication registration): $([ "$STEP5_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
+echo "Step 6 (Force consent registration): $([ "$STEP6_PASS" = true ] && echo "✅ PASS" || echo "❌ FAIL")"
 
 # Overall result
-if [ "$STEP1_PASS" = true ] && [ "$STEP2_PASS" = true ] && [ "$STEP3_PASS" = true ] && [ "$STEP4_PASS" = true ]; then
+if [ "$STEP1_PASS" = true ] && [ "$STEP2_PASS" = true ] && [ "$STEP3_PASS" = true ] && [ "$STEP4_PASS" = true ] && [ "$STEP5_PASS" = true ] && [ "$STEP6_PASS" = true ]; then
     echo ""
     echo "🎉 All client registration tests PASSED!"
     echo "   ✅ RFC 7591 Dynamic Client Registration working correctly"

@@ -508,7 +508,9 @@ func initializeClients() error {
 				Audience:      client.Audience,
 				Public:        client.Public,
 			},
-			Claims: client.Claims,
+			Claims:              client.Claims,
+			ForceAuthentication: client.ForceAuthentication,
+			ForceConsent:        client.ForceConsent,
 		}
 
 		customStorage.Clients[client.ID] = newClient

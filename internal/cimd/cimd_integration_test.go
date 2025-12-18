@@ -27,8 +27,11 @@ func TestRegisterClientFromMetadata(t *testing.T) {
 	meta = fmt.Sprintf(`{"client_id":"%s","redirect_uris":["%s/cb"],"grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none","scope":"openid profile"}`, srv.URL, srv.URL)
 	defer srv.Close()
 
-	cfg := &config.Config{}
-	cfg.CIMD.HttpPermitted = true // allow http for test server if needed
+	cfg := &config.Config{
+		CIMD: &config.CIMDConfig{
+			HttpPermitted: true, // allow http for test server if needed
+		},
+	}
 
 	// Use memory store wrapper
 	mem := storage.NewMemoryStore()

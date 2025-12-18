@@ -518,6 +518,11 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	}
 	h.Log.Printf("✅ [PROXY-AUTH] Client validation passed")
 
+	var customClient *store.CustomClient
+	if cc, ok := client.(*store.CustomClient); ok {
+		customClient = cc
+	}
+
 	originalState := q.Get("state")
 	originalNonce := q.Get("nonce")
 	originalIssuerState := q.Get("issuer_state")
@@ -561,13 +566,11 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	var upstreamClaims string
 	if claimsParam == "" {
 		// No claims provided, use client's registered claims
-		if client, err := h.Storage.GetClient(r.Context(), clientID); err == nil {
-			if customClient, ok := client.(*store.CustomClient); ok {
-				clientClaims := customClient.GetClaims()
-				if len(clientClaims) > 0 {
-					upstreamClaims = h.buildClaimsJSON(clientClaims)
-					h.Log.Printf("🔍 [PROXY-AUTH] No claims provided, using client's registered claims: %s", upstreamClaims)
-				}
+		if customClient != nil {
+			clientClaims := customClient.GetClaims()
+			if len(clientClaims) > 0 {
+				upstreamClaims = h.buildClaimsJSON(clientClaims)
+				h.Log.Printf("🔍 [PROXY-AUTH] No claims provided, using client's registered claims: %s", upstreamClaims)
 			}
 		}
 	} else {
@@ -627,6 +630,43 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	} else {
 		// No allowed scopes registered; pass through requested scopes as-is
 		vals.Set("scope", strings.Join(requestedScopes, " "))
+	}
+
+	existingPrompt := q.Get("prompt")
+	if (customClient != nil && (customClient.ForceAuthentication || customClient.ForceConsent)) || existingPrompt != "" {
+		seen := make(map[string]struct{})
+		promptValues := make([]string, 0, 3)
+
+		appendPrompt := func(value string) {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return
+			}
+			if _, ok := seen[value]; ok {
+				return
+			}
+			seen[value] = struct{}{}
+			promptValues = append(promptValues, value)
+		}
+
+		if customClient != nil {
+			if customClient.ForceAuthentication {
+				appendPrompt("login")
+			}
+			if customClient.ForceConsent {
+				appendPrompt("consent")
+			}
+		}
+
+		for _, token := range strings.Fields(existingPrompt) {
+			appendPrompt(token)
+		}
+
+		if len(promptValues) > 0 {
+			promptValue := strings.Join(promptValues, " ")
+			vals.Set("prompt", promptValue)
+			h.Log.Printf("🔍 [PROXY-AUTH] Applied prompt parameter: %s", promptValue)
+		}
 	}
 
 	vals.Set("state", proxyState)

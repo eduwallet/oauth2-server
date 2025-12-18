@@ -24,7 +24,9 @@ import (
 // CustomClient extends fosite.DefaultClient with claims support
 type CustomClient struct {
 	*fosite.DefaultClient
-	Claims []string `json:"claims,omitempty"`
+	Claims              []string `json:"claims,omitempty"`
+	ForceAuthentication bool     `json:"force_authentication,omitempty"`
+	ForceConsent        bool     `json:"force_consent,omitempty"`
 	// CIMD fields
 	MetadataDocumentLocation     string `json:"metadata_document_location,omitempty"`
 	MetadataDocumentExpiresAt    int64  `json:"metadata_document_expires_at,omitempty"`

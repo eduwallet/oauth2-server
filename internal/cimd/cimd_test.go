@@ -16,8 +16,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+func newTestConfig() *config.Config {
+	return &config.Config{CIMD: &config.CIMDConfig{}}
+}
+
 func TestIsCIMDClientID(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := newTestConfig()
 
 	valid := "https://example.com/client.json"
 	if !IsCIMDClientID(valid, cfg) {
@@ -47,7 +51,7 @@ func TestAllowlistEnforcement(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &config.Config{}
+	cfg := newTestConfig()
 	cfg.CIMD.AllowlistEnabled = true
 	cfg.CIMD.Allowlist = []string{"example.com"} // not matching srv host
 
@@ -68,7 +72,7 @@ func TestMetadataPolicyEnforcement(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &config.Config{}
+	cfg := newTestConfig()
 	cfg.CIMD.HttpPermitted = true
 	cfg.CIMD.MetadataPolicyEnabled = true
 	cfg.CIMD.MetadataPolicy = "required_fields:redirect_uris"
@@ -95,7 +99,7 @@ func TestCachingBehavior(t *testing.T) {
 	// initial metadata
 	current = fmt.Sprintf(`{"client_id":"%s","redirect_uris":["%s/cb"]}`, srv.URL, srv.URL)
 
-	cfg := &config.Config{}
+	cfg := newTestConfig()
 	cfg.CIMD.HttpPermitted = true
 
 	mem := storage.NewMemoryStore()
@@ -132,7 +136,7 @@ func TestRateLimiting(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &config.Config{}
+	cfg := newTestConfig()
 	cfg.CIMD.HttpPermitted = true
 
 	// fill fetch history to simulate hitting limit
@@ -168,8 +172,7 @@ func TestRateLimitingConfig(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &config.Config{}
-	cfg.CIMD = &config.CIMDConfig{}
+	cfg := newTestConfig()
 	cfg.CIMD.HttpPermitted = true
 	cfg.CIMD.AlwaysRetrieved = true
 	cfg.CIMD.FetchLimit = 2

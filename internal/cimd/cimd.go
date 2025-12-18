@@ -24,16 +24,26 @@ var (
 	// Default fetch limits when not configured: 60 requests per minute
 	defaultFetchLimit  = 60
 	defaultFetchWindow = time.Minute
+
+	defaultCIMDConfig = &config.CIMDConfig{}
 )
+
+func getCIMDConfig(cfg *config.Config) *config.CIMDConfig {
+	if cfg != nil && cfg.CIMD != nil {
+		return cfg.CIMD
+	}
+	return defaultCIMDConfig
+}
 
 // IsCIMDClientID returns true if the provided client_id looks like a CIMD URL
 func IsCIMDClientID(id string, cfg *config.Config) bool {
+	cimdCfg := getCIMDConfig(cfg)
 	u, err := url.Parse(id)
 	if err != nil {
 		return false
 	}
 	// Scheme must be https unless HttpPermitted is true
-	if u.Scheme != "https" && !(cfg.CIMD.HttpPermitted && u.Scheme == "http") {
+	if u.Scheme != "https" && !(cimdCfg.HttpPermitted && u.Scheme == "http") {
 		return false
 	}
 	if u.Path == "" || u.Path == "/" {
@@ -42,7 +52,7 @@ func IsCIMDClientID(id string, cfg *config.Config) bool {
 	if u.User != nil || u.Fragment != "" {
 		return false
 	}
-	if u.RawQuery != "" && !cfg.CIMD.QueryPermitted {
+	if u.RawQuery != "" && !cimdCfg.QueryPermitted {
 		return false
 	}
 	// no . or .. segments
@@ -126,11 +136,12 @@ func FetchMetadata(ctx context.Context, location string) (map[string]interface{}
 
 // isHostAllowlisted checks if the host is allowed by allowlist when enabled
 func isHostAllowlisted(u *url.URL, cfg *config.Config) bool {
-	if !cfg.CIMD.AllowlistEnabled || len(cfg.CIMD.Allowlist) == 0 {
+	cimdCfg := getCIMDConfig(cfg)
+	if !cimdCfg.AllowlistEnabled || len(cimdCfg.Allowlist) == 0 {
 		return true
 	}
 	host := u.Hostname()
-	for _, a := range cfg.CIMD.Allowlist {
+	for _, a := range cimdCfg.Allowlist {
 		a = strings.TrimSpace(a)
 		if a == "*" || a == host {
 			return true
@@ -157,13 +168,12 @@ func enforceFetchRateLimit(u *url.URL, cfg *config.Config) error {
 	window := defaultFetchWindow
 	limit := defaultFetchLimit
 	// Use configured values if present
-	if cfg != nil && cfg.CIMD != nil {
-		if cfg.CIMD.FetchWindowSeconds > 0 {
-			window = time.Duration(cfg.CIMD.FetchWindowSeconds) * time.Second
-		}
-		if cfg.CIMD.FetchLimit > 0 {
-			limit = cfg.CIMD.FetchLimit
-		}
+	cimdCfg := getCIMDConfig(cfg)
+	if cimdCfg.FetchWindowSeconds > 0 {
+		window = time.Duration(cimdCfg.FetchWindowSeconds) * time.Second
+	}
+	if cimdCfg.FetchLimit > 0 {
+		limit = cimdCfg.FetchLimit
 	}
 
 	// prune old
@@ -184,11 +194,12 @@ func enforceFetchRateLimit(u *url.URL, cfg *config.Config) error {
 
 // ValidateMetadataPolicy applies any configured metadata policy checks (very small policy language)
 func ValidateMetadataPolicy(meta map[string]interface{}, cfg *config.Config) error {
-	if cfg == nil || !cfg.CIMD.MetadataPolicyEnabled || strings.TrimSpace(cfg.CIMD.MetadataPolicy) == "" {
+	cimdCfg := getCIMDConfig(cfg)
+	if !cimdCfg.MetadataPolicyEnabled || strings.TrimSpace(cimdCfg.MetadataPolicy) == "" {
 		return nil
 	}
 	// policy is semicolon separated list of key:value
-	parts := strings.Split(cfg.CIMD.MetadataPolicy, ";")
+	parts := strings.Split(cimdCfg.MetadataPolicy, ";")
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -345,7 +356,7 @@ func RegisterClientFromMetadata(ctx context.Context, cfg *config.Config, storage
 	// Check existing client and cached metadata expiry
 	if existing, err := storage.GetClient(ctx, location); err == nil {
 		if cc, ok := existing.(*store.CustomClient); ok && cc.DiscoveredByMetadataDocument {
-			if cc.MetadataDocumentExpiresAt > time.Now().Unix() && !cfg.CIMD.AlwaysRetrieved {
+			if cc.MetadataDocumentExpiresAt > time.Now().Unix() && !getCIMDConfig(cfg).AlwaysRetrieved {
 				// Still valid cache; return without fetching
 				return cc, nil
 			}
@@ -358,8 +369,8 @@ func RegisterClientFromMetadata(ctx context.Context, cfg *config.Config, storage
 	}
 
 	// Cap expiry based on configuration
-	if cfg != nil && cfg.CIMD.CacheMaxSeconds > 0 {
-		capT := time.Now().Add(time.Duration(cfg.CIMD.CacheMaxSeconds) * time.Second)
+	if cimdCfg := getCIMDConfig(cfg); cimdCfg.CacheMaxSeconds > 0 {
+		capT := time.Now().Add(time.Duration(cimdCfg.CacheMaxSeconds) * time.Second)
 		if expires.After(capT) {
 			expires = capT
 		}

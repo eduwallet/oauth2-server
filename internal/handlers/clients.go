@@ -29,6 +29,8 @@ type ClientMetadata struct {
 	Jwks                    string                          `json:"jwks,omitempty"`
 	SoftwareID              string                          `json:"software_id,omitempty"`
 	SoftwareVersion         string                          `json:"software_version,omitempty"`
+	ForceAuthentication     bool                            `json:"force_authentication,omitempty"`
+	ForceConsent            bool                            `json:"force_consent,omitempty"`
 	Audience                []string                        `json:"audience,omitempty"`
 	AttestationConfig       *config.ClientAttestationConfig `json:"attestation_config,omitempty"`
 	Public                  bool                            `json:"public,omitempty"`
@@ -58,6 +60,8 @@ type ClientResponse struct {
 	Jwks                    string                          `json:"jwks,omitempty"`
 	SoftwareID              string                          `json:"software_id,omitempty"`
 	SoftwareVersion         string                          `json:"software_version,omitempty"`
+	ForceAuthentication     bool                            `json:"force_authentication,omitempty"`
+	ForceConsent            bool                            `json:"force_consent,omitempty"`
 	Audience                []string                        `json:"audience,omitempty"`
 	AttestationConfig       *config.ClientAttestationConfig `json:"attestation_config,omitempty"`
 	Public                  bool                            `json:"public,omitempty"`
@@ -154,9 +158,17 @@ func (h *RegistrationHandler) handleGetClients(w http.ResponseWriter, r *http.Re
 		}
 
 		// Get claims if client supports it
-		var claims string
-		if customClient, ok := client.(*store.CustomClient); ok && customClient.Claims != nil {
-			claims = strings.Join(customClient.Claims, " ")
+		var (
+			claims              string
+			forceAuthentication bool
+			forceConsent        bool
+		)
+		if customClient, ok := client.(*store.CustomClient); ok {
+			if customClient.Claims != nil {
+				claims = strings.Join(customClient.Claims, " ")
+			}
+			forceAuthentication = customClient.ForceAuthentication
+			forceConsent = customClient.ForceConsent
 		}
 
 		// Build response similar to registration response
@@ -184,6 +196,8 @@ func (h *RegistrationHandler) handleGetClients(w http.ResponseWriter, r *http.Re
 			Jwks:                    "",         // Not stored
 			SoftwareID:              "",         // Not stored
 			SoftwareVersion:         "",         // Not stored
+			ForceAuthentication:     forceAuthentication,
+			ForceConsent:            forceConsent,
 			Audience:                client.GetAudience(),
 			AttestationConfig:       attestationConfig,
 			Public:                  client.IsPublic(),
