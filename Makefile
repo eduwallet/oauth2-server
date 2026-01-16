@@ -426,6 +426,22 @@ test-memory:
 test-sqlite:
 	@$(MAKE) test TEST_DATABASE_TYPE=sqlite
 
+# Docker targets
+docker-build:
+	@echo "🐳 Building Docker image..."
+	docker-compose build oauth2-server
+	@echo "✅ Docker image built"
+
+scan: docker-build
+	@echo "🔍 Scanning Docker image for vulnerabilities..."
+	@if command -v trivy >/dev/null 2>&1; then \
+		trivy image oauth2-server; \
+	else \
+		echo "❌ Trivy is not installed. Install with: brew install trivy"; \
+		exit 1; \
+	fi
+	@echo "✅ Scan completed"
+
 # Help target
 help:
 	@echo "Available targets:"
@@ -479,6 +495,10 @@ help:
 	@echo "Build Variants:"
 	@echo "  build-all          - Build for multiple platforms"
 	@echo ""
+	@echo "Docker:"
+	@echo "  docker-build       - Build the Docker image"
+	@echo "  scan               - Build and scan Docker image for vulnerabilities"
+	@echo ""
 	@echo "Examples:"
 	@echo "  make tag                               - Create a new version tag"
 	@echo "  make test                              - Run all tests"
@@ -487,7 +507,7 @@ help:
 	@echo "  make check-deadcode                    - Check for unused code"
 
 # Update .PHONY to include new targets
-.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script test-script-verbose check-port help tag version release start-mock-provider stop-mock-provider
+.PHONY: fmt vet staticcheck staticcheck-alt lint golangci-lint lint-comprehensive fix-imports pre-commit install-deps check-tools security setup-env test test-verbose test-script test-script-verbose check-port help tag version release start-mock-provider stop-mock-provider docker-build scan
 
 # Version management targets
 tag:

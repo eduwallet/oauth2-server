@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25.5-alpine AS builder
 
 # Install build dependencies including C compiler and SQLite dev libraries
 RUN apk add --no-cache git ca-certificates gcc musl-dev sqlite-dev
@@ -35,10 +35,11 @@ RUN VERSION=${VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)} 
         cmd/server/main.go
 
 # Final stage - use alpine for healthcheck capabilities
-FROM alpine:3.20
+FROM alpine:latest
 
 # Install ca-certificates for HTTPS calls and SQLite runtime libraries
-RUN apk add --no-cache ca-certificates curl sqlite-libs
+RUN apk update && apk upgrade && \
+    apk add --no-cache ca-certificates curl sqlite-libs
 
 # Copy binary from builder stage
 COPY --from=builder /app/oauth2-server /app/oauth2-server

@@ -20,6 +20,7 @@ services:
       retries: 10
 
   oauth2-server:
+    image: oauth2-server:latest
     build: .
     ports:
       - "8080:8080"
