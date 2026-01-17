@@ -284,6 +284,9 @@ func (s *CustomStorage) ClientAssertionJWTValid(ctx context.Context, jti string)
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.ClientAssertionJWTValid(ctx, jti)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.ClientAssertionJWTValid(ctx, jti)
+	}
 	if store, ok := s.Storage.(*storage.MemoryStore); ok {
 		return store.ClientAssertionJWTValid(ctx, jti)
 	}
@@ -295,6 +298,9 @@ func (s *CustomStorage) SetClientAssertionJWT(ctx context.Context, jti string, e
 		return store.SetClientAssertionJWT(ctx, jti, exp)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.SetClientAssertionJWT(ctx, jti, exp)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.SetClientAssertionJWT(ctx, jti, exp)
 	}
 	if store, ok := s.Storage.(*storage.MemoryStore); ok {
@@ -310,6 +316,9 @@ func (s *CustomStorage) GetClientCount() (int, error) {
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.GetClientCount()
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.GetClientCount()
+	}
 	return len(s.Clients), nil // Fallback
 }
 
@@ -318,6 +327,9 @@ func (s *CustomStorage) GetUserCount() (int, error) {
 		return store.GetUserCount()
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.GetUserCount()
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.GetUserCount()
 	}
 	return len(s.Users), nil // Fallback
@@ -330,6 +342,9 @@ func (s *CustomStorage) GetAccessTokenCount() (int, error) {
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.GetAccessTokenCount()
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.GetAccessTokenCount()
+	}
 	return 0, nil // Fallback
 }
 
@@ -338,6 +353,9 @@ func (s *CustomStorage) GetRefreshTokenCount() (int, error) {
 		return store.GetRefreshTokenCount()
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.GetRefreshTokenCount()
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.GetRefreshTokenCount()
 	}
 	return 0, nil // Fallback
@@ -467,6 +485,9 @@ func (s *CustomStorage) GetUser(ctx context.Context, id string) (*storage.Memory
 		if sqliteStore, ok := s.Storage.(*storages.SQLiteStore); ok {
 			return sqliteStore.GetUser(ctx, id)
 		}
+		if postgresStore, ok := s.Storage.(*storages.PostgresStore); ok {
+			return postgresStore.GetUser(ctx, id)
+		}
 		return nil, fmt.Errorf("user not found")
 	}
 	return &user, nil
@@ -480,6 +501,9 @@ func (s *CustomStorage) StoreClientSecret(ctx context.Context, clientID string, 
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.StoreClientSecret(ctx, clientID, encryptedSecret)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.StoreClientSecret(ctx, clientID, encryptedSecret)
+	}
 	return fmt.Errorf("underlying store does not support encrypted secret storage")
 }
 
@@ -488,6 +512,9 @@ func (s *CustomStorage) GetClientSecret(ctx context.Context, clientID string) (s
 		return store.GetClientSecret(ctx, clientID)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.GetClientSecret(ctx, clientID)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.GetClientSecret(ctx, clientID)
 	}
 	return "", fmt.Errorf("underlying store does not support encrypted secret storage")
@@ -500,6 +527,9 @@ func (s *CustomStorage) StoreAttestationConfig(ctx context.Context, clientID str
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.StoreAttestationConfig(ctx, clientID, config)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.StoreAttestationConfig(ctx, clientID, config)
+	}
 	return fmt.Errorf("underlying store does not support attestation config storage")
 }
 
@@ -508,6 +538,9 @@ func (s *CustomStorage) GetAttestationConfig(ctx context.Context, clientID strin
 		return store.GetAttestationConfig(ctx, clientID)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.GetAttestationConfig(ctx, clientID)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.GetAttestationConfig(ctx, clientID)
 	}
 	return nil, fmt.Errorf("underlying store does not support attestation config storage")
@@ -520,6 +553,9 @@ func (s *CustomStorage) DeleteClientSecret(ctx context.Context, clientID string)
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.DeleteClientSecret(ctx, clientID)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.DeleteClientSecret(ctx, clientID)
+	}
 	return fmt.Errorf("underlying store does not support client secret deletion")
 }
 
@@ -528,6 +564,9 @@ func (s *CustomStorage) DeleteAttestationConfig(ctx context.Context, clientID st
 		return store.DeleteAttestationConfig(ctx, clientID)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.DeleteAttestationConfig(ctx, clientID)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.DeleteAttestationConfig(ctx, clientID)
 	}
 	return fmt.Errorf("underlying store does not support attestation config deletion")
@@ -541,6 +580,9 @@ func (s *CustomStorage) StoreUpstreamTokenMapping(ctx context.Context, proxyToke
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.StoreUpstreamTokenMapping(ctx, proxyTokenSignature, upstreamAccessToken, upstreamRefreshToken, upstreamTokenType, upstreamExpiresIn)
+	}
 	return fmt.Errorf("underlying store does not support upstream token mapping storage")
 }
 
@@ -551,6 +593,9 @@ func (s *CustomStorage) GetUpstreamTokenMapping(ctx context.Context, proxyTokenS
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.GetUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
 	return "", "", "", 0, fmt.Errorf("underlying store does not support upstream token mapping storage")
 }
 
@@ -559,6 +604,9 @@ func (s *CustomStorage) DeleteUpstreamTokenMapping(ctx context.Context, proxyTok
 		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.DeleteUpstreamTokenMapping(ctx, proxyTokenSignature)
 	}
 	return fmt.Errorf("underlying store does not support upstream token mapping storage")
@@ -572,6 +620,9 @@ func (s *CustomStorage) StoreTrustAnchor(ctx context.Context, name string, certi
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.StoreTrustAnchor(ctx, name, certificateData)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.StoreTrustAnchor(ctx, name, certificateData)
+	}
 	return fmt.Errorf("underlying store does not support trust anchor storage")
 }
 
@@ -580,6 +631,9 @@ func (s *CustomStorage) GetTrustAnchor(ctx context.Context, name string) ([]byte
 		return store.GetTrustAnchor(ctx, name)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.GetTrustAnchor(ctx, name)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.GetTrustAnchor(ctx, name)
 	}
 	return nil, fmt.Errorf("underlying store does not support trust anchor storage")
@@ -592,6 +646,9 @@ func (s *CustomStorage) ListTrustAnchors(ctx context.Context) ([]string, error) 
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.ListTrustAnchors(ctx)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.ListTrustAnchors(ctx)
+	}
 	return nil, fmt.Errorf("underlying store does not support trust anchor storage")
 }
 
@@ -600,6 +657,9 @@ func (s *CustomStorage) DeleteTrustAnchor(ctx context.Context, name string) erro
 		return store.DeleteTrustAnchor(ctx, name)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.DeleteTrustAnchor(ctx, name)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.DeleteTrustAnchor(ctx, name)
 	}
 	return fmt.Errorf("underlying store does not support trust anchor storage")
@@ -613,6 +673,9 @@ func (s *CustomStorage) StorePARRequest(ctx context.Context, request *types.PARR
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.StorePARRequest(ctx, request)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.StorePARRequest(ctx, request)
+	}
 	return fmt.Errorf("underlying store does not support PAR storage")
 }
 
@@ -623,6 +686,9 @@ func (s *CustomStorage) GetPARRequest(ctx context.Context, requestURI string) (*
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
 		return store.GetPARRequest(ctx, requestURI)
 	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
+		return store.GetPARRequest(ctx, requestURI)
+	}
 	return nil, fmt.Errorf("underlying store does not support PAR storage")
 }
 
@@ -631,6 +697,9 @@ func (s *CustomStorage) DeletePARRequest(ctx context.Context, requestURI string)
 		return store.DeletePARRequest(ctx, requestURI)
 	}
 	if store, ok := s.Storage.(*storages.SQLiteStore); ok {
+		return store.DeletePARRequest(ctx, requestURI)
+	}
+	if store, ok := s.Storage.(*storages.PostgresStore); ok {
 		return store.DeletePARRequest(ctx, requestURI)
 	}
 	return fmt.Errorf("underlying store does not support PAR storage")
