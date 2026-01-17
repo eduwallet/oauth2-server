@@ -35,13 +35,13 @@ func TestCustomStorage_AllBackends(t *testing.T) {
 	}
 
 	testClient := &fosite.DefaultClient{
-		ID:           clientID,
-		Secret:       []byte("client-secret"),
-		RedirectURIs: []string{"http://example.com/callback"},
-		GrantTypes:   []string{"authorization_code"},
+		ID:            clientID,
+		Secret:        []byte("client-secret"),
+		RedirectURIs:  []string{"http://example.com/callback"},
+		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"code"},
-		Scopes:       []string{"openid", "profile"},
-		Public:       true,
+		Scopes:        []string{"openid", "profile"},
+		Public:        true,
 	}
 
 	testUser := &storage.MemoryUserRelation{
@@ -115,13 +115,13 @@ func TestCustomStorage_AllBackends(t *testing.T) {
 
 				// Update client
 				updatedClient := &fosite.DefaultClient{
-					ID:           clientID,
-					Secret:       []byte("updated-secret"),
-					RedirectURIs: []string{"http://example.com/callback", "http://example.com/callback2"},
-					GrantTypes:   []string{"authorization_code", "refresh_token"},
+					ID:            clientID,
+					Secret:        []byte("updated-secret"),
+					RedirectURIs:  []string{"http://example.com/callback", "http://example.com/callback2"},
+					GrantTypes:    []string{"authorization_code", "refresh_token"},
 					ResponseTypes: []string{"code"},
-					Scopes:       []string{"openid", "profile", "email"},
-					Public:       true,
+					Scopes:        []string{"openid", "profile", "email"},
+					Public:        true,
 				}
 				err = customStore.UpdateClient(context.TODO(), clientID, updatedClient)
 				if err != nil {
