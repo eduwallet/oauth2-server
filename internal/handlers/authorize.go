@@ -10,6 +10,7 @@ import (
 	"oauth2-server/internal/cimd"
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/store"
+	"oauth2-server/internal/store/types"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"path/filepath"
@@ -518,8 +519,8 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 	}
 	h.Log.Printf("✅ [PROXY-AUTH] Client validation passed")
 
-	var customClient *store.CustomClient
-	if cc, ok := client.(*store.CustomClient); ok {
+	var customClient *types.CustomClient
+	if cc, ok := client.(*types.CustomClient); ok {
 		customClient = cc
 	}
 
@@ -791,7 +792,7 @@ func (h *AuthorizeHandler) handlePushedAuthorizeRequest(w http.ResponseWriter, r
 		}
 	}
 
-	parRequest := &store.PARRequest{
+	parRequest := &types.PARRequest{
 		RequestURI: requestURI,
 		ClientID:   clientID,
 		ExpiresAt:  time.Now().Add(10 * time.Minute), // PAR requests expire in 10 minutes per RFC

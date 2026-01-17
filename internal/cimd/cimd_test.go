@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"oauth2-server/internal/store"
+	"oauth2-server/internal/store/storages"
 	"oauth2-server/pkg/config"
 
 	"github.com/ory/fosite/storage"
@@ -57,7 +57,7 @@ func TestAllowlistEnforcement(t *testing.T) {
 
 	mem := storage.NewMemoryStore()
 	logger := logrus.New()
-	msw := store.NewMemoryStoreWrapper(mem, logger)
+	msw := storages.NewMemoryStoreWrapper(mem, logger)
 
 	if _, err := RegisterClientFromMetadata(context.Background(), cfg, msw, srv.URL); err == nil {
 		t.Fatalf("expected error due to allowlist, but got none")
@@ -79,7 +79,7 @@ func TestMetadataPolicyEnforcement(t *testing.T) {
 
 	mem := storage.NewMemoryStore()
 	logger := logrus.New()
-	msw := store.NewMemoryStoreWrapper(mem, logger)
+	msw := storages.NewMemoryStoreWrapper(mem, logger)
 
 	if _, err := RegisterClientFromMetadata(context.Background(), cfg, msw, srv.URL); err == nil {
 		t.Fatalf("expected metadata policy violation error, but got none")
@@ -104,7 +104,7 @@ func TestCachingBehavior(t *testing.T) {
 
 	mem := storage.NewMemoryStore()
 	logger := logrus.New()
-	msw := store.NewMemoryStoreWrapper(mem, logger)
+	msw := storages.NewMemoryStoreWrapper(mem, logger)
 
 	c1, err := RegisterClientFromMetadata(context.Background(), cfg, msw, srv.URL)
 	if err != nil {
@@ -152,7 +152,7 @@ func TestRateLimiting(t *testing.T) {
 
 	mem := storage.NewMemoryStore()
 	logger := logrus.New()
-	msw := store.NewMemoryStoreWrapper(mem, logger)
+	msw := storages.NewMemoryStoreWrapper(mem, logger)
 
 	if _, err := RegisterClientFromMetadata(context.Background(), cfg, msw, srv.URL); err == nil {
 		t.Fatalf("expected rate limit error, but got none")
@@ -187,7 +187,7 @@ func TestRateLimitingConfig(t *testing.T) {
 
 	mem := storage.NewMemoryStore()
 	logger := logrus.New()
-	msw := store.NewMemoryStoreWrapper(mem, logger)
+	msw := storages.NewMemoryStoreWrapper(mem, logger)
 
 	// First fetch should succeed
 	if _, err := RegisterClientFromMetadata(context.Background(), cfg, msw, srv.URL); err != nil {

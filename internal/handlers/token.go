@@ -16,11 +16,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Context key type for Fosite client
-type fositeClientKey string
+// Context key type for request context
+type contextKey string
 
-const clientContextKey fositeClientKey = "client"
-const proxyTokenContextKey = "proxy_token"
+const proxyTokenContextKey contextKey = "proxy_token"
 
 // TokenHandler manages OAuth2 token requests using pure fosite implementation
 type TokenHandler struct {

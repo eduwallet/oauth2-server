@@ -2,9 +2,9 @@ package attestation
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"oauth2-server/pkg/config"
+	"os"
 
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -190,7 +190,7 @@ func NewVerifierManager(config *config.AttestationConfig, trustAnchorFiles map[s
 // LoadTrustAnchorsFromConfig loads trust anchor certificates from the configuration
 func LoadTrustAnchorsFromConfig(configPath string) (map[string]string, error) {
 	// Read the YAML config file
-	data, err := ioutil.ReadFile(configPath)
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -218,7 +218,7 @@ func LoadTrustAnchorsFromConfig(configPath string) (map[string]string, error) {
 			continue
 		}
 
-		certPEM, err := ioutil.ReadFile(anchor.CertificatePath)
+		certPEM, err := os.ReadFile(anchor.CertificatePath)
 		if err != nil {
 			// Log warning but don't fail - certificate can be uploaded via API later
 			log.Printf("⚠️ Trust anchor certificate not found for %s at %s, skipping (can be uploaded via API): %v", anchor.Name, anchor.CertificatePath, err)

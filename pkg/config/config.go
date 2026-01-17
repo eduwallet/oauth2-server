@@ -378,7 +378,7 @@ func (c *Config) validateDatabaseConfig() error {
 		return fmt.Errorf("database type is required")
 	}
 
-	validTypes := []string{"memory", "sqlite"}
+	validTypes := []string{"memory", "sqlite", "postgres"}
 	if !contains(validTypes, c.Database.Type) {
 		return fmt.Errorf("invalid database type '%s', must be one of: %s", c.Database.Type, strings.Join(validTypes, ", "))
 	}
@@ -394,6 +394,13 @@ func (c *Config) validateDatabaseConfig() error {
 		}
 		if strings.Contains(c.Database.Path, "..") {
 			return fmt.Errorf("database path cannot contain '..' for security reasons")
+		}
+	}
+
+	// Validate database path for PostgreSQL (used as connection string)
+	if c.Database.Type == "postgres" {
+		if c.Database.Path == "" {
+			return fmt.Errorf("database connection string is required when using postgres database type")
 		}
 	}
 

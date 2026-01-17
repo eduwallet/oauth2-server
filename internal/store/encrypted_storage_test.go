@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"oauth2-server/internal/store/storages"
 	"oauth2-server/pkg/config"
 
 	"github.com/ory/fosite"
@@ -14,7 +15,7 @@ import (
 func TestEncryptedStorage_Integration(t *testing.T) {
 	// Create SQLite store with in-memory database for testing
 	logger := logrus.New()
-	sqliteStore, err := NewSQLiteStore(":memory:", logger)
+	sqliteStore, err := storages.NewSQLiteStore(":memory:", logger)
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}

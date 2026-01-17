@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"oauth2-server/internal/store"
+	"oauth2-server/internal/store/types"
 	"oauth2-server/pkg/config"
 
 	"github.com/ory/fosite"
@@ -279,7 +280,7 @@ func ValidateMetadata(meta map[string]interface{}, location string) error {
 }
 
 // CreateClientFromMetadata builds a fosite client from metadata map
-func CreateClientFromMetadata(meta map[string]interface{}, location string, expires time.Time, updatedAt time.Time) (*store.CustomClient, error) {
+func CreateClientFromMetadata(meta map[string]interface{}, location string, expires time.Time, updatedAt time.Time) (*types.CustomClient, error) {
 	cid, _ := meta["client_id"].(string)
 	if cid == "" {
 		return nil, errors.New("client_id missing")
@@ -327,7 +328,7 @@ func CreateClientFromMetadata(meta map[string]interface{}, location string, expi
 		}
 	}
 
-	cc := &store.CustomClient{DefaultClient: dc}
+	cc := &types.CustomClient{DefaultClient: dc}
 	cc.MetadataDocumentLocation = location
 	cc.MetadataDocumentExpiresAt = expires.Unix()
 	cc.MetadataDocumentUpdatedAt = updatedAt.Unix()
@@ -337,7 +338,7 @@ func CreateClientFromMetadata(meta map[string]interface{}, location string, expi
 }
 
 // RegisterClientFromMetadata fetches metadata and registers the client using provided storage
-func RegisterClientFromMetadata(ctx context.Context, cfg *config.Config, storage store.Storage, location string) (*store.CustomClient, error) {
+func RegisterClientFromMetadata(ctx context.Context, cfg *config.Config, storage store.Storage, location string) (*types.CustomClient, error) {
 	// Parse URL and enforce allowlist if enabled
 	u, err := url.Parse(location)
 	if err != nil {
@@ -355,7 +356,7 @@ func RegisterClientFromMetadata(ctx context.Context, cfg *config.Config, storage
 
 	// Check existing client and cached metadata expiry
 	if existing, err := storage.GetClient(ctx, location); err == nil {
-		if cc, ok := existing.(*store.CustomClient); ok && cc.DiscoveredByMetadataDocument {
+		if cc, ok := existing.(*types.CustomClient); ok && cc.DiscoveredByMetadataDocument {
 			if cc.MetadataDocumentExpiresAt > time.Now().Unix() && !getCIMDConfig(cfg).AlwaysRetrieved {
 				// Still valid cache; return without fetching
 				return cc, nil

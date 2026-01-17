@@ -12,12 +12,18 @@ func (c *Config) LoadFromEnv() {
 	if publicBaseURL := os.Getenv("PUBLIC_BASE_URL"); publicBaseURL != "" {
 		// c.Server.BaseURL = baseURL
 		c.PublicBaseURL = publicBaseURL
+	} else {
+		// Default public base URL for development
+		c.PublicBaseURL = "http://localhost:8080"
 	}
 
 	if port := os.Getenv("PORT"); port != "" {
 		if portInt, err := strconv.Atoi(port); err == nil {
 			c.Server.Port = portInt
 		}
+	} else {
+		// Default port
+		c.Server.Port = 8080
 	}
 
 	// Logging configuration overrides
@@ -27,17 +33,31 @@ func (c *Config) LoadFromEnv() {
 
 	if logformat := os.Getenv("LOG_FORMAT"); logformat != "" {
 		c.Logging.Format = logformat
+	} else {
+		// Default log format
+		c.Logging.Format = "text"
 	}
+
 	if enableAudit := os.Getenv("ENABLE_AUDIT_LOGGING"); enableAudit != "" {
 		c.Logging.EnableAudit = GetEnvBool("ENABLE_AUDIT_LOGGING", false)
+	} else {
+		// Default audit logging
+		c.Logging.EnableAudit = false
 	}
 
 	// Database configuration overrides
 	if storageType := os.Getenv("DATABASE_TYPE"); storageType != "" {
 		c.Database.Type = storageType
+	} else {
+		// Default database type
+		c.Database.Type = "memory"
 	}
+
 	if storagePath := os.Getenv("DATABASE_PATH"); storagePath != "" {
 		c.Database.Path = storagePath
+	} else {
+		// Default database path
+		c.Database.Path = "oauth2-server.db"
 	}
 
 	// Proxy configuration overrides
@@ -111,29 +131,33 @@ func (c *Config) LoadFromEnv() {
 		c.Security.JWTSecret = jwtKey
 	}
 
-	if tokenExpiry := os.Getenv("TOKEN_EXPIRY_SECONDS"); tokenExpiry != "" {
-		if expiry := GetEnvInt("TOKEN_EXPIRY_SECONDS", 3600); expiry > 0 {
-			c.Security.TokenExpirySeconds = expiry
-		}
+	// Set token expiry with validation (must be positive)
+	expiry := GetEnvInt("TOKEN_EXPIRY_SECONDS", 3600)
+	if expiry <= 0 {
+		expiry = 3600
 	}
+	c.Security.TokenExpirySeconds = expiry
 
-	if refreshExpiry := os.Getenv("REFRESH_TOKEN_EXPIRY_SECONDS"); refreshExpiry != "" {
-		if expiry := GetEnvInt("REFRESH_TOKEN_EXPIRY_SECONDS", 86400); expiry > 0 {
-			c.Security.RefreshTokenExpirySeconds = expiry
-		}
+	// Set refresh token expiry with validation (must be positive)
+	refreshExpiry := GetEnvInt("REFRESH_TOKEN_EXPIRY_SECONDS", 86400)
+	if refreshExpiry <= 0 {
+		refreshExpiry = 86400
 	}
+	c.Security.RefreshTokenExpirySeconds = refreshExpiry
 
-	if deviceExpiry := os.Getenv("DEVICE_CODE_EXPIRY_SECONDS"); deviceExpiry != "" {
-		if expiry := GetEnvInt("DEVICE_CODE_EXPIRY_SECONDS", 600); expiry > 0 {
-			c.Security.DeviceCodeExpirySeconds = expiry
-		}
+	// Set device code expiry with validation (must be positive)
+	deviceExpiry := GetEnvInt("DEVICE_CODE_EXPIRY_SECONDS", 600)
+	if deviceExpiry <= 0 {
+		deviceExpiry = 600
 	}
+	c.Security.DeviceCodeExpirySeconds = deviceExpiry
 
-	if authzExpiry := os.Getenv("AUTHORIZATION_CODE_EXPIRY_SECONDS"); authzExpiry != "" {
-		if expiry := GetEnvInt("AUTHORIZATION_CODE_EXPIRY_SECONDS", 600); expiry > 0 {
-			c.Security.AuthorizationCodeExpirySeconds = expiry
-		}
+	// Set authorization code expiry with validation (must be positive)
+	authzExpiry := GetEnvInt("AUTHORIZATION_CODE_EXPIRY_SECONDS", 600)
+	if authzExpiry <= 0 {
+		authzExpiry = 600
 	}
+	c.Security.AuthorizationCodeExpirySeconds = authzExpiry
 
 	if requireHTTPS := os.Getenv("REQUIRE_HTTPS"); requireHTTPS != "" {
 		c.Security.RequireHTTPS = GetEnvBool("REQUIRE_HTTPS", false)
@@ -150,6 +174,9 @@ func (c *Config) LoadFromEnv() {
 	// API protection configuration
 	if apiKey := os.Getenv("API_KEY"); apiKey != "" {
 		c.Security.APIKey = apiKey
+	} else {
+		// Default API key for development
+		c.Security.APIKey = "dev-api-key-change-in-production"
 	}
 
 	if enableRegistrationAPI := os.Getenv("ENABLE_REGISTRATION_API"); enableRegistrationAPI != "" {
@@ -162,6 +189,9 @@ func (c *Config) LoadFromEnv() {
 
 	if privilegedClientID := os.Getenv("PRIVILEGED_CLIENT_ID"); privilegedClientID != "" {
 		c.Security.PrivilegedClientID = privilegedClientID
+	} else if c.Security.PrivilegedClientID == "" {
+		// Default privileged client ID for development
+		c.Security.PrivilegedClientID = "privileged-client"
 	}
 
 	// Add support for dynamic client configuration via environment variables

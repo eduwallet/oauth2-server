@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"oauth2-server/internal/attestation"
 	"oauth2-server/internal/store"
+	"oauth2-server/internal/store/types"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 	"strings"
@@ -312,7 +313,7 @@ func (h *RegistrationHandler) HandleRegistration(w http.ResponseWriter, r *http.
 	} else {
 		clientSecretBytes = hashedSecret
 	}
-	newClient := &store.CustomClient{
+	newClient := &types.CustomClient{
 		DefaultClient: &fosite.DefaultClient{
 			ID:            clientID,
 			Secret:        clientSecretBytes,

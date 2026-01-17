@@ -285,8 +285,8 @@ The OAuth2 server supports comprehensive configuration through environment varia
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `DATABASE_TYPE` | string | sqlite | Database type (`sqlite`, `postgres`, `mysql`, `memory`) |
-| `DATABASE_PATH` | string | ./oauth2.db | Database file path (for sqlite) or connection string |
+| `DATABASE_TYPE` | string | sqlite | Database type (`sqlite`, `memory`, `postgres`) |
+| `DATABASE_PATH` | string | ./oauth2.db | Database file path (for sqlite) or connection string (for postgres) |
 
 ### Proxy/Network Configuration
 
@@ -379,8 +379,20 @@ USER_ADMIN_NAME="System Administrator"
 ```bash
 PUBLIC_BASE_URL=https://auth.example.com
 JWT_SIGNING_KEY=your-256-bit-secret-key
+DATABASE_TYPE=sqlite
+DATABASE_PATH=./oauth2.db
+API_KEY=your-api-key-for-management-endpoints
+ENABLE_REGISTRATION_API=true
+LOG_LEVEL=info
+LOG_FORMAT=json
+```
+
+#### PostgreSQL Production Setup
+```bash
+PUBLIC_BASE_URL=https://auth.example.com
+JWT_SIGNING_KEY=your-256-bit-secret-key
 DATABASE_TYPE=postgres
-DATABASE_PATH=postgres://user:pass@localhost/oauth2db
+DATABASE_PATH=postgres://user:password@localhost/oauth2_db?sslmode=require
 API_KEY=your-api-key-for-management-endpoints
 ENABLE_REGISTRATION_API=true
 LOG_LEVEL=info

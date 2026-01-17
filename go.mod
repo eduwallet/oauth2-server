@@ -5,6 +5,7 @@ go 1.25
 require (
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/joho/godotenv v1.5.1
+	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/ory/fosite v0.49.0
 	github.com/prometheus/client_golang v1.23.2

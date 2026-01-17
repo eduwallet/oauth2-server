@@ -419,6 +419,27 @@ test-script-verbose:
 	rm -f server-test.log; \
 	exit $$result
 
+# Test storage consistency (runs without server)
+test-storage-consistency:
+	@if [ -z "$(QUIET)" ]; then \
+		echo "🧪 Testing storage consistency..."; \
+	fi
+	@if [ ! -f "tests/test_storage_consistency.sh" ]; then \
+		echo "❌ Storage consistency test script not found: tests/test_storage_consistency.sh"; \
+		exit 1; \
+	fi
+	@if [ ! -f "bin/oauth2-server" ]; then \
+		if [ -z "$(QUIET)" ]; then echo "📦 Building server..."; fi; \
+		$(MAKE) build > /dev/null 2>&1; \
+	fi
+	@echo "🔍 Running storage consistency tests..."
+	@if bash tests/test_storage_consistency.sh; then \
+		echo "✅ Storage consistency tests passed"; \
+	else \
+		echo "❌ Storage consistency tests failed"; \
+		exit 1; \
+	fi
+
 # Test with memory database
 test-memory:
 	@$(MAKE) test TEST_DATABASE_TYPE=memory

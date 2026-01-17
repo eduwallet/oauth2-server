@@ -16,7 +16,16 @@ log() {
     fi
 }
 
-if echo "$SCRIPT" | grep -q "proxy"; then
+if echo "$SCRIPT" | grep -q "storage_consistency"; then
+    log "🧪 Detected storage consistency test script - running comprehensive tests directly"
+    if bash "tests/$SCRIPT"; then
+        log "✅ $SCRIPT passed"
+        exit 0
+    else
+        log "❌ $SCRIPT failed"
+        exit 1
+    fi
+elif echo "$SCRIPT" | grep -q "proxy"; then
     log "🔄 Detected proxy test script - starting mock provider and proxy server"
     
     # Start mock provider

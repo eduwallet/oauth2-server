@@ -8,10 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"oauth2-server/internal/store"
+	"oauth2-server/internal/store/storages"
 	"oauth2-server/pkg/config"
 
-	"github.com/ory/fosite"
 	"github.com/ory/fosite/storage"
 	"github.com/sirupsen/logrus"
 )
@@ -36,7 +35,7 @@ func TestRegisterClientFromMetadata(t *testing.T) {
 	// Use memory store wrapper
 	mem := storage.NewMemoryStore()
 	logger := logrus.New()
-	msw := store.NewMemoryStoreWrapper(mem, logger)
+	msw := storages.NewMemoryStoreWrapper(mem, logger)
 
 	// Register
 	client, err := RegisterClientFromMetadata(context.Background(), cfg, msw, srv.URL)
@@ -53,7 +52,7 @@ func TestRegisterClientFromMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetClient failed: %v", err)
 	}
-	if _, ok := c.(*fosite.DefaultClient); !ok {
+	if c != nil {
 		// CustomClient should be stored; memory wrapper returns as-is
 	}
 

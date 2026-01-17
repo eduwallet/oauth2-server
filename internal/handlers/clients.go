@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"oauth2-server/internal/store"
+	"oauth2-server/internal/store/types"
 	"oauth2-server/pkg/config"
 	"strings"
 	"time"
@@ -163,7 +163,7 @@ func (h *RegistrationHandler) handleGetClients(w http.ResponseWriter, r *http.Re
 			forceAuthentication bool
 			forceConsent        bool
 		)
-		if customClient, ok := client.(*store.CustomClient); ok {
+		if customClient, ok := client.(*types.CustomClient); ok {
 			if customClient.Claims != nil {
 				claims = strings.Join(customClient.Claims, " ")
 			}

@@ -34,6 +34,8 @@ import (
 	"oauth2-server/internal/metrics"
 	"oauth2-server/internal/middleware"
 	"oauth2-server/internal/store"
+	"oauth2-server/internal/store/storages"
+	"oauth2-server/internal/store/types"
 	"oauth2-server/internal/utils"
 	"oauth2-server/pkg/config"
 )
@@ -329,16 +331,23 @@ func main() {
 
 	// Initialize stores based on configuration
 	if configuration.Database.Type == "sqlite" {
-		sqliteStore, err := store.NewSQLiteStore(configuration.Database.Path, log)
+		sqliteStore, err := storages.NewSQLiteStore(configuration.Database.Path, log)
 		if err != nil {
 			log.Fatalf("❌ Failed to initialize SQLite store: %v", err)
 		}
 		dataStore = sqliteStore
 		log.Printf("✅ SQLite store initialized at: %s", configuration.Database.Path)
+	} else if configuration.Database.Type == "postgres" {
+		postgresStore, err := storages.NewPostgresStore(configuration.Database.Path, log)
+		if err != nil {
+			log.Fatalf("❌ Failed to initialize PostgreSQL store: %v", err)
+		}
+		dataStore = postgresStore
+		log.Printf("✅ PostgreSQL store initialized")
 	} else {
 		// Default to memory store
 		memoryStore := storage.NewMemoryStore()
-		dataStore = store.NewMemoryStoreWrapper(memoryStore, log)
+		dataStore = storages.NewMemoryStoreWrapper(memoryStore, log)
 		log.Printf("✅ Memory store initialized")
 	}
 
@@ -430,7 +439,7 @@ func main() {
 
 func initializeClients() error {
 	// First, load any existing clients from the database
-	if sqliteStore, ok := dataStore.(*store.SQLiteStore); ok {
+	if sqliteStore, ok := dataStore.(*storages.SQLiteStore); ok {
 		log.Printf("🔍 Loading existing clients from database...")
 		clients, err := sqliteStore.GetAllClients(context.Background())
 		if err != nil {
@@ -497,7 +506,7 @@ func initializeClients() error {
 			}
 		}
 
-		newClient := &store.CustomClient{
+		newClient := &types.CustomClient{
 			DefaultClient: &fosite.DefaultClient{
 				ID:            client.ID,
 				Secret:        hashedSecret,
@@ -634,10 +643,12 @@ func initializeOAuth2Provider() error {
 		compose.OAuth2AuthorizeExplicitFactory,
 		compose.OAuth2ClientCredentialsGrantFactory,
 		compose.OAuth2RefreshTokenGrantFactory,
+		// OAuth2ResourceOwnerPasswordCredentialsFactory is deprecated but required for existing tests
+		//lint:ignore SA1019 Required for authorization introspection test that uses password grant
+		compose.OAuth2ResourceOwnerPasswordCredentialsFactory,
 		compose.OAuth2TokenIntrospectionFactory,
 		compose.OAuth2TokenRevocationFactory,
 		compose.OAuth2PKCEFactory,
-		compose.OAuth2ResourceOwnerPasswordCredentialsFactory,
 		compose.RFC8628DeviceFactory,
 		compose.RFC8628DeviceAuthorizationTokenFactory,
 		compose.RFC8693TokenExchangeFactory,
