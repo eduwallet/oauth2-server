@@ -53,7 +53,7 @@ func (c *Config) LoadFromEnv() {
 		c.Database.Type = "memory"
 	}
 
-	if storagePath := os.ExpandEnv("${DATABASE_PATH}"); storagePath != "" {
+	if storagePath := os.ExpandEnv("postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}/${PGDATABASE}?sslmode=require"); storagePath != "" {
 		c.Database.Path = storagePath
 	} else {
 		// Default database path
