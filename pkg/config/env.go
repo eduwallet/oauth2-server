@@ -53,7 +53,7 @@ func (c *Config) LoadFromEnv() {
 		c.Database.Type = "memory"
 	}
 
-	if storagePath := os.Getenv("DATABASE_PATH"); storagePath != "" {
+	if storagePath := os.ExpandEnv("DATABASE_PATH"); storagePath != "" {
 		c.Database.Path = storagePath
 	} else {
 		// Default database path
