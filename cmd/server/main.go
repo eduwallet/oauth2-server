@@ -338,6 +338,7 @@ func main() {
 		dataStore = sqliteStore
 		log.Printf("✅ SQLite store initialized at: %s", configuration.Database.Path)
 	} else if configuration.Database.Type == "postgres" {
+               log.Printf("DEBUG: configuration.Database.Path: %s", configuration.Database.Path)
 		postgresStore, err := storages.NewPostgresStore(configuration.Database.Path, log)
 		if err != nil {
 			log.Fatalf("❌ Failed to initialize PostgreSQL store: %v", err)
