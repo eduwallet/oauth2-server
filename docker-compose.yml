@@ -19,6 +19,22 @@ services:
       timeout: 5s
       retries: 10
 
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: oauth2
+      POSTGRES_PASSWORD: oauth2password
+      POSTGRES_DB: oauth2db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oauth2"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   oauth2-server:
     image: oauth2-server:latest
     build: .
@@ -36,12 +52,17 @@ services:
       - UPSTREAM_CLIENT_SECRET=${UPSTREAM_CLIENT_SECRET}
       - UPSTREAM_CALLBACK_URL=${OAUTH2_SERVER_URL:-http://localhost:8080}/callback
 
-      - DATABASE_TYPE=sqlite
-      - DATABASE_PATH=/app/oauth2.db
+      # - DATABASE_TYPE=sqlite
+      # - DATABASE_PATH=/app/oauth2.db
+      - DATABASE_TYPE=postgres
+      - DATABASE_PATH=postgres://oauth2:oauth2password@postgres:5432/oauth2db?sslmode=disable
       
       - API_KEY=${API_KEY}
       - ENABLE_REGISTRATION_API=true
       - ENABLE_TRUST_ANCHOR_API=true
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./oauth2.db:/app/oauth2.db
@@ -73,3 +94,4 @@ services:
         
 volumes:
   certs:
+  postgres-data:

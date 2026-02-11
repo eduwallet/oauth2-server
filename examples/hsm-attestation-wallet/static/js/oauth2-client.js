@@ -185,6 +185,7 @@ class OAuth2Client {
 
                 attestation_jwt: attestationToken,
                 application_type: "web",
+                force_consent: true,
 
                 attestation_config: {
                     client_id: this.config.clientId,

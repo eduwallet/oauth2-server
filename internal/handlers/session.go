@@ -17,6 +17,7 @@ type UpstreamSessionData struct {
 	ProxyState            string
 	ProxyNonce            string
 	ProxyCodeChallenge    string
+	ClientID              string // Client ID for consent checking
 	// Device flow specific fields
 	UpstreamDeviceCode string
 	UpstreamUserCode   string

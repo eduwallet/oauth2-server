@@ -689,7 +689,7 @@ func initializeHandlers() {
 	statusHandler = handlers.NewStatusHandler(configuration, Version, GitCommit, BuildTime)
 	versionHandler = handlers.NewVersionHandler()
 	claimsHandler = handlers.NewClaimsHandler(configuration, log)
-	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler)
+	callbackHandler = handlers.NewCallbackHandler(configuration, log, &UpstreamSessionMap, &authCodeToStateMap, claimsHandler, customStorage)
 
 	// Initialize device flow handler
 	deviceCodeHandler = handlers.NewDeviceCodeHandler(oauth2Provider, dataStore, secretManager, templates, configuration, log, &deviceCodeToUpstreamMap, &UpstreamSessionMap)
@@ -740,6 +740,15 @@ func setupRoutes() {
 	http.Handle("/authorization-introspection", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(authorizationIntrospectionHandler.ServeHTTP))))
 	http.Handle("/revoke", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(revokeHandler.ServeHTTP))))
 	http.Handle("/userinfo", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(userinfoHandler.ServeHTTP))))
+
+	// Consent endpoint for proxy mode forced consent
+	http.Handle("/auth/consent", corsAndProxyMiddleware(metricsCollector.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		callbackHandler.HandleProxyConsent(w, r)
+	}))))
 
 	// Device flow endpoints - use our custom device authorization but store in fosite-compatible format
 	http.Handle("/device/authorize", proxyAwareMiddleware(metricsCollector.Middleware(http.HandlerFunc(deviceCodeHandler.HandleDeviceAuthorization))))

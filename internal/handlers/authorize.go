@@ -545,6 +545,7 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 		ProxyState:            proxyState,
 		ProxyNonce:            proxyNonce,
 		ProxyCodeChallenge:    proxyCodeChallenge,
+		ClientID:              clientID,
 	}
 	h.Log.Printf("✅ [PROXY-AUTH] Session data stored")
 
@@ -681,8 +682,8 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 
 	upstreamURL := authzEndpoint + "?" + vals.Encode()
 	h.Log.Printf("🔄 [PROXY-AUTH] Redirecting to upstream: %s", upstreamURL)
+
 	http.Redirect(w, r, upstreamURL, http.StatusFound)
-	h.Log.Printf("✅ [PROXY-AUTH] Redirect sent")
 }
 
 // buildClaimsJSON builds a proper OIDC claims parameter JSON from a list of claim names

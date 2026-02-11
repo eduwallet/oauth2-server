@@ -34,6 +34,7 @@ A feature-rich OAuth2 and OpenID Connect server focused on API capabilities, sup
 - Programmatic client registration at runtime via API
 - Specify `audience` during registration
 - Control login UX with `force_authentication` and `force_consent` flags per client
+- **force_consent**: In proxy mode, displays a consent screen after upstream authentication allowing users to approve/deny client access requests
 
 ### ♻️ Refresh Tokens
 - Configurable token lifespans per token type
@@ -228,16 +229,19 @@ Testing test_attestation_integration.sh          ... ✅ PASSED
 Testing test_attestation_privileged_audience.sh  ... ✅ PASSED
 Testing test_auth_code_pkce.sh                   ... ✅ PASSED
 Testing test_authorization_introspection.sh      ... ✅ PASSED
+Testing test_cimd_example.sh                     ... ✅ PASSED
+Testing test_cimd_registration.sh                ... ✅ PASSED
 Testing test_client_registration.sh              ... ✅ PASSED
 Testing test_complete_flow.sh                    ... ✅ PASSED
 Testing test_device_flow.sh                      ... ✅ PASSED
-Testing test_introspection_jwt_client_assertion.sh ... ✅ PASSED
 Testing test_introspection.sh                    ... ✅ PASSED
+Testing test_introspection_jwt_client_assertion.sh ... ✅ PASSED
 Testing test_oauth2_flow.sh                      ... ✅ PASSED
 Testing test_privileged_introspection.sh         ... ✅ PASSED
 Testing test_proxy_attestation_client.sh         ... ✅ PASSED
 Testing test_proxy_authorization_introspection.sh ... ✅ PASSED
 Testing test_proxy_device_flow.sh                ... ✅ PASSED
+Testing test_proxy_force_consent.sh              ... ✅ PASSED
 Testing test_proxy_full_authentication_flow.sh   ... ✅ PASSED
 Testing test_proxy_public_client_flow.sh         ... ✅ PASSED
 Testing test_proxy_pushed_authorize_request.sh   ... ✅ PASSED
@@ -248,12 +252,13 @@ Testing test_pushed_authorize_request.sh         ... ✅ PASSED
 Testing test_refresh_token_basic.sh              ... ✅ PASSED
 Testing test_refresh_token_exchange.sh           ... ✅ PASSED
 Testing test_scope_handling.sh                   ... ✅ PASSED
+Testing test_storage_consistency.sh              ... ✅ PASSED
 Testing test_token_exchange.sh                   ... ✅ PASSED
 Testing test_userinfo.sh                         ... ✅ PASSED
 Testing test_validation.sh                       ... ✅ PASSED
 
 ════════════════════════════════════════════════════════════════
-📊 Test Summary: 28 passed, 0 failed
+📊 Test Summary: 32 passed, 0 failed
 ════════════════════════════════════════════════════════════════
 ✅ All tests passed!
 ```
@@ -408,6 +413,37 @@ UPSTREAM_CLIENT_SECRET=your-client-secret
 UPSTREAM_CALLBACK_URL=https://oauth-proxy.example.com/callback
 JWT_SIGNING_KEY=your-jwt-signing-key
 API_KEY=your-api-key
+```
+
+#### Proxy Mode Consent Screen
+
+When running in proxy mode with clients that have `force_consent=true`, the server intercepts the authorization flow after upstream authentication and presents a consent screen to the user. This allows users to explicitly approve or deny the client's access request.
+
+**Features:**
+- **Client Information**: Displays the requesting client name and redirect URI
+- **User Context**: Shows the authenticated user information
+- **Scope Details**: Lists requested OAuth2 scopes with descriptions and icons
+- **Approval/Denial**: Users can authorize or deny the request with clear buttons
+- **Security Warning**: Includes a warning about granting permissions
+
+**Consent Screen Flow:**
+1. User authenticates with upstream provider (Google, etc.)
+2. Server redirects to consent screen if `force_consent=true`
+3. User reviews client permissions and scopes
+4. User clicks "Authorize" to continue or "Deny" to cancel
+5. On approval: Authorization code is issued and user redirected to client
+6. On denial: User is redirected to client with `error=access_denied`
+
+**Client Registration:**
+Set `force_consent=true` during dynamic client registration to enable consent interception:
+
+```json
+{
+  "client_name": "My Application",
+  "redirect_uris": ["https://myapp.example.com/callback"],
+  "force_consent": true,
+  "scope": "openid profile email"
+}
 ```
 
 #### Development Setup
