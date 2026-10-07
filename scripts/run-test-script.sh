@@ -122,12 +122,16 @@ elif echo "$SCRIPT" | grep -q "proxy"; then
             ;;
     esac
 
+    # Proxy AS must advertise its own /callback to the upstream IdP.
+    UPSTREAM_CALLBACK_URL="${UPSTREAM_CALLBACK_URL:-${OAUTH2_SERVER_URL}/callback}"
+
     if [ -z "$PROXY_TEST_MANAGES_SERVER" ]; then
         if [ -n "$EXTRA_UPSTREAM_PROMPT_POLICY_ENV" ]; then
             DATABASE_TYPE="$TEST_DATABASE_TYPE" \
                 UPSTREAM_PROVIDER_URL="http://localhost:9999" \
                 UPSTREAM_CLIENT_ID="upstream_client" \
                 UPSTREAM_CLIENT_SECRET="upstream_secret" \
+                UPSTREAM_CALLBACK_URL="$UPSTREAM_CALLBACK_URL" \
                 ENABLE_TRUST_ANCHOR_API=true \
                 API_KEY="$API_KEY" \
                 UPSTREAM_PROMPT_POLICIES="EDUID_SCOPE,EDUID_AUTHZ_DETAILS" \
@@ -144,6 +148,7 @@ elif echo "$SCRIPT" | grep -q "proxy"; then
                 UPSTREAM_PROVIDER_URL="http://localhost:9999" \
                 UPSTREAM_CLIENT_ID="upstream_client" \
                 UPSTREAM_CLIENT_SECRET="upstream_secret" \
+                UPSTREAM_CALLBACK_URL="$UPSTREAM_CALLBACK_URL" \
                 ENABLE_TRUST_ANCHOR_API=true \
                 API_KEY="$API_KEY" \
                 DPOP_ENABLED=true \
@@ -154,6 +159,7 @@ elif echo "$SCRIPT" | grep -q "proxy"; then
                 UPSTREAM_PROVIDER_URL="http://localhost:9999" \
                 UPSTREAM_CLIENT_ID="upstream_client" \
                 UPSTREAM_CLIENT_SECRET="upstream_secret" \
+                UPSTREAM_CALLBACK_URL="$UPSTREAM_CALLBACK_URL" \
                 ENABLE_TRUST_ANCHOR_API=true \
                 API_KEY="$API_KEY" \
                 ./bin/oauth2-server > server-test.log 2>&1 &

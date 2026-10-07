@@ -289,11 +289,12 @@ func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter
 	// Create session data for device flow - use upstream user code as session ID
 	sessionID := upstreamUserCode
 	(*h.UpstreamSessionMap)[sessionID] = UpstreamSessionData{
-		UpstreamDeviceCode: upstreamDeviceCode,
-		UpstreamUserCode:   upstreamUserCode,
-		ProxyDeviceCode:    proxyDeviceCode,
-		ProxyUserCode:      upstreamUserCode, // Use upstream user code directly
-		Scope:              scopeParam,
+		UpstreamDeviceCode:      upstreamDeviceCode,
+		UpstreamUserCode:        upstreamUserCode,
+		ProxyDeviceCode:         proxyDeviceCode,
+		ProxyUserCode:           upstreamUserCode, // Use upstream user code directly
+		Scope:                   scopeParam,
+		UpstreamVerificationURI: deviceVerificationURL(upstreamResp, upstreamUserCode),
 	}
 
 	h.Logger.Printf("✅ [PROXY-DEVICE] Stored mappings for session: %s", sessionID)
@@ -312,6 +313,32 @@ func (h *DeviceCodeHandler) handleProxyDeviceAuthorization(w http.ResponseWriter
 	h.Logger.Printf("✅ [PROXY-DEVICE] Proxy device authorization completed")
 }
 
+// deviceVerificationURL returns the browser page from an upstream device authorization response.
+// verification_uri_complete already includes the user code. Otherwise the user code is added to verification_uri.
+func deviceVerificationURL(response map[string]interface{}, userCode string) string {
+	if complete, ok := response["verification_uri_complete"].(string); ok {
+		complete = strings.TrimSpace(complete)
+		if complete != "" {
+			return complete
+		}
+	}
+	base, _ := response["verification_uri"].(string)
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return ""
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+	query := parsed.Query()
+	if userCode != "" && query.Get("user_code") == "" {
+		query.Set("user_code", userCode)
+		parsed.RawQuery = query.Encode()
+	}
+	return parsed.String()
+}
+
 // ShowVerificationPage displays the page where users enter the user code
 func (h *DeviceCodeHandler) ShowVerificationPage(w http.ResponseWriter, r *http.Request) {
 	userCode := r.URL.Query().Get("user_code")
@@ -321,24 +348,16 @@ func (h *DeviceCodeHandler) ShowVerificationPage(w http.ResponseWriter, r *http.
 	if h.Config.IsProxyMode() && userCode != "" && h.UpstreamSessionMap != nil {
 		if sessionData, exists := (*h.UpstreamSessionMap)[userCode]; exists {
 			h.Logger.Printf("🔄 [PROXY-DEVICE] User code %s is from upstream, redirecting to upstream verification", userCode)
-
-			// For device flow, redirect to upstream verification page with upstream user code
-			// The upstream verification URI is typically the issuer URL + "/device"
-			upstreamIssuer := ""
-			if h.Config.UpstreamProvider.Metadata != nil {
-				if issuer, ok := h.Config.UpstreamProvider.Metadata["issuer"].(string); ok {
-					upstreamIssuer = issuer
-				}
-			}
-
-			if upstreamIssuer != "" {
-				// Construct upstream verification URL with the upstream user code
-				upstreamURL := fmt.Sprintf("%s/device?user_code=%s", upstreamIssuer, sessionData.UpstreamUserCode)
-				h.Logger.Printf("🔄 [PROXY-DEVICE] Redirecting to upstream verification: %s", upstreamURL)
-				http.Redirect(w, r, upstreamURL, http.StatusFound)
+			// The upstream device response names the browser page. Its /device path is the
+			// device-authorization API, which is not the page a person opens.
+			if sessionData.UpstreamVerificationURI != "" {
+				h.Logger.Printf("🔄 [PROXY-DEVICE] Redirecting to upstream verification: %s", sessionData.UpstreamVerificationURI)
+				http.Redirect(w, r, sessionData.UpstreamVerificationURI, http.StatusFound)
 				return
 			}
-			h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream issuer not available for verification redirect")
+			h.Logger.Errorf("❌ [PROXY-DEVICE] Upstream device response did not include a verification URI")
+			http.Error(w, "upstream device verification URL is missing", http.StatusBadGateway)
+			return
 		}
 	}
 

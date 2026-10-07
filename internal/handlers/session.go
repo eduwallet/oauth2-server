@@ -20,11 +20,12 @@ type UpstreamSessionData struct {
 	ClientID              string // Client ID for consent checking
 	DPoPJKT               string // RFC 9449 authorization-time DPoP key thumbprint
 	// Device flow specific fields
-	UpstreamDeviceCode string
-	UpstreamUserCode   string
-	ProxyDeviceCode    string
-	ProxyUserCode      string
-	Scope              string // Requested scope for device flow
+	UpstreamDeviceCode      string
+	UpstreamUserCode        string
+	ProxyDeviceCode         string
+	ProxyUserCode           string
+	Scope                   string // Requested scope for device flow
+	UpstreamVerificationURI string // Browser page from the upstream device response
 }
 
 // DeviceCodeMapping represents the mapping data for device codes

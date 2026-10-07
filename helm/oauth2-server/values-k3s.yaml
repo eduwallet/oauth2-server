@@ -1,0 +1,92 @@
+# k3s.lab: proxy in front of the SRAM pilot IdP.
+# Upstream client id and secret come from the oauth2-server-upstream secret.
+image:
+  repository: docker.io/library/oauth2-server
+  tag: local
+  pullPolicy: IfNotPresent
+
+podSecurityContext:
+  fsGroup: 1001
+  runAsNonRoot: true
+  runAsUser: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    - host: oauth2-server.k3s.lab
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - oauth2-server.k3s.lab
+
+config:
+  server:
+    port: "8080"
+    baseUrl: "https://oauth2-server.k3s.lab"
+  proxy:
+    trustHeaders: true
+    forceHTTPS: false
+  security:
+    requireHTTPS: false
+    enablePKCE: true
+
+persistence:
+  enabled: true
+  size: 1Gi
+
+env:
+  - name: DATABASE_TYPE
+    value: sqlite
+  - name: DATABASE_PATH
+    value: /data/oauth2.db
+  - name: LOG_LEVEL
+    value: info
+  - name: LOG_FORMAT
+    value: text
+  - name: ENABLE_REGISTRATION_API
+    value: "true"
+  - name: UPSTREAM_PROVIDER_URL
+    value: https://oidc.pilot1.sram.surf.nl
+  - name: UPSTREAM_CALLBACK_URL
+    value: https://oauth2-server.k3s.lab/callback
+  - name: UPSTREAM_CLIENT_ID
+    valueFrom:
+      secretKeyRef:
+        name: oauth2-server-upstream
+        key: client-id
+  - name: UPSTREAM_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: oauth2-server-upstream
+        key: client-secret
+  - name: API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: oauth2-server-upstream
+        key: api-key
+  - name: ENCRYPTION_KEY
+    valueFrom:
+      secretKeyRef:
+        name: oauth2-server-upstream
+        key: encryption-key
+  - name: JWT_SIGNING_KEY
+    valueFrom:
+      secretKeyRef:
+        name: oauth2-server-upstream
+        key: jwt-signing-key

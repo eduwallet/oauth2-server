@@ -584,7 +584,12 @@ func (h *AuthorizeHandler) handleProxyAuthorize(w http.ResponseWriter, r *http.R
 
 	vals := make(url.Values)
 	vals.Set("client_id", h.Configuration.UpstreamProvider.ClientID)
-	vals.Set("redirect_uri", h.Configuration.UpstreamProvider.CallbackURL)
+	upstreamRedirectURI := h.Configuration.UpstreamProvider.CallbackURL
+	if strings.TrimSpace(upstreamRedirectURI) == "" {
+		upstreamRedirectURI = strings.TrimRight(h.Configuration.PublicBaseURL, "/") + "/callback"
+		h.Log.Printf("⚠️ [PROXY-AUTH] UPSTREAM_CALLBACK_URL empty; using PublicBaseURL callback: %s", upstreamRedirectURI)
+	}
+	vals.Set("redirect_uri", upstreamRedirectURI)
 	vals.Set("response_type", q.Get("response_type"))
 
 	// Handle claims parameter - use client's registered claims if none provided

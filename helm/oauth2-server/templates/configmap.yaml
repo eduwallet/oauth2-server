@@ -8,7 +8,9 @@ data:
   server-port: {{ .Values.config.server.port | quote }}
   access-token-lifespan: {{ .Values.config.security.tokenExpirySeconds | quote }}
   refresh-token-lifespan: {{ .Values.config.security.refreshTokenExpirySeconds | quote }}
+  {{- if .Values.config.security.authCodeLifespan }}
   auth-code-lifespan: {{ .Values.config.security.authCodeLifespan | quote }}
+  {{- end }}
   {{- if .Values.config.server.baseUrl }}
   server-base-url: {{ .Values.config.server.baseUrl | quote }}
   {{- end }}
